@@ -81,8 +81,8 @@ export class Decor {
       this.grassMaterial = new THREE.MeshPhongMaterial({
         map: source.material.map,
         color: '#e4f0dc',
-        emissive: '#1c5425',
-        emissiveIntensity: 0.22,
+        emissive: '#16351b',
+        emissiveIntensity: 0.08,
         alphaTest: 0.45,
         transparent: false,
         depthTest: true,
@@ -110,7 +110,7 @@ export class Decor {
     const lists = { tuft: [], flower: [], fern: [], pebble: [] };
     const push = (type, x, z, sc, k) => lists[type].push([x, z, sc, k]);
     const distance = target ? Math.hypot((cx + 0.5) * CHUNK - target.x, (cz + 0.5) * CHUNK - target.z) : 0;
-    const samples = distance < 600 ? 36 : distance < 1100 ? 16 : 6;
+    const samples = distance < 600 ? 14 : distance < 1100 ? 6 : 3;
     const per = CHUNK / TILE;
     const tx0 = Math.max(2, cx * per);
     const ty0 = Math.max(2, cz * per);
@@ -150,9 +150,9 @@ export class Decor {
       const mesh = new THREE.InstancedMesh(this.geoms[type], material, items.length);
       items.forEach(([x, z, sc, k], i) => {
         const tuft = type === 'tuft' && this.grassMaterial;
-        const sx = tuft ? sc * 3.4 : sc;
+        const sx = tuft ? sc * 4.8 : sc;
         const sy = tuft ? sc * 4.8 : sc;
-        const sz = tuft ? sc * 3.4 : sc;
+        const sz = tuft ? sc * 4.8 : sc;
         mesh.setMatrixAt(i, M(x, terrain.heightAt(x, z) - 0.5, z, 0, (x * 13.7 + z) % 6.28, 0, sx, sy, sz));
         if (tuft) {
           const tint = hash2(Math.floor(x), Math.floor(z), seed + 257);
