@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мутаген — превью мира</title>
+<script type="importmap">{ "imports": { "three": "/vendor/three/three.module.js" } }</script>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1016; font-family: 'Segoe UI', system-ui, sans-serif; color: #e8f0e6; }
+  canvas#c { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas#c:active { cursor: grabbing; }
+  .panel { position: fixed; background: rgba(12, 20, 18, 0.72); border: 1px solid rgba(160, 220, 170, 0.18); border-radius: 12px; backdrop-filter: blur(6px); }
+  #title { top: 14px; left: 14px; padding: 12px 16px; max-width: 330px; }
+  #title h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: 3px; color: #9cf0a4; }
+  #title p { margin: 0; font-size: 13px; line-height: 1.45; color: #c5d6c6; }
+  #controls { bottom: 14px; left: 50%; transform: translateX(-50%); padding: 8px; display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; max-width: calc(100% - 32px); }
+  #controls button { background: #1d2b26; color: #dfeee0; border: 1px solid #355246; border-radius: 8px; padding: 7px 11px; font-size: 13px; cursor: pointer; }
+  #controls button:hover { background: #27403a; }
+  #controls button.on { background: #3c7a4e; border-color: #6fbf73; }
+  #controls input[type=range] { width: 140px; align-self: center; }
+  #help { top: 14px; right: 228px; padding: 10px 14px; font-size: 12.5px; line-height: 1.6; color: #c5d6c6; }
+  #help b { color: #fff; }
+  #minimap { top: 14px; right: 14px; padding: 6px; }
+  #minimap canvas { display: block; width: 200px; height: 200px; border-radius: 8px; }
+  #bars { bottom: 70px; left: 14px; padding: 10px 12px; width: 210px; font-size: 12px; }
+  .bar { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+  .bar .track { flex: 1; height: 9px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden; }
+  .bar .fill { height: 100%; border-radius: 5px; }
+  #dna { margin-top: 6px; font-size: 14px; }
+  #dna b { color: #b98cff; }
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; pointer-events: none; }
+  #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,0.8); }
+  #crosshair::before { left: 8px; top: 2px; width: 2px; height: 14px; }
+  #crosshair::after { top: 8px; left: 2px; height: 2px; width: 14px; }
+  .label { position: fixed; left: 0; top: 0; pointer-events: none; font-size: 12px; font-weight: 600; white-space: nowrap; text-shadow: 0 1px 3px #000, 0 0 2px #000; transform: translate(-50%, -100%); }
+  .label .hp { height: 4px; width: 46px; margin: 3px auto 0; background: rgba(0,0,0,0.5); border-radius: 2px; overflow: hidden; }
+  .label .hp i { display: block; height: 100%; background: #e05a4f; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 18px; letter-spacing: 2px; color: #9cf0a4; background: #0b1016; }
+  @media (max-width: 760px) { #help, #bars { display: none; } #title { max-width: 220px; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="crosshair"></div>
+<div id="labels"></div>
+
+<div id="title" class="panel">
+  <h1>МУТАГЕН</h1>
+  <p>Превью мира. Остров, база из камня с дверью и хранилищем, костёр, гнездо, дикие существа, рейдер у ворот и место падения метеорита.</p>
+</div>
+
+<div id="help" class="panel">
+  <b>WASD</b> — идти своим существом<br>
+  <b>Мышь (зажать)</b> — вращать камеру<br>
+  <b>Колесо</b> — приблизить / отдалить<br>
+  <b>Щелчок</b> — атака &nbsp; <b>Shift</b> — бег
+</div>
+
+<div id="minimap" class="panel"><canvas width="240" height="240"></canvas></div>
+
+<div id="bars" class="panel">
+  <div class="bar">❤<div class="track"><div class="fill" style="width:82%;background:#e05a4f"></div></div></div>
+  <div class="bar">🍖<div class="track"><div class="fill" style="width:64%;background:#e0a34f"></div></div></div>
+  <div class="bar">💧<div class="track"><div class="fill" style="width:71%;background:#4fa3e0"></div></div></div>
+  <div class="bar">⚡<div class="track"><div class="fill" style="width:100%;background:#e0d24f"></div></div></div>
+  <div id="dna">🧬 <b>47</b> ДНК &nbsp; 🪵 120 &nbsp; 🪨 64 &nbsp; 💎 2</div>
+</div>
+
+<div id="controls" class="panel">
+  <button data-cam="third" class="on">Третье лицо</button>
+  <button data-cam="over">Обзор острова</button>
+  <button data-time="0.3">День</button>
+  <button data-time="0.6">Закат</button>
+  <button data-time="0.78">Ночь</button>
+  <button id="run">▶ Время идёт</button>
+  <input id="phase" type="range" min="0" max="1" step="0.001" value="0.3" title="Время суток">
+</div>
+
+<div id="loading">Выращиваем остров…</div>
+<script type="module" src="/js/preview.js"></script>
+</body>
+</html>

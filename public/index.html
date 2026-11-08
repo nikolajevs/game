@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мутаген</title>
+<script type="importmap">{ "imports": { "three": "/vendor/three/three.module.js" } }</script>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="labels"></div>
+<div id="floaters"></div>
+
+<div id="hud" class="hidden">
+  <div id="crosshair"></div>
+  <div id="topLeft">
+    <div id="vitals" class="panel">
+      <div class="bar" id="barHp"><span class="ico">❤</span><div class="track"><div class="fill"></div></div><span class="num"></span></div>
+      <div class="bar" id="barFood"><span class="ico">🍖</span><div class="track"><div class="fill"></div></div><span class="num"></span></div>
+      <div class="bar" id="barWater"><span class="ico">💧</span><div class="track"><div class="fill"></div></div><span class="num"></span></div>
+      <div class="bar" id="barSta"><span class="ico">⚡</span><div class="track"><div class="fill"></div></div><span class="num"></span></div>
+    </div>
+    <div id="dnaPanel" class="panel">
+      <div class="dna">🧬 <b id="dnaVal">0</b> <span>ДНК</span></div>
+      <button id="btnEvolve">Геном <kbd>G</kbd></button>
+    </div>
+    <div id="inv" class="panel"></div>
+  </div>
+  <div id="topRight">
+    <div id="minimapWrap" class="panel"><canvas id="minimap" width="220" height="220"></canvas></div>
+    <div id="clock" class="panel"></div>
+  </div>
+  <div id="bottomCenter">
+    <div id="status"></div>
+    <div id="buildBar" class="panel hidden"></div>
+    <div id="abilities"></div>
+  </div>
+  <div id="hint"></div>
+  <div id="chat">
+    <div id="chatLog"></div>
+    <input id="chatInput" class="hidden" maxlength="140" placeholder="Сообщение… Enter — отправить, Esc — отмена" autocomplete="off">
+  </div>
+  <div id="toasts"></div>
+  <div id="playerList" class="panel hidden"></div>
+  <div id="lockHint" class="hidden">Щёлкните по экрану, чтобы управлять камерой мышью</div>
+  <div id="helpBox" class="panel">
+    <div class="help-title">Управление <span class="muted">(H — скрыть)</span></div>
+    <div><kbd>W A S D</kbd> идти, <kbd>Shift</kbd> бег</div>
+    <div><kbd>Мышь</kbd> камера, <kbd>Колесо</kbd> отдалить</div>
+    <div><kbd>ЛКМ</kbd> атака и добыча</div>
+    <div><kbd>ПКМ</kbd> кислота, <kbd>Пробел</kbd> таран</div>
+    <div><kbd>E</kbd> пить / открыть, <kbd>F</kbd> есть</div>
+    <div><kbd>B</kbd> стройка, <kbd>1–7</kbd> выбор, <kbd>X</kbd> снести своё</div>
+    <div><kbd>G</kbd> геном, <kbd>Tab</kbd> игроки, <kbd>Enter</kbd> чат</div>
+  </div>
+</div>
+
+<div id="container" class="panel hidden">
+  <div class="cont-head"><span id="contTitle"></span><button id="contClose" title="Закрыть (E)">✕</button></div>
+  <div id="contBody"></div>
+</div>
+
+<div id="join" class="screen">
+  <div class="join-box panel">
+    <div class="join-left">
+      <h1>МУТАГЕН</h1>
+      <p class="tag">Выживай. Строй. Эволюционируй.</p>
+      <label class="field">Имя существа
+        <input id="nameInput" maxlength="16" placeholder="Например, Клацатель" autocomplete="off">
+      </label>
+      <div class="field-label">Окраска</div>
+      <div id="colors"></div>
+      <button id="playBtn" class="primary big">Играть</button>
+      <div id="joinErr"></div>
+      <a href="/preview.html" target="_blank" class="muted small">Посмотреть мир без входа →</a>
+    </div>
+    <div class="join-right">
+      <canvas id="joinPreview" width="320" height="240"></canvas>
+      <ul class="rules">
+        <li>🪵 Добывайте ресурсы, стройте базу с дверью и хранилищем</li>
+        <li>🧬 Копите ДНК и отращивайте ноги, когти, рога, панцирь, кислоту</li>
+        <li>☠ При смерти всё, что несли, остаётся в останках — геном сохраняется</li>
+        <li>☄️ Метеориты приносят кристаллы мутагена для высших мутаций</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div id="death" class="screen hidden">
+  <div class="death-box panel">
+    <h2>Вы погибли</h2>
+    <p id="deathBy"></p>
+    <p class="muted">Всё, что вы несли, осталось в останках. Геном сохранён.</p>
+    <div class="row">
+      <button id="respNest" class="primary">Возродиться в гнезде</button>
+      <button id="respRandom">На случайном берегу</button>
+    </div>
+  </div>
+</div>
+
+<div id="editor" class="screen hidden">
+  <div class="editor-box panel">
+    <div class="ed-left">
+      <h2>🧬 Геном</h2>
+      <canvas id="edPreview" width="360" height="290"></canvas>
+      <div class="muted small center">Потяните мышью, чтобы покрутить</div>
+      <div id="edStats"></div>
+    </div>
+    <div class="ed-right">
+      <div class="ed-title">Рот — тип питания</div>
+      <div id="edMouths"></div>
+      <div class="ed-title">Части тела <span id="edComplexity"></span></div>
+      <div id="edParts"></div>
+      <div id="edFooter">
+        <div id="edCost"></div>
+        <div class="row">
+          <button id="edReset">Сбросить</button>
+          <button id="edClose">Закрыть <kbd>G</kbd></button>
+          <button id="edApply" class="primary">Эволюционировать</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="disconnected" class="screen hidden">
+  <div class="death-box panel">
+    <h2>Связь с сервером потеряна</h2>
+    <p class="muted">Сервер перезапускается или недоступен.</p>
+    <button class="primary" onclick="location.reload()">Переподключиться</button>
+  </div>
+</div>
+
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>
