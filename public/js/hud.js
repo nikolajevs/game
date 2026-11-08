@@ -1,7 +1,7 @@
 // Интерфейс поверх 3D: полоски, инвентарь, пояс с оружием, крафт, мини-карта, чат, хранилище.
 import {
   ITEMS, ITEM_KEYS, RES_KEYS, STRUCTURES, STRUCT_ORDER, MAP_W, MAP_H, TILE, lightAt,
-  WEAPONS, WEAPON_ORDER, RECIPES, RECIPE_GROUPS, RAD, SITES, ABILITIES, ABILITY_ORDER,
+  WEAPONS, WEAPON_ORDER, RECIPES, RECIPE_GROUPS, RAD, SITES, ABILITIES, ABILITY_ORDER, FOOD,
 } from '/shared/config.js';
 
 const MINI_SPAN = 4800; // сколько единиц мира видно на мини-карте
@@ -38,6 +38,16 @@ export class Hud {
       c.className = 'chip';
       c.title = ITEMS[k].name;
       c.innerHTML = `<span>${ITEMS[k].icon}</span><b>0</b>`;
+      // еду можно съесть щелчком; грибы-галлюциногены — только так (F их не трогает)
+      if (FOOD[k]) {
+        c.classList.add('food');
+        c.title = `${ITEMS[k].name} — щёлкните, чтобы съесть${FOOD[k].hal ? ' (галлюцинации!)' : ''}`;
+        c.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          if (c.classList.contains('zero')) return;
+          this.send({ t: 'eat', item: k });
+        });
+      }
       this.invEl.appendChild(c);
       this.invChips[k] = c;
     }
@@ -176,6 +186,7 @@ export class Hud {
     else if (you.cb) status = '⚔ В бою — мутировать нельзя';
     else if (you.fire) status = '🔥 У костра: здоровье восстанавливается быстрее';
     else if (you.lab) status = '🔬 Лаборатория рядом: изучайте данные и ставьте опыты в окне пути (P), крафтите технологии (C)';
+    if (you.hal > 0) status = `${you.hs >= 1 ? '💠' : '🍄'} Галлюцинации: ещё ${Math.ceil(you.hal)} с — не всему, что видите, можно верить`;
     if (you.med) status = '🕯 Медитация у алтаря: сила духа копится, мана восстанавливается быстрее';
     if (you.sh > 0) status = `🛡 Щит духа: ${you.sh}`;
     if (you.rz > 0) status = `☢ ${this.siteName || 'Радиационная зона'} (радиация ${Math.ceil(you.rz)}) — облучение растёт, копится мутаген`;

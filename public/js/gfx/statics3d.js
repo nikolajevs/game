@@ -2,7 +2,7 @@
 // Ресурсов много, поэтому они рисуются через InstancedMesh (пулы).
 import * as THREE from 'three';
 import { TILE, STRUCTURES } from '/shared/config.js';
-import { G, M, between, mergeParts, rng, shade, taper } from './util.js';
+import { G, M, between, mergeParts, rng, shade, taper, glowTexture } from './util.js';
 import { Fire } from './fire.js';
 
 const _m = new THREE.Matrix4();
@@ -10,8 +10,14 @@ const _c = new THREE.Color();
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const STATIC_CHUNK = 600;
 // ресурсы рисуются пулами по участкам карты; постройки — отдельными мешами
-const RESOURCE_KINDS = new Set(['tree', 'rock', 'sulfur', 'bush', 'crystal', 'scrap']);
+const RESOURCE_KINDS = new Set(['tree', 'rock', 'sulfur', 'bush', 'crystal', 'scrap', 'mush_brown', 'mush_red', 'mush_glow']);
+const MUSH = new Set(['mush_brown', 'mush_red', 'mush_glow']);
+const capGeo = new THREE.SphereGeometry(1, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2); // шляпка — полусфера
+// вид грибов: [шляпка, ножка]
+const MUSH_COLORS = { mush_brown: ['#7a4a22', '#e8dcc0'], mush_red: ['#d42e26', '#f0e8d8'], mush_glow: ['#5ec8ff', '#bfe6ff'] };
 const _hidden = new THREE.Matrix4();
+let _mushGlow = null;
+const mushGlowMat = () => _mushGlow || (_mushGlow = new THREE.SpriteMaterial({ map: glowTexture(), color: '#5ec8ff', transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
 
 class Pool {
   constructor(parent, kind, geom, material, capacity, shadow = true) {
@@ -305,6 +311,9 @@ export class StaticsView {
       blob: [G.ico, leaf, 96, true],
       rock: [G.dodeca, flatMat({ roughness: 0.95 }), 32, true],
       berry: [G.ico, flatMat({ roughness: 0.4 }), 32, false],
+      mushStem: [G.cyl6, flatMat({ roughness: 0.8 }), 32, false],
+      mushCap: [capGeo, flatMat({ roughness: 0.6 }), 32, false],
+      mushGlow: [capGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: '#1a8fd6', emissiveIntensity: 1.3, roughness: 0.3, flatShading: true }), 16, false],
       crystal: [G.octa, new THREE.MeshStandardMaterial({
         color: 0xffffff, emissive: '#7a2bd6', emissiveIntensity: 0.9, roughness: 0.2, metalness: 0.3, flatShading: true,
       }), 24, true],
@@ -373,6 +382,7 @@ export class StaticsView {
     else if (s.k === 'bush') this.addBush(o);
     else if (s.k === 'crystal') this.addCrystal(o);
     else if (s.k === 'scrap') this.addScrap(o);
+    else if (MUSH.has(s.k)) this.addMushrooms(o);
     else this.addStructure(o);
     if (o.s.k === 'tree' || o.s.k === 'rock' || o.s.k === 'sulfur') this.occluders.add(o);
     if (o.light) this.lightObjects.add(o);
@@ -407,6 +417,60 @@ export class StaticsView {
     else if (k === 'bush') this.addBush(o);
     else if (k === 'crystal') this.addCrystal(o);
     else if (k === 'scrap') this.addScrap(o);
+    else if (MUSH.has(k)) this.addMushrooms(o);
+  }
+
+  // Кучка грибов: ножки и шляпки-полусферы; у мухоморов белые крапинки, поганки светятся.
+  // Чем меньше «здоровья», тем меньше грибов осталось.
+  addMushrooms(o) {
+    const s = o.s;
+    const pools = o.pools;
+    for (const [pool, key] of o.parts) pool.remove(key);
+    o.parts = [];
+    const r = rng(s.v || 0.6);
+    const gy = this.ground(s.x, s.y);
+    const [capCol, stemCol] = MUSH_COLORS[s.k];
+    const glow = s.k === 'mush_glow';
+    const total = 3 + Math.floor(r() * 3);
+    const left = Math.ceil(total * (s.h / (s.m || 1)));
+    for (let i = 0; i < total; i++) {
+      const a = r() * Math.PI * 2;
+      const d = i === 0 ? 0 : 3 + r() * 6;
+      const x = s.x + Math.cos(a) * d;
+      const z = s.y + Math.sin(a) * d;
+      const big = (i === 0 ? 1.3 : 0.75 + r() * 0.45) * (glow ? 1.15 : 1);
+      const h = (4 + r() * 3) * big;
+      const cr = (3 + r() * 1.5) * big;
+      const tilt = (r() - 0.5) * 0.35;
+      if (i >= left) continue;
+      const put = (pool, key, m, c) => {
+        pool.set(key, m, c);
+        o.parts.push([pool, key]);
+      };
+      put(pools.mushStem, `${s.i}:st${i}`, M(x, gy + h / 2, z, tilt, 0, tilt, 0.9 * big, h, 0.9 * big), _c.set(stemCol).clone());
+      put(glow ? pools.mushGlow : pools.mushCap, `${s.i}:cp${i}`, M(x + tilt * h * 0.5, gy + h - 0.4, z + tilt * h * 0.5, tilt, r() * 6, tilt, cr, cr * 0.62, cr), _c.set(capCol).offsetHSL(0, 0, (r() - 0.5) * 0.08).clone());
+      if (s.k === 'mush_red') {
+        for (let k = 0; k < 5; k++) {
+          const da = r() * Math.PI * 2;
+          const dr = r() * 0.75;
+          const dx = Math.cos(da) * dr * cr;
+          const dz = Math.sin(da) * dr * cr;
+          const dy = Math.sqrt(Math.max(0, 1 - dr * dr)) * cr * 0.62;
+          put(pools.berry, `${s.i}:dt${i}_${k}`, M(x + tilt * h * 0.5 + dx, gy + h - 0.4 + dy, z + tilt * h * 0.5 + dz, 0, 0, 0, 0.55 * big), _c.set('#ffffff').clone());
+        }
+      }
+    }
+    // светящиеся поганки видно ночью издалека
+    if (glow && !o.mesh) {
+      const g = new THREE.Group();
+      const sp = new THREE.Sprite(mushGlowMat());
+      sp.scale.setScalar(38);
+      sp.position.set(s.x, gy + 8, s.y);
+      g.add(sp);
+      o.mesh = g;
+      this.group.add(g);
+    }
+    if (o.mesh) o.mesh.visible = left > 0;
   }
 
   // груда металлолома: ржавые ящики, листы и бочка

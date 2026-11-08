@@ -641,6 +641,7 @@ export class Game {
       abil: new Set((prof.abil || []).filter((id) => ABILITIES[id] && ABILITIES[id].path === prof.path)),
       mana: 0, maxMana: MANA.base, abcd: {}, aimD: 300,
       shieldHp: 0, shieldT: 0, hexT: 0, hexSrc: null, stunT: 0, altars: new Map(), medT: 0, meditating: false, medWarnT: 0,
+      halT: 0, halS: 0, // галлюцинации от грибов
       kills: prof.kills || 0, pfx: [], weapon: null, rad: clamp(Number(prof.rad) || 0, 0, 100), radHere: 0, warnT: 0,
     };
     this.applyGenome(p);
@@ -798,7 +799,8 @@ export class Game {
     const diet = p.stats.diet;
     let item = FOOD[m.item] && p.inv[m.item] > 0 ? m.item : null;
     if (!item) {
-      const opts = Object.keys(FOOD).filter((k) => p.inv[k] > 0).sort((a, b) => FOOD[b].mult[diet] - FOOD[a].mult[diet]);
+      // сам по себе (F) ест только обычную еду, грибы-галлюциногены — лишь по прямому выбору
+      const opts = Object.keys(FOOD).filter((k) => p.inv[k] > 0 && !FOOD[k].hal).sort((a, b) => FOOD[b].mult[diet] - FOOD[a].mult[diet]);
       item = opts[0];
     }
     if (!item) return this.toast(p, 'Нечего есть — соберите ягоды или добудьте мясо');
@@ -809,7 +811,20 @@ export class Game {
     p.food = Math.min(100, p.food + food);
     p.water = Math.min(100, p.water + f.water);
     p.hp = Math.min(p.stats.maxHp, p.hp + 3);
-    p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${Math.round(food)} 🍖${f.water ? `  +${f.water} 💧` : ''}` });
+    let extra = '';
+    if (f.hal) {
+      // галлюцинации: время складывается (до 3 минут), сила — по самому сильному грибу
+      p.halT = Math.min(180, (p.halT > 0 ? p.halT : 0) + f.hal.t);
+      p.halS = Math.max(p.halT > f.hal.t ? p.halS : 0, f.hal.s);
+      if (f.spirit && p.path !== 'mind') {
+        p.spirit += f.spirit;
+        extra += `  +${f.spirit} ✨`;
+      }
+      if (f.mana && p.path === 'spirit') p.mana = Math.min(p.maxMana, p.mana + f.mana);
+      if (f.rad) p.rad = Math.min(100, p.rad + f.rad);
+      this.toast(p, f.hal.s >= 1 ? '💠 Реальность трескается и сияет…' : '🍄 Мир начинает плыть…');
+    }
+    p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${Math.round(food)} 🍖${f.water ? `  +${f.water} 💧` : ''}${extra}` });
   }
 
   onInteract(p) {
@@ -959,6 +974,14 @@ export class Game {
     if (p.weapon && !ABILITIES[p.weapon] && !(p.inv[p.weapon] > 0)) p.weapon = null; // оружие выложили или потратили
     for (const id in p.abcd) if (p.abcd[id] > 0) p.abcd[id] = Math.max(0, p.abcd[id] - dt);
     p.medWarnT = Math.max(0, p.medWarnT - dt);
+    if (p.halT > 0) {
+      p.halT -= dt;
+      if (p.halT <= 0) {
+        p.halT = 0;
+        p.halS = 0;
+        this.toast(p, 'Мир снова стал обычным');
+      }
+    }
     this.statusTick(p, dt);
     if (p.dead) return;
     this.meditate(p, dt);
@@ -1472,6 +1495,10 @@ export class Game {
     t.shieldHp = 0;
     t.hexT = 0;
     t.stunT = 0;
+    if (t.type === 'player') {
+      t.halT = 0;
+      t.halS = 0;
+    }
     t.openCont = null;
     t.input = idleInput();
     t.weapon = null;
@@ -1900,6 +1927,7 @@ export class Game {
       pa: p.path, kn: p.know, spi: p.spirit, ab: [...p.abil], mn: Math.round(p.mana), mm: p.maxMana,
       acd: Object.fromEntries(Object.entries(p.abcd).filter(([, v]) => v > 0).map(([k, v]) => [k, round1(v)])),
       lab: this.nearLab(p) ? 1 : 0, med: p.meditating ? 1 : 0, sh: p.shieldT > 0 ? Math.ceil(p.shieldHp) : 0,
+      hal: p.halT > 0 ? round1(p.halT) : 0, hs: p.halS,
     };
   }
 

@@ -628,6 +628,8 @@ function frame(now) {
   cursorEl.style.display = showCursor ? '' : 'none';
   if (showCursor) cursorEl.style.transform = `translate(${input.pos.x}px, ${input.pos.y}px)`;
   world.myMed = !!you.med;
+  world.hal.s = you.hs || 0;
+  world.hal.t = you.hal || 0;
   world.render(dt, S.phase, you.dead ? 900 : S.stats.vision * VIEW_MULT);
 
   // особое место под ногами: подсказка при входе и название в строке состояния

@@ -9,6 +9,7 @@ import { Human3D } from './gfx/human3d.js';
 import { Effects } from './gfx/effects.js';
 import { Decor } from './gfx/decor.js';
 import { ZonesView } from './gfx/zones3d.js';
+import { Hallucinations } from './gfx/hallucinations.js';
 import { G, M, mergeParts, glowTexture } from './gfx/util.js';
 
 // след за снарядом: [цвет, вероятность частицы за кадр, размер]
@@ -46,6 +47,7 @@ const HIT_COLORS = {
   tree: ['#6b4423', '#4f8a3a'], rock: ['#8a8a85', '#6e6e68'], bush: ['#3f7d3a', '#c8324b'],
   crystal: ['#b06bff', '#e6d3ff'], wood: ['#8b5a2b', '#5a3a1c'], stone: ['#8e8f8a', '#6e6e68'],
   sulfur: ['#d9c23a', '#8a8a85'], scrap: ['#8a5a3a', '#9a9a9a'],
+  mush_brown: ['#7a4a22', '#e8dcc0'], mush_red: ['#d42e26', '#ffffff'], mush_glow: ['#5ec8ff', '#bfe6ff'],
 };
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -82,12 +84,14 @@ export class WorldView {
     this.bubbleMat = new THREE.MeshBasicMaterial({ color: '#9cf0a4', transparent: true, opacity: 0.16, depthWrite: false });
     this.shieldMat = new THREE.MeshBasicMaterial({ color: '#ffd98a', transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending });
     this.rings = []; // расходящиеся кольца (ЭМИ, телепорт)
+    this.hal = { s: 0, t: 0 }; // галлюцинации от грибов: сила и сколько осталось
     this.myMed = false; // своя медитация у алтаря
   }
 
   init(tiles, seed, myUid, zones = []) {
     this.terrain = new Terrain(tiles, seed, zones);
     this.scene.add(this.terrain.group);
+    this.visions = new Hallucinations(this.renderer, this.scene, this.camera, (x, z) => this.ground(x, z));
     this.zonesView = new ZonesView(this.scene, this.terrain, zones);
     this.decor = new Decor(this.terrain, tiles, seed);
     this.scene.add(this.decor.group);
@@ -688,7 +692,8 @@ export class WorldView {
     }
     this.rings = this.rings.filter((r) => r.t < r.life);
     this.effects.update(dt, this.camera, w, h);
-    this.renderer.render(this.scene, this.camera);
+    this.visions.update(dt, this.hal.s, this.hal.t, this.camTarget);
+    if (!this.visions.render()) this.renderer.render(this.scene, this.camera);
     this.updateLabels(w, h);
   }
 

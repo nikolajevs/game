@@ -132,6 +132,8 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 .wslot.tech { border-color: rgba(94, 200, 255, 0.35); }
 .wslot .wcd { position: absolute; left: 0; bottom: 0; width: 100%; background: rgba(0, 0, 0, 0.6); border-radius: 0 0 8px 8px; pointer-events: none; }
 .bslot.locked { opacity: 0.35; }
+.chip.food { cursor: pointer; }
+.chip.food:hover { background: rgba(255, 255, 255, 0.12); }
 .bar.low .track { box-shadow: 0 0 0 1px #ff5d5d; animation: pulse 0.8s infinite alternate; }
 @keyframes pulse { from { opacity: 1; } to { opacity: 0.55; } }
 

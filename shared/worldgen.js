@@ -234,13 +234,16 @@ export function generateResources(tiles, seed, zones = []) {
       if (site?.kind === 'mine') {
         // рудник: много руды, серы и металлолома
         kind = r < 0.17 ? (r2 < 0.45 ? 'sulfur' : 'rock') : r < 0.22 ? 'scrap' : null;
-      } else if (site?.kind === 'lair' || site?.kind === 'altar') {
+      } else if (site?.kind === 'altar') {
+        // у алтаря: редкие камни, деревья и сияющие поганки
+        kind = r < 0.03 ? 'rock' : r < 0.05 ? 'tree' : r < 0.09 ? 'mush_glow' : null;
+      } else if (site?.kind === 'lair') {
         // вытоптанная поляна: редкие камни и деревья
         kind = r < 0.03 ? 'rock' : r < 0.05 ? 'tree' : null;
       } else if (site) {
-        // в руинах растительности нет — только металлолом и редкие камни
-        kind = r < 0.08 ? 'scrap' : r < 0.1 ? 'rock' : null;
-      } else if (t === T.FOREST) kind = r < 0.26 ? 'tree' : r < 0.32 ? 'bush' : r < 0.34 ? 'rock' : null;
+        // в руинах растительности нет — металлолом, редкие камни и сияющие поганки
+        kind = r < 0.08 ? 'scrap' : r < 0.1 ? 'rock' : r < 0.108 ? 'mush_glow' : null;
+      } else if (t === T.FOREST) kind = r < 0.26 ? 'tree' : r < 0.32 ? 'bush' : r < 0.34 ? 'rock' : r < 0.356 ? 'mush_brown' : r < 0.364 ? 'mush_red' : null;
       else if (t === T.GRASS) kind = r < 0.035 ? 'tree' : r < 0.075 ? 'bush' : r < 0.09 ? 'rock' : null;
       else if (t === T.ROCK) kind = r < 0.2 ? (r2 < 0.3 ? 'sulfur' : 'rock') : r < 0.23 ? 'tree' : null;
       else if (t === T.SAND) kind = r < 0.015 ? 'rock' : null;

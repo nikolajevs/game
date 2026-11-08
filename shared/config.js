@@ -39,6 +39,9 @@ export const ITEMS = {
   stone: { name: 'Камень', icon: '🪨', kind: 'res' },
   berries: { name: 'Ягоды', icon: '🫐', kind: 'res' },
   meat: { name: 'Мясо', icon: '🥩', kind: 'res' },
+  mushroom: { name: 'Боровики', icon: '🟤', kind: 'res' },
+  amanita: { name: 'Мухоморы', icon: '🍄', kind: 'res' },
+  glowcap: { name: 'Сияющие поганки', icon: '💠', kind: 'res' },
   bone: { name: 'Кости', icon: '🦴', kind: 'res' },
   scrap: { name: 'Металлолом', icon: '⚙️', kind: 'res' },
   sulfur: { name: 'Сера', icon: '🟡', kind: 'res' },
@@ -135,12 +138,21 @@ export const RESOURCES = {
   bush: { name: 'Ягодный куст', r: 18, cr: 0, hp: 40, give: 'berries', rate: 0.15, respawn: 70 },
   scrap: { name: 'Груда металлолома', r: 22, cr: 18, hp: 140, give: 'scrap', rate: 0.12, respawn: 120 },
   crystal: { name: 'Кристалл мутагена', r: 16, cr: 12, hp: 45, give: 'crystal', fixed: 15, dna: 4, respawn: 0 },
+  // грибы: срываются за 2 удара (по грибу за удар), сквозь них можно пройти
+  mush_brown: { name: 'Боровики', r: 11, cr: 0, hp: 30, give: 'mushroom', fixed: 15, respawn: 140 },
+  mush_red: { name: 'Мухоморы', r: 11, cr: 0, hp: 30, give: 'amanita', fixed: 15, respawn: 180 },
+  mush_glow: { name: 'Сияющие поганки', r: 11, cr: 0, hp: 30, give: 'glowcap', fixed: 15, respawn: 240 },
 };
 
 // Пища: сколько насыщает и множитель по типу рта
 export const FOOD = {
   berries: { food: 8, water: 4, mult: { herb: 2, carn: 0.4, omni: 1 } },
   meat: { food: 18, water: 0, mult: { herb: 0.35, carn: 1.6, omni: 1 } },
+  mushroom: { food: 10, water: 2, mult: { herb: 1, carn: 1, omni: 1 } },
+  // галлюциногены: F их не ест — только щелчком по ним в инвентаре.
+  // hal — сколько секунд и насколько сильно «плывёт» мир; spirit — сила духа (кроме пути разума)
+  amanita: { food: 4, water: 0, mult: { herb: 1, carn: 1, omni: 1 }, hal: { t: 45, s: 0.6 }, spirit: 2 },
+  glowcap: { food: 3, water: 2, mult: { herb: 1, carn: 1, omni: 1 }, hal: { t: 60, s: 1 }, spirit: 3, mana: 40, rad: 8 },
 };
 
 // Постройки занимают одну клетку TILE x TILE
