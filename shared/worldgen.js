@@ -247,7 +247,7 @@ export function generateResources(tiles, seed, zones = []) {
       else if (t === T.GRASS) kind = r < 0.035 ? 'tree' : r < 0.075 ? 'bush' : r < 0.09 ? 'rock' : null;
       else if (t === T.ROCK) kind = r < 0.2 ? (r2 < 0.3 ? 'sulfur' : 'rock') : r < 0.23 ? 'tree' : null;
       else if (t === T.SAND) kind = r < 0.015 ? 'rock' : null;
-      if (!kind) continue;
+      if (!kind || (kind === 'tree' && t === T.ROCK)) continue;
       const def = RESOURCES[kind];
       const cx = Math.floor(x / cell);
       const cy = Math.floor(y / cell);

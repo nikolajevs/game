@@ -1,6 +1,7 @@
 // Декор без влияния на игру: пучки травы, цветы, папоротники, галька.
 // Разбит на участки, чтобы рисовать только то, что рядом с камерой.
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { TILE, MAP_W, MAP_H, T, WORLD_W } from '/shared/config.js';
 import { zoneAt } from '/shared/worldgen.js';
 import { G, M, mergeParts, hash2 } from './util.js';
@@ -34,6 +35,24 @@ function fernGeom() {
   return mergeParts(parts);
 }
 
+function addGrassWind(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = { value: 0 };
+    shader.vertexShader = `uniform float uTime;\n${shader.vertexShader}`;
+    shader.vertexShader = shader.vertexShader.replace('#include <project_vertex>', `
+      vec4 mvPosition = instanceMatrix * vec4(transformed, 1.0);
+      float phase = uTime * 1.35 + mvPosition.x * 0.014 + mvPosition.z * 0.011;
+      float height = max(0.0, mvPosition.y);
+      mvPosition.x += sin(phase) * height * 0.12;
+      mvPosition.z += cos(phase * 0.83) * height * 0.045;
+      mvPosition = modelViewMatrix * mvPosition;
+      gl_Position = projectionMatrix * mvPosition;
+    `);
+    material.userData.shader = shader;
+  };
+  material.customProgramCacheKey = () => 'ez-tree-instanced-grass-wind-v1';
+}
+
 // Участки строятся, когда попадают в поле зрения, и выгружаются далеко за его краем:
 // на огромном острове держать в памяти траву всего мира нельзя.
 export class Decor {
@@ -46,7 +65,44 @@ export class Decor {
     this.mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9 });
     this.pebbleMat = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 1 });
     this.geoms = { tuft: tuftGeom(), flower: flowerGeom(), fern: fernGeom(), pebble: G.dodeca };
+    this.grassMaterial = null;
+    this.grassTime = 0;
     this.warm = true;
+    this.loadGrassModel();
+  }
+
+  loadGrassModel() {
+    new GLTFLoader().load('/assets/ez-tree/grass.glb', (gltf) => {
+      const source = gltf.scene.getObjectByProperty('isMesh', true);
+      if (!source?.material?.map) return;
+      const fallback = this.geoms.tuft;
+      this.geoms.tuft = source.geometry;
+      fallback.dispose();
+      this.grassMaterial = new THREE.MeshPhongMaterial({
+        map: source.material.map,
+        color: '#e4f0dc',
+        emissive: '#16351b',
+        emissiveIntensity: 0.08,
+        alphaTest: 0.45,
+        transparent: false,
+        depthTest: true,
+        depthWrite: true,
+        side: THREE.DoubleSide,
+      });
+      addGrassWind(this.grassMaterial);
+      this.clearChunks();
+      this.warm = false;
+    }, undefined, () => {});
+  }
+
+  clearChunks() {
+    for (const meshes of this.chunks.values()) {
+      for (const mesh of meshes) {
+        this.group.remove(mesh);
+        mesh.dispose();
+      }
+    }
+    this.chunks.clear();
   }
 
   buildChunk(cx, cz) {
@@ -62,7 +118,7 @@ export class Decor {
       for (let tx = tx0; tx < tx1; tx++) {
         const t = tiles[ty * MAP_W + tx];
         if (t === T.DEEP) continue;
-        for (let k = 0; k < 4; k++) {
+        for (let k = 0; k < 5; k++) {
           const r = hash2(tx, ty, seed + k * 31);
           const x = tx * TILE + hash2(tx, ty, seed + k * 31 + 1) * TILE;
           const z = ty * TILE + hash2(tx, ty, seed + k * 31 + 2) * TILE;
@@ -73,11 +129,11 @@ export class Decor {
             continue;
           }
           if (t === T.GRASS) {
-            if (r < 0.55) push('tuft', x, z, sc);
-            else if (r < 0.62) push('flower', x, z, sc, k);
+            if (r < 0.64) push('tuft', x, z, sc);
+            else if (r < 0.72) push('flower', x, z, sc, k);
           } else if (t === T.FOREST) {
-            if (r < 0.3) push('fern', x, z, sc);
-            else if (r < 0.55) push('tuft', x, z, sc * 0.8);
+            if (r < 0.32) push('fern', x, z, sc);
+            else if (r < 0.61) push('tuft', x, z, sc * 0.8);
           } else if ((t === T.SAND || t === T.ROCK) && r < 0.18) push('pebble', x, z, sc * 2.4, k);
         }
       }
@@ -88,16 +144,26 @@ export class Decor {
     for (const type of Object.keys(lists)) {
       const items = lists[type];
       if (!items.length) continue;
-      const mesh = new THREE.InstancedMesh(this.geoms[type], type === 'pebble' ? this.pebbleMat : this.mat, items.length);
+      const material = type === 'pebble' ? this.pebbleMat : type === 'tuft' && this.grassMaterial ? this.grassMaterial : this.mat;
+      const mesh = new THREE.InstancedMesh(this.geoms[type], material, items.length);
       items.forEach(([x, z, sc, k], i) => {
-        mesh.setMatrixAt(i, M(x, terrain.heightAt(x, z) - 0.5, z, 0, (x * 13.7 + z) % 6.28, 0, sc));
+        const tuft = type === 'tuft' && this.grassMaterial;
+        const sx = tuft ? sc * 2.8 : sc;
+        const sy = tuft ? sc * 4.8 : sc;
+        const sz = tuft ? sc * 2.8 : sc;
+        mesh.setMatrixAt(i, M(x, terrain.heightAt(x, z) - 0.5, z, 0, (x * 13.7 + z) % 6.28, 0, sx, sy, sz));
+        if (tuft) {
+          const tint = hash2(Math.floor(x), Math.floor(z), seed + 257);
+          mesh.setColorAt(i, c.setRGB(0.68 + tint * 0.18, 0.76 + tint * 0.2, 0.6 + tint * 0.2));
+        }
         if (type === 'flower') mesh.setColorAt(i, c.set(petals[k % petals.length]));
         if (type === 'pebble') {
           const g = 0.45 + ((x * 7 + z * 3) % 10) / 50;
           mesh.setColorAt(i, c.setRGB(g, g, g * 0.96));
         }
       });
-      mesh.receiveShadow = true;
+      mesh.castShadow = false;
+      mesh.receiveShadow = type !== 'tuft';
       mesh.computeBoundingSphere();
       this.group.add(mesh);
       meshes.push(mesh);
@@ -107,6 +173,9 @@ export class Decor {
 
   // строим ближние участки (понемногу за кадр), прячем и выгружаем дальние
   update(target, far) {
+    if (this.grassMaterial?.userData.shader) {
+      this.grassMaterial.userData.shader.uniforms.uTime.value = performance.now() * 0.001;
+    }
     const lim = far + CHUNK * 0.75;
     const n = Math.ceil(WORLD_W / CHUNK);
     const cx0 = Math.max(0, Math.floor((target.x - lim) / CHUNK));

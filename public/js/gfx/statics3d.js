@@ -1,7 +1,7 @@
 // 3D-вид статичных объектов: деревья, камни, кусты, кристаллы, постройки, останки.
 // Ресурсов много, поэтому они рисуются через InstancedMesh (пулы).
 import * as THREE from 'three';
-import { Tree } from '/vendor/ez-tree/ez-tree.es.js';
+import { Tree, TreePreset } from '/vendor/ez-tree/ez-tree.es.js';
 import { TILE, STRUCTURES } from '/shared/config.js';
 import { G, M, between, mergeParts, rng, shade, taper, glowTexture } from './util.js';
 import { Fire } from './fire.js';
@@ -22,7 +22,15 @@ const mushGlowMat = () => _mushGlow || (_mushGlow = new THREE.SpriteMaterial({ m
 
 function makeTreeModel(preset) {
   const tree = new Tree();
-  tree.loadPreset(preset);
+  const options = structuredClone(TreePreset[preset]);
+  for (const level of Object.keys(options.branch.children)) {
+    const factor = Number(level) === 0 ? 0.55 : 0.7;
+    options.branch.children[level] = Math.max(Number(level) === 0 ? 3 : 2, Math.round(options.branch.children[level] * factor));
+    options.branch.sections[level] = Math.max(1, Math.round(options.branch.sections[level] * 0.75));
+    options.branch.segments[level] = Math.min(options.branch.segments[level], Number(level) === 0 ? 6 : 4);
+  }
+  options.leaves.count = Math.max(6, Math.round(options.leaves.count * 0.35));
+  tree.loadFromJson(options);
   // В библиотеке ветер меняет шейдер листьев; для InstancedMesh нужен обычный шейдер Three.js.
   tree.leavesMesh.material.onBeforeCompile = () => {};
   const bounds = new THREE.Box3().setFromObject(tree);
@@ -52,7 +60,7 @@ class Pool {
     this.mesh = new THREE.InstancedMesh(geom, material, this.max);
     this.mesh.count = 0;
     this.mesh.castShadow = shadow;
-    this.mesh.receiveShadow = true;
+    this.mesh.receiveShadow = !kind.endsWith('Leaves');
     this.mesh.frustumCulled = true;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.keys = [];
@@ -80,7 +88,7 @@ class Pool {
     const next = new THREE.InstancedMesh(this.geom, this.material, this.max);
     next.count = previous.count;
     next.castShadow = this.shadow;
-    next.receiveShadow = true;
+    next.receiveShadow = !this.kind.endsWith('Leaves');
     next.frustumCulled = true;
     next.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     for (let i = 0; i < previous.count; i++) {
@@ -332,9 +340,9 @@ export class StaticsView {
       pine: [G.cone, leaf, 64, true],
       blob: [G.ico, leaf, 96, true],
       pineBark: [TREE_MODELS.pine.bark, TREE_MODELS.pine.barkMaterial, 24, true],
-      pineLeaves: [TREE_MODELS.pine.leaves, TREE_MODELS.pine.leavesMaterial, 24, true],
+      pineLeaves: [TREE_MODELS.pine.leaves, TREE_MODELS.pine.leavesMaterial, 24, false],
       oakBark: [TREE_MODELS.oak.bark, TREE_MODELS.oak.barkMaterial, 24, true],
-      oakLeaves: [TREE_MODELS.oak.leaves, TREE_MODELS.oak.leavesMaterial, 24, true],
+      oakLeaves: [TREE_MODELS.oak.leaves, TREE_MODELS.oak.leavesMaterial, 24, false],
       rock: [G.dodeca, flatMat({ roughness: 0.95 }), 32, true],
       berry: [G.ico, flatMat({ roughness: 0.4 }), 32, false],
       mushStem: [G.cyl6, flatMat({ roughness: 0.8 }), 32, false],
@@ -528,7 +536,9 @@ export class StaticsView {
     const gy = this.ground(s.x, s.y);
     const pine = (s.v || 0.5) < 0.55;
     const model = pine ? TREE_MODELS.pine : TREE_MODELS.oak;
-    const sc = 0.85 + r() * 0.45;
+    const giant = r() < 0.018;
+    const sc = giant ? 1.75 + r() * 0.55 : 0.85 + r() * 0.45;
+    o.treeCutawayRadius = giant ? 50 : 36;
     const scale = (68 * sc) / model.height;
     const spreadX = 0.92 + r() * 0.16;
     const spreadZ = 0.92 + r() * 0.16;
@@ -743,7 +753,7 @@ export class StaticsView {
       let hide = false;
       if (t > -0.15 && t < (tree ? 1.15 : 0.9)) {
         const k = Math.max(0, Math.min(1, t));
-        hide = Math.hypot(o.s.x - (ax + dx * k), o.s.y - (az + dz * k)) < (tree ? 36 : 34);
+        hide = Math.hypot(o.s.x - (ax + dx * k), o.s.y - (az + dz * k)) < (tree ? (o.treeCutawayRadius || 36) : 34);
       }
       if (hide === !!o.hidden) continue;
       o.hidden = hide;
