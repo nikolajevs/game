@@ -1,6 +1,7 @@
 // 3D-вид статичных объектов: деревья, камни, кусты, кристаллы, постройки, останки.
 // Ресурсов много, поэтому они рисуются через InstancedMesh (пулы).
 import * as THREE from 'three';
+import { Tree } from '/vendor/ez-tree/ez-tree.es.js';
 import { TILE, STRUCTURES } from '/shared/config.js';
 import { G, M, between, mergeParts, rng, shade, taper, glowTexture } from './util.js';
 import { Fire } from './fire.js';
@@ -18,6 +19,27 @@ const MUSH_COLORS = { mush_brown: ['#7a4a22', '#e8dcc0'], mush_red: ['#d42e26', 
 const _hidden = new THREE.Matrix4();
 let _mushGlow = null;
 const mushGlowMat = () => _mushGlow || (_mushGlow = new THREE.SpriteMaterial({ map: glowTexture(), color: '#5ec8ff', transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+
+function makeTreeModel(preset) {
+  const tree = new Tree();
+  tree.loadPreset(preset);
+  // В библиотеке ветер меняет шейдер листьев; для InstancedMesh нужен обычный шейдер Three.js.
+  tree.leavesMesh.material.onBeforeCompile = () => {};
+  const bounds = new THREE.Box3().setFromObject(tree);
+  return {
+    bark: tree.branchesMesh.geometry,
+    barkMaterial: tree.branchesMesh.material,
+    leaves: tree.leavesMesh.geometry,
+    leavesMaterial: tree.leavesMesh.material,
+    minY: bounds.min.y,
+    height: bounds.max.y - bounds.min.y,
+  };
+}
+
+const TREE_MODELS = {
+  pine: makeTreeModel('Pine Medium'),
+  oak: makeTreeModel('Oak Medium'),
+};
 
 class Pool {
   constructor(parent, kind, geom, material, capacity, shadow = true) {
@@ -309,6 +331,10 @@ export class StaticsView {
       branch: [G.cyl6, flatMat(), 96, true],
       pine: [G.cone, leaf, 64, true],
       blob: [G.ico, leaf, 96, true],
+      pineBark: [TREE_MODELS.pine.bark, TREE_MODELS.pine.barkMaterial, 24, true],
+      pineLeaves: [TREE_MODELS.pine.leaves, TREE_MODELS.pine.leavesMaterial, 24, true],
+      oakBark: [TREE_MODELS.oak.bark, TREE_MODELS.oak.barkMaterial, 24, true],
+      oakLeaves: [TREE_MODELS.oak.leaves, TREE_MODELS.oak.leavesMaterial, 24, true],
       rock: [G.dodeca, flatMat({ roughness: 0.95 }), 32, true],
       berry: [G.ico, flatMat({ roughness: 0.4 }), 32, false],
       mushStem: [G.cyl6, flatMat({ roughness: 0.8 }), 32, false],
@@ -501,61 +527,28 @@ export class StaticsView {
     const r = rng(s.v || 0.5);
     const gy = this.ground(s.x, s.y);
     const pine = (s.v || 0.5) < 0.55;
+    const model = pine ? TREE_MODELS.pine : TREE_MODELS.oak;
     const sc = 0.85 + r() * 0.45;
-    const trunkH = (pine ? 34 : 30) * sc;
+    const scale = (68 * sc) / model.height;
+    const spreadX = 0.92 + r() * 0.16;
+    const spreadZ = 0.92 + r() * 0.16;
+    const matrix = M(s.x, gy - model.minY * scale, s.y, 0, r() * Math.PI * 2, 0, scale * spreadX, scale, scale * spreadZ);
     o.base = [];
     const push = (pool, key, m, color) => {
       pool.set(key, m, color);
       o.parts.push([pool, key]);
       o.base.push([pool, key, m.clone(), color]);
     };
-    push(pools.trunk, s.i, M(s.x, gy + trunkH / 2 - 4, s.y, 0, r() * 3, 0, 4.2 * sc, trunkH, 4.2 * sc), _c.set(r() < 0.5 ? '#6b4423' : '#5d3b1e').clone());
+    const barkColor = _c.set(pine ? '#b58a5e' : '#c2a17d').offsetHSL(0, 0, (r() - 0.5) * 0.08).clone();
+    let leavesColor;
     if (pine) {
-      const g = new THREE.Color().setHSL(0.36 + r() * 0.05, 0.45, 0.22 + r() * 0.06);
-      const tiers = 4;
-      for (let i = 0; i < tiers; i++) {
-        const w = (27 - i * 5.2) * sc * (0.9 + r() * 0.2);
-        const h = (27 - i * 2.2) * sc;
-        const y = gy + trunkH - 8 + i * 11.5 * sc + h / 2;
-        const shadeByTier = i * 0.025 + (r() - 0.5) * 0.025;
-        push(pools.pine, `${s.i}:${i}`, M(s.x, y, s.y, 0, r() * Math.PI, 0, w, h, w), g.clone().offsetHSL((r() - 0.5) * 0.02, 0, shadeByTier));
-      }
+      leavesColor = _c.setHSL(0.31 + r() * 0.04, 0.4, 0.68 + r() * 0.08).clone();
     } else {
       const autumn = r() < 0.14;
-      const hue = autumn ? 0.09 + r() * 0.07 : 0.25 + r() * 0.07;
-      const g = new THREE.Color().setHSL(hue, autumn ? 0.62 : 0.48, 0.31 + r() * 0.08);
-      const trunkBase = new THREE.Vector3(s.x, gy + trunkH * 0.48, s.y);
-      for (let i = 0; i < 4; i++) {
-        const a = (i / 4) * Math.PI * 2 + r() * 0.35;
-        const tip = new THREE.Vector3(
-          s.x + Math.cos(a) * 15 * sc,
-          gy + trunkH + 5 * sc + r() * 4,
-          s.y + Math.sin(a) * 15 * sc,
-        );
-        const bark = _c.set('#694326').offsetHSL(0, 0, (r() - 0.5) * 0.08).clone();
-        push(pools.branch, `${s.i}:branch${i}`, between(trunkBase, tip, 1.35 * sc), bark);
-      }
-      const clusters = 7;
-      for (let i = 0; i < clusters; i++) {
-        const a = (i / (clusters - 1)) * Math.PI * 2 + r() * 0.3;
-        const center = i === 0;
-        const d = center ? 0 : (10 + r() * 4) * sc;
-        const radius = (center ? 18 : 12 + r() * 3) * sc;
-        const y = gy + trunkH + (center ? 17 : 7 + (i % 2) * 8 + r() * 4) * sc;
-        const clusterColor = g.clone().offsetHSL((r() - 0.5) * 0.025, (r() - 0.5) * 0.08, (r() - 0.5) * 0.15);
-        push(pools.blob, `${s.i}:crown${i}`, M(
-          s.x + Math.cos(a) * d,
-          y,
-          s.y + Math.sin(a) * d,
-          r() * 0.5,
-          r() * Math.PI,
-          r() * 0.5,
-          radius,
-          radius * (0.76 + r() * 0.18),
-          radius * (0.82 + r() * 0.22),
-        ), clusterColor);
-      }
+      leavesColor = _c.setHSL(autumn ? 0.08 + r() * 0.06 : 0.25 + r() * 0.05, autumn ? 0.68 : 0.46, 0.68 + r() * 0.08).clone();
     }
+    push(pine ? pools.pineBark : pools.oakBark, `${s.i}:bark`, matrix, barkColor);
+    push(pine ? pools.pineLeaves : pools.oakLeaves, `${s.i}:leaves`, matrix, leavesColor);
   }
 
   addRock(o) {

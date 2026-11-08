@@ -18,6 +18,7 @@ const MIME = {
 export function createStaticHandler(root) {
   const routes = [
     ['/vendor/three/', path.join(root, 'node_modules', 'three', 'build')],
+    ['/vendor/ez-tree/', path.join(root, 'node_modules', '@dgreenheck', 'ez-tree', 'build')],
     ['/vendor/three-addons/', path.join(root, 'node_modules', 'three', 'examples', 'jsm')],
     ['/shared/', path.join(root, 'shared')],
     ['/', path.join(root, 'public')],
