@@ -135,7 +135,8 @@ net.on('s', (m) => {
   const mine = ents.get(S.myId);
   if (mine) {
     S.srvPrev = S.srv;
-    S.srv = { x: mine.x, y: mine.y, t: now };
+    // t — когда пакет пришёл (по часам браузера), st — когда сервер его отправил
+    S.srv = { x: mine.x, y: mine.y, t: now, st: m.st };
     const respawned = prev && prev.dead && !m.you.dead;
     // после возрождения сразу ставим в новую точку, без «пробежки» от места гибели
     if (!S.me.init || respawned || Math.hypot(mine.x - S.me.x, mine.y - S.me.y) > 250) {
@@ -435,14 +436,24 @@ function frame(now) {
   const you = S.you;
   input.update(dt);
 
-  // своё существо: догоняем сервер с небольшим предсказанием по скорости
+  // своё существо: догоняем сервер с небольшим предсказанием по скорости.
+  // Скорость считаем по времени сервера: пакеты часто приходят пачкой почти одновременно,
+  // и деление на промежуток между их приходом давало огромную скорость и рывки картинки.
   if (S.srv) {
     let tx = S.srv.x;
     let ty = S.srv.y;
-    if (S.srvPrev && S.srv.t > S.srvPrev.t) {
-      const k = Math.min(0.08, (now - S.srv.t) / 1000) / ((S.srv.t - S.srvPrev.t) / 1000);
-      tx += (S.srv.x - S.srvPrev.x) * k;
-      ty += (S.srv.y - S.srvPrev.y) * k;
+    const span = S.srvPrev ? (S.srv.st - S.srvPrev.st) / 1000 : 0;
+    if (span > 0.015 && span < 0.25) {
+      const ahead = Math.min(0.08, Math.max(0, (now - S.srv.t) / 1000));
+      let ex = ((S.srv.x - S.srvPrev.x) / span) * ahead;
+      let ey = ((S.srv.y - S.srvPrev.y) / span) * ahead;
+      const len = Math.hypot(ex, ey);
+      if (len > 24) {
+        ex *= 24 / len;
+        ey *= 24 / len;
+      }
+      tx += ex;
+      ty += ey;
     }
     const f = 1 - Math.exp(-dt * 16);
     S.me.x += (tx - S.me.x) * f;

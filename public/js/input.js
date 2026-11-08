@@ -1,7 +1,11 @@
 // Клавиатура, мышь и камера от третьего лица.
 // Курсор свободный: им целятся. Камеру вращают, потянув зажатой ЛКМ, ПКМ или колёсиком-кнопкой, и стрелками.
 // Используем e.code (физические клавиши), чтобы управление работало и в русской раскладке.
-const ROT_THRESHOLD = 5; // сколько пикселей нужно протянуть ПКМ, чтобы это считалось вращением, а не щелчком
+const ROT_THRESHOLD = 6; // ПКМ/колесо: столько пикселей от точки нажатия — уже вращение, а не щелчок
+// ЛКМ одновременно и удар, и вращение. Вращаем, только если мышь резко потянули сразу после нажатия;
+// если ЛКМ просто держат (бьют и целятся), мелкие движения мыши камеру не трогают.
+const LMB_DRAG_PX = 14;
+const LMB_DECIDE_MS = 250;
 
 export class Input {
   constructor(canvas) {
@@ -51,36 +55,41 @@ export class Input {
       this.pos.x = e.clientX;
       this.pos.y = e.clientY;
       this.pos.inside = true;
+      const start = { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, button: e.button, t0: performance.now() };
       if (e.button === 0) {
         if (this.onLeftDown && this.onLeftDown()) return;
         this.mouse.l = true;
         this.lastClick = performance.now();
-        // ЛКМ тоже вращает камеру, если её потянуть (удар при этом отменяется)
-        this.rot = { x: e.clientX, y: e.clientY, moved: 0, button: 0 };
+        // режим решается по первому движению: 'rotate' — рывок мышью, 'aim' — обычный удар с прицеливанием
+        this.rot = { ...start, mode: 'pending' };
       } else if (e.button === 1 || e.button === 2) {
         e.preventDefault();
-        this.rot = { x: e.clientX, y: e.clientY, moved: 0, button: e.button };
+        this.rot = { ...start, mode: 'pending' };
       }
     });
     window.addEventListener('mousemove', (e) => {
-      if (!this.rot) return;
-      const dx = e.clientX - this.rot.x;
-      const dy = e.clientY - this.rot.y;
-      this.rot.moved += Math.abs(dx) + Math.abs(dy);
-      this.rot.x = e.clientX;
-      this.rot.y = e.clientY;
-      if (this.rot.moved > ROT_THRESHOLD) {
-        if (this.rot.button === 0) {
-          this.mouse.l = false;
-          this.lastClick = 0;
-        }
-        this.look(dx, dy);
+      const r = this.rot;
+      if (!r) return;
+      const dx = e.clientX - r.x;
+      const dy = e.clientY - r.y;
+      r.x = e.clientX;
+      r.y = e.clientY;
+      if (r.mode === 'pending') {
+        const dist = Math.hypot(e.clientX - r.x0, e.clientY - r.y0);
+        if (r.button === 0) {
+          if (dist > LMB_DRAG_PX && performance.now() - r.t0 < LMB_DECIDE_MS) {
+            r.mode = 'rotate';
+            this.mouse.l = false; // это был рывок камерой, а не удар
+            this.lastClick = 0;
+          } else if (performance.now() - r.t0 >= LMB_DECIDE_MS) r.mode = 'aim';
+        } else if (dist > ROT_THRESHOLD) r.mode = 'rotate';
       }
+      if (r.mode === 'rotate') this.look(dx, dy);
     });
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouse.l = false;
       if (this.rot && e.button === this.rot.button) {
-        const click = this.rot.button === 2 && this.rot.moved <= ROT_THRESHOLD;
+        const click = this.rot.button === 2 && this.rot.mode !== 'rotate';
         this.rot = null;
         if (click && this.enabled) this.onRightClick?.();
       }
@@ -92,7 +101,7 @@ export class Input {
   }
 
   get rotating() {
-    return !!this.rot && this.rot.moved > ROT_THRESHOLD;
+    return !!this.rot && this.rot.mode === 'rotate';
   }
 
   look(dx, dy) {

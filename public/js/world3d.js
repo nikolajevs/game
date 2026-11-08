@@ -97,7 +97,7 @@ export class WorldView {
 
   // по нам попали: тряска камеры и красная вспышка по краям экрана
   damageFeedback(amount) {
-    this.shake = Math.max(this.shake, Math.min(7, 2.5 + amount * 0.12));
+    this.shake = Math.max(this.shake, Math.min(4, 1.5 + amount * 0.06));
     if (!this.damageFlash) return;
     this.damageFlash.style.setProperty('--damage-strength', String(Math.min(0.78, 0.36 + amount * 0.012)));
     this.damageFlash.classList.remove('active');
@@ -486,19 +486,29 @@ export class WorldView {
 
   // ---------- кадр ----------
   updateCamera(x, y, hb, cam, dt) {
-    const ty = this.standY(x, y, hb) + hb + 18;
+    // высота цели сглажена: иначе камера подпрыгивает на каждой кочке рельефа
+    const rawY = this.standY(x, y, hb) + hb + 18;
+    if (this.camY === undefined || Math.abs(rawY - this.camY) > 120) this.camY = rawY;
+    else this.camY += (rawY - this.camY) * (1 - Math.exp(-dt * 6));
+    const ty = this.camY;
     this.camTarget.set(x, ty, y);
     const cp = Math.cos(cam.pitch);
     const c = this.camera.position;
     c.set(x - Math.cos(cam.yaw) * cp * cam.dist, ty + Math.sin(cam.pitch) * cam.dist, y - Math.sin(cam.yaw) * cp * cam.dist);
-    const minY = Math.max(this.ground(c.x, c.z), 0) + 10;
-    if (c.y < minY) c.y = minY;
-    if (this.shake > 0) {
-      c.x += (Math.random() - 0.5) * this.shake;
-      c.y += (Math.random() - 0.5) * this.shake;
-      c.z += (Math.random() - 0.5) * this.shake;
-      this.shake = Math.max(0, this.shake - dt * 30);
-    }
+    // камера не уходит под землю; «пол» под ней тоже сглажен
+    const rawFloor = Math.max(this.ground(c.x, c.z), 0) + 10;
+    if (this.camFloor === undefined || Math.abs(rawFloor - this.camFloor) > 120) this.camFloor = rawFloor;
+    else this.camFloor += (rawFloor - this.camFloor) * (1 - Math.exp(-dt * 8));
+    if (c.y < this.camFloor) c.y = this.camFloor;
+    // тряска — плавные колебания, а не случайный скачок каждый кадр
+    if (this.shake > 0.05) {
+      const t = this.time * 1;
+      const s = this.shake * 0.5;
+      c.x += Math.sin(t * 47) * s;
+      c.y += Math.sin(t * 53 + 1.3) * s;
+      c.z += Math.sin(t * 59 + 2.1) * s;
+      this.shake *= Math.exp(-dt * 9);
+    } else this.shake = 0;
     this.camera.lookAt(this.camTarget);
     this.camera.updateMatrixWorld(); // нужно для луча из курсора в этом же кадре
   }
