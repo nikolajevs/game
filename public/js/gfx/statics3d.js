@@ -6,17 +6,29 @@ import { G, M, between, mergeParts, rng, shade, taper, glowTexture } from './uti
 
 const _m = new THREE.Matrix4();
 const _c = new THREE.Color();
+const leafUp = new THREE.Vector3(0, 1, 0);
+const leafQuaternion = new THREE.Quaternion();
+const leafScale = new THREE.Vector3();
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+const STATIC_CHUNK = 600;
+// ресурсы рисуются пулами по участкам карты; постройки — отдельными мешами
+const RESOURCE_KINDS = new Set(['tree', 'rock', 'sulfur', 'bush', 'crystal', 'scrap']);
+const _hidden = new THREE.Matrix4();
 
 class Pool {
-  constructor(parent, geom, material, max, shadow = true) {
-    this.mesh = new THREE.InstancedMesh(geom, material, max);
+  constructor(parent, kind, geom, material, capacity, shadow = true) {
+    this.parent = parent;
+    this.kind = kind;
+    this.geom = geom;
+    this.material = material;
+    this.max = Math.max(1, capacity);
+    this.shadow = shadow;
+    this.mesh = new THREE.InstancedMesh(geom, material, this.max);
     this.mesh.count = 0;
     this.mesh.castShadow = shadow;
     this.mesh.receiveShadow = true;
-    this.mesh.frustumCulled = false;
+    this.mesh.frustumCulled = true;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.max = max;
     this.keys = [];
     this.slot = new Map();
     this.dirty = false;
@@ -26,7 +38,7 @@ class Pool {
   set(key, matrix, color) {
     let i = this.slot.get(key);
     if (i === undefined) {
-      if (this.mesh.count >= this.max) return;
+      if (this.mesh.count >= this.max) this.grow(this.mesh.count + 1);
       i = this.mesh.count++;
       this.slot.set(key, i);
       this.keys[i] = key;
@@ -34,6 +46,29 @@ class Pool {
     this.mesh.setMatrixAt(i, matrix);
     if (color) this.mesh.setColorAt(i, color);
     this.dirty = true;
+  }
+
+  grow(required) {
+    const previous = this.mesh;
+    while (this.max < required) this.max *= 2;
+    const next = new THREE.InstancedMesh(this.geom, this.material, this.max);
+    next.count = previous.count;
+    next.castShadow = this.shadow;
+    next.receiveShadow = true;
+    next.frustumCulled = true;
+    next.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < previous.count; i++) {
+      previous.getMatrixAt(i, _m);
+      next.setMatrixAt(i, _m);
+      if (previous.instanceColor) {
+        previous.getColorAt(i, _c);
+        next.setColorAt(i, _c);
+      }
+    }
+    this.parent.remove(previous);
+    this.parent.add(next);
+    previous.dispose?.();
+    this.mesh = next;
   }
 
   remove(key) {
@@ -60,11 +95,34 @@ class Pool {
     if (!this.dirty) return;
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    this.mesh.computeBoundingSphere();
     this.dirty = false;
   }
 }
 
 const flatMat = (opts = {}) => new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.85, ...opts });
+
+function makeLeafGeometry() {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute([
+    0, 0, 0,
+    -0.48, 0.46, 0,
+    0, 1, 0,
+    0.48, 0.46, 0,
+    0, 0.5, 0.12,
+  ], 3));
+  geo.setIndex([0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4]);
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+function leafMatrix(position, direction, width, length, twist) {
+  leafQuaternion.setFromUnitVectors(leafUp, direction.normalize());
+  leafQuaternion.multiply(new THREE.Quaternion().setFromAxisAngle(leafUp, twist));
+  leafScale.set(width, length, width * 0.12);
+  return new THREE.Matrix4().compose(position, leafQuaternion, leafScale);
+}
 
 // ---------- геометрия построек (склеенная, с цветами вершин) ----------
 function buildStructureGeoms() {
@@ -221,25 +279,29 @@ export class StaticsView {
     this.group = new THREE.Group();
     scene.add(this.group);
     this.objs = new Map(); // id -> { s, parts: [[pool, key]], mesh, extra }
-    this.cutObjs = new Set(); // деревья и камни, которые прячем перед камерой
-    this.lightObjs = new Set(); // костры и кристаллы — источники света
-    this.shakeObjs = new Set(); // объекты, которые сейчас трясутся от удара
+    this.poolSets = new Map();
+    this.occluders = new Set();
+    this.shaking = new Set();
+    this.lightObjects = new Set();
+    this.lightSources = [];
+    this.lastCutaway = null;
     this.time = 0;
 
-    const leaf = flatMat({ roughness: 0.9 });
-    this.pools = {
-      trunk: new Pool(this.group, G.cyl6, flatMat(), 6000),
-      pine: new Pool(this.group, G.cone, leaf, 12000),
-      blob: new Pool(this.group, G.ico, leaf, 14000),
-      rock: new Pool(this.group, G.dodeca, flatMat({ roughness: 0.95 }), 6000),
-      ore: new Pool(this.group, G.octa, new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: '#6a5a00', emissiveIntensity: 0.35, roughness: 0.4, flatShading: true }), 2000, false),
-      scrap: new Pool(this.group, G.box, flatMat({ roughness: 0.7, metalness: 0.35 }), 3000),
-      barrel: new Pool(this.group, G.cyl, flatMat({ roughness: 0.6, metalness: 0.3 }), 1500),
-      bush: new Pool(this.group, G.ico1, flatMat(), 9000),
-      berry: new Pool(this.group, G.ico, flatMat({ roughness: 0.4 }), 24000, false),
-      crystal: new Pool(this.group, G.octa, new THREE.MeshStandardMaterial({
+    const leaf = flatMat({ roughness: 0.9, side: THREE.DoubleSide });
+    this.poolDefs = {
+      trunk: [taper(0.68), flatMat(), 24, true],
+      branch: [G.cyl6, flatMat(), 96, true],
+      pine: [G.cone, leaf, 64, true],
+      blob: [G.ico, leaf, 96, true],
+      rock: [G.dodeca, flatMat({ roughness: 0.95 }), 32, true],
+      bush: [makeLeafGeometry(), leaf, 128, false],
+      berry: [G.ico, flatMat({ roughness: 0.4 }), 32, false],
+      crystal: [G.octa, new THREE.MeshStandardMaterial({
         color: 0xffffff, emissive: '#7a2bd6', emissiveIntensity: 0.9, roughness: 0.2, metalness: 0.3, flatShading: true,
-      }), 600),
+      }), 24, true],
+      ore: [G.octa, new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: '#6a5a00', emissiveIntensity: 0.35, roughness: 0.4, flatShading: true }), 32, false],
+      scrap: [G.box, flatMat({ roughness: 0.7, metalness: 0.35 }), 32, true],
+      barrel: [G.cyl, flatMat({ roughness: 0.6, metalness: 0.3 }), 16, true],
     };
 
     this.sGeo = buildStructureGeoms();
@@ -266,6 +328,27 @@ export class StaticsView {
     return this.terrain.heightAt(x, z);
   }
 
+  getPools(x, z) {
+    const cx = Math.floor(x / STATIC_CHUNK);
+    const cz = Math.floor(z / STATIC_CHUNK);
+    const key = `${cx},${cz}`;
+    let pools = this.poolSets.get(key);
+    if (pools) return pools;
+    const defs = this.poolDefs;
+    const parent = this.group;
+    pools = new Proxy({}, {
+      get: (set, kind) => {
+        if (Object.prototype.hasOwnProperty.call(set, kind)) return set[kind];
+        const def = defs[kind];
+        if (!def) return undefined;
+        const [geom, material, capacity, shadow] = def;
+        return (set[kind] = new Pool(parent, kind, geom, material, capacity, shadow));
+      },
+    });
+    this.poolSets.set(key, pools);
+    return pools;
+  }
+
   // ---------- добавление / обновление / удаление ----------
   upsert(s) {
     const old = this.objs.get(s.i);
@@ -277,6 +360,7 @@ export class StaticsView {
     }
     if (old) this.remove(s.i);
     const o = { s, parts: [], mesh: null, extra: null, shake: 0 };
+    if (RESOURCE_KINDS.has(s.k)) o.pools = this.getPools(s.x, s.y);
     this.objs.set(s.i, o);
     if (s.k === 'tree') this.addTree(o);
     else if (s.k === 'rock' || s.k === 'sulfur') this.addRock(o);
@@ -284,28 +368,30 @@ export class StaticsView {
     else if (s.k === 'crystal') this.addCrystal(o);
     else if (s.k === 'scrap') this.addScrap(o);
     else this.addStructure(o);
-    if (s.k === 'tree' || s.k === 'rock' || s.k === 'sulfur') this.cutObjs.add(o);
-    if (o.light) this.lightObjs.add(o);
+    if (o.s.k === 'tree' || o.s.k === 'rock' || o.s.k === 'sulfur') this.occluders.add(o);
+    if (o.light) this.lightObjects.add(o);
+    this.lastCutaway = null;
   }
 
   remove(id) {
     const o = this.objs.get(id);
     if (!o) return;
+    this.occluders.delete(o);
+    this.shaking.delete(o);
+    this.lightObjects.delete(o);
     for (const [pool, key] of o.parts) pool.remove(key);
     if (o.mesh) {
       this.group.remove(o.mesh);
     }
     this.objs.delete(id);
-    this.cutObjs.delete(o);
-    this.lightObjs.delete(o);
-    this.shakeObjs.delete(o);
   }
 
   hit(id) {
     const o = this.objs.get(id);
-    if (!o) return;
-    o.shake = 0.35;
-    this.shakeObjs.add(o);
+    if (o) {
+      o.shake = 0.35;
+      this.shaking.add(o);
+    }
   }
 
   onHpChange(o) {
@@ -319,6 +405,7 @@ export class StaticsView {
   // груда металлолома: ржавые ящики, листы и бочка
   addScrap(o) {
     const s = o.s;
+    const pools = o.pools;
     const r = rng(s.v || 0.4);
     const gy = this.ground(s.x, s.y);
     const k = 0.6 + 0.4 * (s.h / (s.m || 1));
@@ -329,16 +416,17 @@ export class StaticsView {
       const d = i === 0 ? 0 : 8 + r() * 8;
       const w = (8 + r() * 10) * k;
       const h = (4 + r() * 8) * k;
-      this.pools.scrap.set(key, M(s.x + Math.cos(a) * d, gy + h / 2 + (i === 0 ? 0 : r() * 4), s.y + Math.sin(a) * d, (r() - 0.5) * 0.8, r() * 3, (r() - 0.5) * 0.8, w, h, w * (0.4 + r() * 0.8)), _c.set(rust[i]).clone());
-      if (o.parts.length < 5) o.parts.push([this.pools.scrap, key]);
+      pools.scrap.set(key, M(s.x + Math.cos(a) * d, gy + h / 2 + (i === 0 ? 0 : r() * 4), s.y + Math.sin(a) * d, (r() - 0.5) * 0.8, r() * 3, (r() - 0.5) * 0.8, w, h, w * (0.4 + r() * 0.8)), _c.set(rust[i]).clone());
+      if (o.parts.length < 5) o.parts.push([pools.scrap, key]);
     }
     const bk = `${s.i}:barrel`;
-    this.pools.barrel.set(bk, M(s.x + 12, gy + 9 * k, s.y - 8, 0, 0, r() < 0.4 ? Math.PI / 2 : 0, 6 * k, 18 * k, 6 * k), _c.set(r() < 0.5 ? '#c9a227' : '#4a6b3a').clone());
-    if (o.parts.length < 6) o.parts.push([this.pools.barrel, bk]);
+    pools.barrel.set(bk, M(s.x + 12, gy + 9 * k, s.y - 8, 0, 0, r() < 0.4 ? Math.PI / 2 : 0, 6 * k, 18 * k, 6 * k), _c.set(r() < 0.5 ? '#c9a227' : '#4a6b3a').clone());
+    if (o.parts.length < 6) o.parts.push([pools.barrel, bk]);
   }
 
   addTree(o) {
     const s = o.s;
+    const pools = o.pools;
     const r = rng(s.v || 0.5);
     const gy = this.ground(s.x, s.y);
     const pine = (s.v || 0.5) < 0.55;
@@ -350,28 +438,58 @@ export class StaticsView {
       o.parts.push([pool, key]);
       o.base.push([pool, key, m.clone(), color]);
     };
-    push(this.pools.trunk, s.i, M(s.x, gy + trunkH / 2 - 4, s.y, 0, r() * 3, 0, 4.2 * sc, trunkH, 4.2 * sc), _c.set(r() < 0.5 ? '#6b4423' : '#5d3b1e').clone());
+    push(pools.trunk, s.i, M(s.x, gy + trunkH / 2 - 4, s.y, 0, r() * 3, 0, 4.2 * sc, trunkH, 4.2 * sc), _c.set(r() < 0.5 ? '#6b4423' : '#5d3b1e').clone());
     if (pine) {
       const g = new THREE.Color().setHSL(0.36 + r() * 0.05, 0.45, 0.22 + r() * 0.06);
-      for (let i = 0; i < 3; i++) {
-        const w = (24 - i * 6) * sc;
-        const h = (30 - i * 4) * sc;
-        push(this.pools.pine, `${s.i}:${i}`, M(s.x, gy + trunkH - 6 + i * 16 * sc + h / 2, s.y, 0, r() * 3, 0, w, h, w), g.clone().offsetHSL(0, 0, i * 0.03));
+      const tiers = 4;
+      for (let i = 0; i < tiers; i++) {
+        const w = (27 - i * 5.2) * sc * (0.9 + r() * 0.2);
+        const h = (27 - i * 2.2) * sc;
+        const y = gy + trunkH - 8 + i * 11.5 * sc + h / 2;
+        const shadeByTier = i * 0.025 + (r() - 0.5) * 0.025;
+        push(pools.pine, `${s.i}:${i}`, M(s.x, y, s.y, 0, r() * Math.PI, 0, w, h, w), g.clone().offsetHSL((r() - 0.5) * 0.02, 0, shadeByTier));
       }
     } else {
-      const g = new THREE.Color().setHSL(0.24 + r() * 0.07, 0.5, 0.3 + r() * 0.08);
-      const blobs = 3 + Math.floor(r() * 2);
-      for (let i = 0; i < blobs; i++) {
-        const a = (i / blobs) * Math.PI * 2 + r();
-        const d = i === 0 ? 0 : 12 * sc;
-        const rr = (i === 0 ? 22 : 15 + r() * 5) * sc;
-        push(this.pools.blob, `${s.i}:${i}`, M(s.x + Math.cos(a) * d, gy + trunkH + (i === 0 ? 10 : 2 + r() * 6) * sc, s.y + Math.sin(a) * d, r(), r(), r(), rr, rr * 0.85, rr), g.clone().offsetHSL(0, 0, (r() - 0.5) * 0.08));
+      const autumn = r() < 0.14;
+      const hue = autumn ? 0.09 + r() * 0.07 : 0.25 + r() * 0.07;
+      const g = new THREE.Color().setHSL(hue, autumn ? 0.62 : 0.48, 0.31 + r() * 0.08);
+      const trunkBase = new THREE.Vector3(s.x, gy + trunkH * 0.48, s.y);
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + r() * 0.35;
+        const tip = new THREE.Vector3(
+          s.x + Math.cos(a) * 15 * sc,
+          gy + trunkH + 5 * sc + r() * 4,
+          s.y + Math.sin(a) * 15 * sc,
+        );
+        const bark = _c.set('#694326').offsetHSL(0, 0, (r() - 0.5) * 0.08).clone();
+        push(pools.branch, `${s.i}:branch${i}`, between(trunkBase, tip, 1.35 * sc), bark);
+      }
+      const clusters = 7;
+      for (let i = 0; i < clusters; i++) {
+        const a = (i / (clusters - 1)) * Math.PI * 2 + r() * 0.3;
+        const center = i === 0;
+        const d = center ? 0 : (10 + r() * 4) * sc;
+        const radius = (center ? 18 : 12 + r() * 3) * sc;
+        const y = gy + trunkH + (center ? 17 : 7 + (i % 2) * 8 + r() * 4) * sc;
+        const clusterColor = g.clone().offsetHSL((r() - 0.5) * 0.025, (r() - 0.5) * 0.08, (r() - 0.5) * 0.15);
+        push(pools.blob, `${s.i}:crown${i}`, M(
+          s.x + Math.cos(a) * d,
+          y,
+          s.y + Math.sin(a) * d,
+          r() * 0.5,
+          r() * Math.PI,
+          r() * 0.5,
+          radius,
+          radius * (0.76 + r() * 0.18),
+          radius * (0.82 + r() * 0.22),
+        ), clusterColor);
       }
     }
   }
 
   addRock(o) {
     const s = o.s;
+    const pools = o.pools;
     const r = rng(s.v || 0.3);
     const gy = this.ground(s.x, s.y);
     const k = 0.55 + 0.45 * (s.h / (s.m || 1));
@@ -381,35 +499,66 @@ export class StaticsView {
     const col = sulfur ? new THREE.Color(g * 1.15, g * 1.05, g * 0.55) : new THREE.Color(g, g, g * 0.95);
     const key = s.i;
     const m = M(s.x, gy + base * 0.35, s.y, r() * 3, r() * 3, r() * 3, base * (1 + r() * 0.4), base * (0.7 + r() * 0.3), base * (1 + r() * 0.4));
-    this.pools.rock.set(key, m, col);
-    if (!o.parts.length) o.parts.push([this.pools.rock, key]);
+    pools.rock.set(key, m, col);
+    if (!o.parts.length) o.parts.push([pools.rock, key]);
     // второй камешек рядом
     const key2 = `${s.i}:b`;
     const m2 = M(s.x + (r() - 0.5) * 26, gy + 3, s.y + (r() - 0.5) * 26, r() * 3, r() * 3, r() * 3, base * 0.45);
-    this.pools.rock.set(key2, m2, col.clone().multiplyScalar(0.9));
-    if (o.parts.length < 2) o.parts.push([this.pools.rock, key2]);
+    pools.rock.set(key2, m2, col.clone().multiplyScalar(0.9));
+    if (o.parts.length < 2) o.parts.push([pools.rock, key2]);
     // жёлтые кристаллы серы на валуне
     if (sulfur) {
       for (let i = 0; i < 4; i++) {
         const ok = `${s.i}:o${i}`;
         const a = r() * Math.PI * 2;
-        this.pools.ore.set(ok, M(s.x + Math.cos(a) * base * 0.55, gy + base * (0.55 + r() * 0.3), s.y + Math.sin(a) * base * 0.55, r() * 3, r() * 3, r() * 3, 3.2 * k, 5.5 * k, 3.2 * k), _c.setHSL(0.14, 0.9, 0.55).clone());
-        if (o.parts.length < 6) o.parts.push([this.pools.ore, ok]);
+        pools.ore.set(ok, M(s.x + Math.cos(a) * base * 0.55, gy + base * (0.55 + r() * 0.3), s.y + Math.sin(a) * base * 0.55, r() * 3, r() * 3, r() * 3, 3.2 * k, 5.5 * k, 3.2 * k), _c.setHSL(0.14, 0.9, 0.55).clone());
+        if (o.parts.length < 6) o.parts.push([pools.ore, ok]);
       }
     }
   }
 
   addBush(o) {
     const s = o.s;
+    const pools = o.pools;
     const r = rng(s.v || 0.7);
     const gy = this.ground(s.x, s.y);
     if (!o.parts.length) {
-      const g = new THREE.Color().setHSL(0.3 + r() * 0.05, 0.5, 0.25);
-      for (let i = 0; i < 3; i++) {
-        const a = (i / 3) * Math.PI * 2 + r();
-        const key = `${s.i}:${i}`;
-        this.pools.bush.set(key, M(s.x + Math.cos(a) * 6, gy + 8, s.y + Math.sin(a) * 6, r(), r(), r(), 11 + r() * 3, 9, 11 + r() * 3), g.clone().offsetHSL(0, 0, (r() - 0.5) * 0.06));
-        o.parts.push([this.pools.bush, key]);
+      const g = new THREE.Color().setHSL(0.29 + r() * 0.055, 0.52 + r() * 0.12, 0.28 + r() * 0.08);
+      const bark = new THREE.Color('#604228').offsetHSL(0, 0, (r() - 0.5) * 0.1);
+      let leafId = 0;
+      const addBranch = (id, start, end, radius) => {
+        const key = `${s.i}:stem${id}`;
+        pools.branch.set(key, between(start, end, radius), bark);
+        o.parts.push([pools.branch, key]);
+      };
+      const addLeaf = (position, direction, length, colorOffset = 0) => {
+        const key = `${s.i}:leaf${leafId++}`;
+        const matrix = leafMatrix(position, direction, length * (0.28 + r() * 0.06), length, r() * Math.PI * 2);
+        const color = g.clone().offsetHSL((r() - 0.5) * 0.035, (r() - 0.5) * 0.08, colorOffset + (r() - 0.5) * 0.12);
+        pools.bush.set(key, matrix, color);
+        o.parts.push([pools.bush, key]);
+      };
+      const base = new THREE.Vector3(s.x, gy + 1, s.y);
+      const upward = new THREE.Vector3(0, 1, 0);
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + (r() - 0.5) * 0.45;
+        const radial = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+        const tangent = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
+        const mainTip = base.clone().addScaledVector(radial, 8 + r() * 4).addScaledVector(upward, 13 + r() * 5);
+        addBranch(`main${i}`, base, mainTip, 0.75 + r() * 0.2);
+
+        const mid = base.clone().lerp(mainTip, 0.58);
+        const twigTip = mid.clone().addScaledVector(radial, 4 + r() * 2).addScaledVector(tangent, (r() < 0.5 ? -1 : 1) * (2 + r() * 2)).addScaledVector(upward, 3 + r() * 2);
+        addBranch(`twig${i}`, mid, twigTip, 0.42 + r() * 0.12);
+
+        const broad = radial.clone().addScaledVector(upward, 0.65).normalize();
+        addLeaf(mid.clone().addScaledVector(radial, 1), broad.clone().addScaledVector(tangent, 0.45).normalize(), 4.5);
+        addLeaf(mid.clone().addScaledVector(radial, 1), broad.clone().addScaledVector(tangent, -0.45).normalize(), 4.2, -0.04);
+        addLeaf(twigTip.clone(), radial.clone().addScaledVector(upward, 0.8).addScaledVector(tangent, 0.45).normalize(), 5.2, 0.04);
+        addLeaf(twigTip.clone(), radial.clone().addScaledVector(upward, 0.8).addScaledVector(tangent, -0.45).normalize(), 4.8);
+        addLeaf(twigTip.clone(), upward.clone().addScaledVector(radial, 0.35).normalize(), 4.4, 0.06);
+        addLeaf(mainTip.clone(), broad.clone().addScaledVector(tangent, 0.35).normalize(), 4.8, 0.03);
+        addLeaf(mainTip.clone(), broad.clone().addScaledVector(tangent, -0.35).normalize(), 4.5, -0.03);
       }
     }
     // ягоды: чем меньше «здоровья», тем меньше ягод
@@ -422,16 +571,17 @@ export class StaticsView {
       const e = br() * 1.2;
       const m = M(s.x + Math.cos(a) * Math.cos(e) * 14, gy + 8 + Math.sin(e) * 10, s.y + Math.sin(a) * Math.cos(e) * 14, 0, 0, 0, 2.4);
       if (i < left) {
-        this.pools.berry.set(key, m, _c.set(i % 3 ? '#3b5bd9' : '#c8324b').clone());
-        if (!o.parts.some((p) => p[1] === key)) o.parts.push([this.pools.berry, key]);
+        pools.berry.set(key, m, _c.set(i % 3 ? '#3b5bd9' : '#c8324b').clone());
+        if (!o.parts.some((p) => p[1] === key)) o.parts.push([pools.berry, key]);
       } else {
-        this.pools.berry.remove(key);
+        pools.berry.remove(key);
       }
     }
   }
 
   addCrystal(o) {
     const s = o.s;
+    const pools = o.pools;
     const r = rng(s.v || 0.9);
     const gy = this.ground(s.x, s.y);
     const k = 0.5 + 0.5 * (s.h / (s.m || 1));
@@ -440,8 +590,8 @@ export class StaticsView {
       const a = (i / 4) * Math.PI * 2 + r();
       const d = i === 0 ? 0 : 7;
       const h = (i === 0 ? 30 : 18 + r() * 8) * k;
-      this.pools.crystal.set(key, M(s.x + Math.cos(a) * d, gy + h * 0.4, s.y + Math.sin(a) * d, Math.cos(a) * 0.35 * (i ? 1 : 0), 0, Math.sin(a) * 0.35 * (i ? 1 : 0), 5 * k, h, 5 * k), _c.setHSL(0.76 + r() * 0.06, 0.8, 0.6).clone());
-      if (o.parts.length < 4) o.parts.push([this.pools.crystal, key]);
+      pools.crystal.set(key, M(s.x + Math.cos(a) * d, gy + h * 0.4, s.y + Math.sin(a) * d, Math.cos(a) * 0.35 * (i ? 1 : 0), 0, Math.sin(a) * 0.35 * (i ? 1 : 0), 5 * k, h, 5 * k), _c.setHSL(0.76 + r() * 0.06, 0.8, 0.6).clone());
+      if (o.parts.length < 4) o.parts.push([pools.crystal, key]);
     }
     o.light = 'crystal';
   }
@@ -512,10 +662,13 @@ export class StaticsView {
   cutaway(camPos, target) {
     const ax = camPos.x;
     const az = camPos.z;
+    const last = this.lastCutaway;
+    if (last && (ax - last.ax) ** 2 + (az - last.az) ** 2 < 144 && (target.x - last.tx) ** 2 + (target.z - last.tz) ** 2 < 36) return;
+    this.lastCutaway = { ax, az, tx: target.x, tz: target.z };
     const dx = target.x - ax;
     const dz = target.z - az;
     const len2 = dx * dx + dz * dz || 1;
-    for (const o of this.cutObjs) {
+    for (const o of this.occluders) {
       const tree = o.s.k === 'tree' && o.base;
       const rock = o.s.k === 'rock' || o.s.k === 'sulfur';
       if (!tree && !rock) continue;
@@ -527,14 +680,18 @@ export class StaticsView {
       }
       if (hide === !!o.hidden) continue;
       o.hidden = hide;
+      _hidden.copy(ZERO);
+      _hidden.elements[12] = o.s.x;
+      _hidden.elements[13] = this.ground(o.s.x, o.s.y);
+      _hidden.elements[14] = o.s.y;
       if (rock) {
-        if (hide) for (const [pool, key] of o.parts) pool.set(key, ZERO);
+        if (hide) for (const [pool, key] of o.parts) pool.set(key, _hidden);
         else this.addRock(o);
         continue;
       }
       for (const [pool, key, m, color] of o.base) {
-        if (pool === this.pools.trunk) continue;
-        pool.set(key, hide ? ZERO : m, color);
+        if (pool === o.pools.trunk) continue;
+        pool.set(key, hide ? _hidden : m, color);
       }
     }
   }
@@ -544,19 +701,20 @@ export class StaticsView {
     this.time += dt;
     const t = this.time;
     if (target) this.cutaway(camPos, target);
-    const lightSources = [];
-    for (const o of this.shakeObjs) {
+    const lightSources = this.lightSources;
+    lightSources.length = 0;
+    for (const o of this.shaking) {
       o.shake -= dt;
-      if (o.shake <= 0) this.shakeObjs.delete(o);
       const amp = Math.max(0, o.shake) * 6;
       for (const [pool, key, m, color] of o.base || []) {
-        if (o.hidden && pool !== this.pools.trunk) continue;
+        if (o.hidden && pool !== o.pools.trunk) continue;
         _m.copy(m);
-        if (pool !== this.pools.trunk) _m.elements[12] += Math.sin(t * 50) * amp;
+        if (pool !== o.pools.trunk) _m.elements[12] += Math.sin(t * 50) * amp;
         pool.set(key, _m, color);
       }
+      if (o.shake <= 0) this.shaking.delete(o);
     }
-    for (const o of this.lightObjs) {
+    for (const o of this.lightObjects) {
       if (o.extra) {
         const fl = 1 + Math.sin(t * 13 + o.s.i) * 0.12 + Math.sin(t * 23 + o.s.i * 2) * 0.08;
         o.extra.f1.scale.set(7 * fl, 20 * fl, 7 * fl);
@@ -586,6 +744,6 @@ export class StaticsView {
       const flick = fire ? 1 + Math.sin(t * 17 + o.s.i) * 0.12 : 1;
       l.intensity = (fire ? 0.6 + night * 3.2 : 0.4 + night * 1.6) * flick;
     }
-    for (const p of Object.values(this.pools)) p.flush();
+    for (const pools of this.poolSets.values()) for (const p of Object.values(pools)) p.flush();
   }
 }

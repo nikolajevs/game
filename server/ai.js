@@ -72,6 +72,7 @@ export function updateNpc(g, n, dt, night) {
       n.target = null;
       target = null;
     }
+    if (!target) n.windupT = 0;
 
     if (target) {
       const dx = target.x - n.x;
@@ -83,12 +84,23 @@ export function updateNpc(g, n, dt, night) {
         mx = dx / d;
         my = dy / d;
       }
-      if (d <= reach && n.cd.melee <= 0) {
-        n.cd.melee = n.stats.attackCd;
-        n.atkT = 0.22;
-        g.melee(n, n.stats.meleeDmg);
+      if (n.windupT > 0) {
+        n.windupT = Math.max(0, n.windupT - dt);
+        if (d > reach * 1.25) n.windupT = 0;
+        if (n.windupT > 0) {
+          mx = 0;
+          my = 0;
+        } else if (d <= reach) {
+          n.cd.melee = n.stats.attackCd;
+          n.atkT = 0.22;
+          g.melee(n, n.stats.meleeDmg);
+        }
+      } else if (d <= reach && n.cd.melee <= 0) {
+        n.windupT = n.kind === 'colossus' ? 0.56 : 0.3;
+        mx = 0;
+        my = 0;
       }
-      if (n.stats.spit && n.cd.spit <= 0 && d > 120 && d < 380) {
+      if (n.windupT <= 0 && n.stats.spit && n.cd.spit <= 0 && d > 120 && d < 380) {
         n.cd.spit = n.stats.spit.cd * 1.8;
         g.spit(n);
       }
@@ -101,6 +113,7 @@ export function updateNpc(g, n, dt, night) {
       n.angle = Math.atan2(my, mx);
       speed *= 0.6;
     } else {
+      n.windupT = 0;
       [mx, my] = wander(n, dt);
       speed *= 0.45;
     }

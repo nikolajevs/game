@@ -1,5 +1,5 @@
 // Клавиатура, мышь и камера от третьего лица.
-// Курсор свободный: им целятся. Камеру вращают зажатой ПКМ (или колёсиком-кнопкой) и стрелками.
+// Курсор свободный: им целятся. Камеру вращают, потянув зажатой ЛКМ, ПКМ или колёсиком-кнопкой, и стрелками.
 // Используем e.code (физические клавиши), чтобы управление работало и в русской раскладке.
 const ROT_THRESHOLD = 5; // сколько пикселей нужно протянуть ПКМ, чтобы это считалось вращением, а не щелчком
 
@@ -55,6 +55,8 @@ export class Input {
         if (this.onLeftDown && this.onLeftDown()) return;
         this.mouse.l = true;
         this.lastClick = performance.now();
+        // ЛКМ тоже вращает камеру, если её потянуть (удар при этом отменяется)
+        this.rot = { x: e.clientX, y: e.clientY, moved: 0, button: 0 };
       } else if (e.button === 1 || e.button === 2) {
         e.preventDefault();
         this.rot = { x: e.clientX, y: e.clientY, moved: 0, button: e.button };
@@ -67,7 +69,13 @@ export class Input {
       this.rot.moved += Math.abs(dx) + Math.abs(dy);
       this.rot.x = e.clientX;
       this.rot.y = e.clientY;
-      if (this.rot.moved > ROT_THRESHOLD) this.look(dx, dy);
+      if (this.rot.moved > ROT_THRESHOLD) {
+        if (this.rot.button === 0) {
+          this.mouse.l = false;
+          this.lastClick = 0;
+        }
+        this.look(dx, dy);
+      }
     });
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouse.l = false;

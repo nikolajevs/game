@@ -13,6 +13,9 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; user-select: none; }
 canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+#damageFlash { position: fixed; inset: 0; z-index: 3; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, transparent 48%, rgba(205, 25, 30, var(--damage-strength, 0.48)) 100%); }
+#damageFlash.active { animation: damage-flash 0.48s ease-out both; }
+@keyframes damage-flash { from { opacity: 1; } to { opacity: 0; } }
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
 .small { font-size: 12.5px; }

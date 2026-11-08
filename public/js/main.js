@@ -4,6 +4,7 @@ import {
 } from '/shared/config.js';
 import { computeStats, decodeGenome, defaultGenome, encodeGenome } from '/shared/creature.js';
 import { Net } from './net.js';
+import { AudioManager } from './audio.js';
 import { WorldView } from './world3d.js';
 import { Input } from './input.js';
 import { Hud } from './hud.js';
@@ -26,7 +27,8 @@ const store = {
 };
 
 const net = new Net();
-const world = new WorldView($('game'), $('labels'), $('floaters'));
+const audio = new AudioManager();
+const world = new WorldView($('game'), $('labels'), $('floaters'), audio);
 const input = new Input($('game'));
 const hud = new Hud((m) => net.send(m));
 const editor = new Editor((m) => net.send(m));
@@ -102,7 +104,7 @@ net.on('welcome', (m) => {
   joinPreview.dispose();
   hud.show();
   input.enabled = true;
-  hud.toast('Добро пожаловать на остров! Курсор — прицел, ЛКМ — удар, зажатая ПКМ — вращать камеру.');
+  hud.toast('Добро пожаловать на остров! Курсор — прицел, щелчок ЛКМ — удар, потянуть мышью — вращать камеру.');
   requestAnimationFrame(frame);
 });
 
@@ -144,8 +146,9 @@ net.on('s', (m) => {
       S.srvPrev = null;
     }
   }
-  if (m.fx) world.handleFx(m.fx, S.me.x, S.me.y);
-  if (prev && m.you.hp < prev.hp - 1 && !m.you.dead) world.shake = Math.max(world.shake, 3);
+  // звук ориентируем по камере: что слева на экране — слышно слева
+  if (m.fx) world.handleFx(m.fx, S.me.x, S.me.y, input.cam.yaw);
+  if (prev && m.you.hp < prev.hp - 1 && !m.you.dead) world.damageFeedback(prev.hp - m.you.hp);
   if (!m.you.dead && S.dead) hideDeath();
   if (m.you.dead && !S.dead && $('death').classList.contains('hidden')) showDeath({ by: 'неизвестно', nest: !!m.you.nest });
   if (hud.cont && prev && invSig(prev) !== invSig(m.you)) hud.renderContainer(m.you);
@@ -157,8 +160,14 @@ net.on('chat', (m) => hud.chat(m));
 net.on('pl', (m) => hud.setPlayers(m.list));
 net.on('dead', (m) => showDeath(m));
 net.on('evolved', () => editor.close());
-net.on('cont', (m) => hud.openContainer(m, S.you));
-net.on('contClose', () => hud.closeContainer());
+net.on('cont', (m) => {
+  if (!hud.cont) audio.play('uiOpen', { volume: 0.3 });
+  hud.openContainer(m, S.you);
+});
+net.on('contClose', () => {
+  hud.closeContainer();
+  audio.play('uiClose', { volume: 0.28 });
+});
 net.on('close', () => {
   $('disconnected').classList.remove('hidden');
   input.enabled = false;
@@ -229,6 +238,7 @@ hud.chatInput.addEventListener('keydown', (e) => {
 function toggleEditor() {
   if (editor.isOpen) {
     editor.close();
+    audio.play('uiClose', { volume: 0.28 });
     return;
   }
   if (!S.you || S.you.dead) return;
@@ -236,6 +246,7 @@ function toggleEditor() {
   input.enabled = false;
   input.clear();
   editor.open(S.you);
+  audio.play('uiOpen', { volume: 0.3 });
 }
 editor.onClose = () => {
   input.enabled = !anyModal();
@@ -348,6 +359,7 @@ input.onPress = (code) => {
     return;
   }
   if (S.dead) return;
+  if (code === 'KeyM') return hud.toast(audio.toggleMute() ? 'Звук выключен' : 'Звук включён');
   if (code === 'KeyG') return toggleEditor();
   if (editor.isOpen) return;
   if (code === 'Enter') return openChat();
@@ -474,6 +486,7 @@ function frame(now) {
   }
 
   const ents = interpolate(now);
+  world.listenerYaw = input.cam.yaw;
   world.syncEntities(ents, dt, S.myId, S.me);
   updateBuild();
   updateHint();
