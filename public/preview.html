@@ -36,6 +36,8 @@
   .label .hp { height: 4px; width: 46px; margin: 3px auto 0; background: rgba(0,0,0,0.5); border-radius: 2px; overflow: hidden; }
   .label .hp i { display: block; height: 100%; background: #e05a4f; }
   #loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 18px; letter-spacing: 2px; color: #9cf0a4; background: #0b1016; }
+  #perf { top: 138px; left: 14px; padding: 8px 12px; font: 12px/1.4 ui-monospace, Consolas, monospace; color: #e8f0e6; white-space: nowrap; }
+  #perf[hidden] { display: none; }
   @media (max-width: 760px) { #help, #bars { display: none; } #title { max-width: 220px; } }
 </style>
 </head>
@@ -43,6 +45,7 @@
 <canvas id="c"></canvas>
 <div id="crosshair"></div>
 <div id="labels"></div>
+<div id="perf" class="panel" hidden></div>
 
 <div id="title" class="panel">
   <h1>МУТАГЕН</h1>
@@ -53,7 +56,8 @@
   <b>WASD</b> — идти своим существом<br>
   <b>Мышь (зажать)</b> — вращать камеру<br>
   <b>Колесо</b> — приблизить / отдалить<br>
-  <b>Щелчок</b> — атака &nbsp; <b>Shift</b> — бег
+  <b>Щелчок</b> — атака &nbsp; <b>Shift</b> — бег<br>
+  <b>M</b> — звук вкл./выкл.
 </div>
 
 <div id="minimap" class="panel"><canvas width="240" height="240"></canvas></div>

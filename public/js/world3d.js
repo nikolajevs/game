@@ -1,6 +1,6 @@
 // 3D-сцена игры: рельеф, объекты, существа с сервера, эффекты, камера.
 import * as THREE from 'three';
-import { NPCS } from '/shared/config.js';
+import { MAP_H, MAP_W, NPCS, T, TILE } from '/shared/config.js';
 import { Terrain } from './gfx/terrain.js';
 import { Sky } from './gfx/sky.js';
 import { StaticsView } from './gfx/statics3d.js';
@@ -17,12 +17,13 @@ const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 
 export class WorldView {
-  constructor(canvas, labelsEl, floatersEl) {
+  constructor(canvas, labelsEl, floatersEl, audio = null) {
     this.canvas = canvas;
+    this.audio = audio;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
     this.scene = new THREE.Scene();
@@ -30,6 +31,8 @@ export class WorldView {
     this.sky = new Sky(this.scene);
     this.effects = new Effects(this.scene, floatersEl);
     this.labelsEl = labelsEl;
+    this.damageFlash = document.getElementById('damageFlash');
+    this.damageFlashTimer = 0;
     this.ents = new Map();
     this.projs = new Map();
     this.shake = 0;
@@ -59,6 +62,17 @@ export class WorldView {
     return this.terrain.heightAt(x, y);
   }
 
+  damageFeedback(amount) {
+    this.shake = Math.max(this.shake, Math.min(7, 2.5 + amount * 0.12));
+    if (!this.damageFlash) return;
+    this.damageFlash.style.setProperty('--damage-strength', String(Math.min(0.78, 0.36 + amount * 0.012)));
+    this.damageFlash.classList.remove('active');
+    void this.damageFlash.offsetWidth;
+    this.damageFlash.classList.add('active');
+    clearTimeout(this.damageFlashTimer);
+    this.damageFlashTimer = setTimeout(() => this.damageFlash?.classList.remove('active'), 520);
+  }
+
   // высота, на которой стоит существо (в глубокой воде — плывёт)
   standY(x, y, hb) {
     return Math.max(this.ground(x, y), -hb * 0.75);
@@ -77,7 +91,7 @@ export class WorldView {
   addEnt(e) {
     const creature = new Creature3D(e.g, e.c);
     this.scene.add(creature.group);
-    const v = { creature, look: e.g, color: e.c, px: e.x, py: e.y, speed: 0, at: 0, hf: 0, label: null, hpFill: null, lastHp: -1 };
+    const v = { creature, look: e.g, color: e.c, px: e.x, py: e.y, speed: 0, stepTimer: Math.random() * 0.25, at: 0, hf: 0, label: null, hpFill: null, lastHp: -1 };
     const el = document.createElement('div');
     el.className = 'label';
     const nm = document.createElement('span');
@@ -146,14 +160,25 @@ export class WorldView {
       if (dt > 0) v.speed = v.speed * 0.75 + Math.min(600, d / dt) * 0.25;
       v.px = x;
       v.py = y;
-      if (e.at && !v.at) v.creature.attack();
+      const warns = !isMe && (!!e.w || (e.k === 'p' && !!e.ch));
+      if (e.at && !v.at) {
+        v.creature.attack(!!v.warning);
+        this.audio?.playAt('swing', x, y, me.x, me.y, { volume: isMe ? 0.34 : 0.22, range: 650, yaw: me.face, rate: 0.94 });
+      }
+      if (warns && !v.warning) {
+        const colossus = e.t === 'colossus';
+        this.audio?.playAt('danger', x, y, me.x, me.y, {
+          volume: colossus ? 0.48 : 0.34, range: colossus ? 900 : 700, yaw: me.face, rate: colossus ? 0.78 : 1.18,
+        });
+      }
       v.at = e.at;
       if (e.hf && !v.hf) v.creature.hit();
       v.hf = e.hf;
+      v.warning = warns;
       const gy = this.standY(x, y, v.creature.tpl.hb);
       v.creature.group.position.set(x, gy, y);
       v.creature.group.rotation.y = -a;
-      v.creature.update(dt, { speed: v.speed, charging: !!e.ch, night: this.night });
+      v.creature.update(dt, { speed: v.speed, charging: !!e.ch, warning: warns, night: this.night });
       if (e.sp && !v.bubble) {
         v.bubble = new THREE.Mesh(G.sphere, this.bubbleMat);
         v.bubble.scale.setScalar(v.creature.R * 2.4);
@@ -166,6 +191,19 @@ export class WorldView {
       v.y = y;
       v.gy = gy;
       v.isMe = isMe;
+      if (v.speed > 34) {
+        v.stepTimer -= dt;
+        if (v.stepTimer <= 0) {
+          const tx = Math.max(0, Math.min(MAP_W - 1, Math.floor(x / TILE)));
+          const ty = Math.max(0, Math.min(MAP_H - 1, Math.floor(y / TILE)));
+          const tile = this.terrain.tiles[ty * MAP_W + tx];
+          const step = tile === T.ROCK ? 'stepRock' : tile === T.SAND ? 'stepSand' : 'stepGrass';
+          this.audio?.playAt(step, x, y, me.x, me.y, { volume: isMe ? 0.52 : 0.26, range: 520, yaw: me.face, rate: v.speed > 135 ? 1.08 : 0.96 });
+          v.stepTimer = Math.max(0.3, Math.min(0.54, 0.58 - v.speed * 0.00135));
+        }
+      } else {
+        v.stepTimer = Math.min(v.stepTimer, 0.1);
+      }
     }
     for (const id of [...this.ents.keys()]) if (!seen.has(id)) this.removeEnt(id);
     for (const [id, m] of this.projs) {
@@ -177,44 +215,66 @@ export class WorldView {
   }
 
   // ---------- эффекты с сервера ----------
-  handleFx(list, myX, myY) {
+  handleFx(list, myX, myY, myYaw = 0) {
     const fx = this.effects;
     for (const f of list) {
       const gy = this.ground(f.x, f.y);
       switch (f.k) {
         case 'dmg':
+          this.audio?.playAt('hit', f.x, f.y, myX, myY, { volume: 0.48, range: 620, yaw: myYaw });
           fx.text(f.x, gy + 34, f.y, `-${f.n}`, f.c);
           fx.burst(f.x, gy + 20, f.y, '#c0392b', 6, { speed: 70 });
           break;
         case 'hit':
+          {
+            const sound = f.m === 'tree' || f.m === 'wood' ? 'woodHit'
+              : f.m === 'rock' || f.m === 'stone' ? 'stoneHit'
+                : f.m === 'crystal' ? 'crystalHit' : 'softHit';
+            this.audio?.playAt(sound, f.x, f.y, myX, myY, { volume: 0.44, range: 620, yaw: myYaw });
+          }
           for (const c of HIT_COLORS[f.m] || ['#cccccc']) fx.burst(f.x, gy + 18, f.y, c, 5, { speed: 70 });
           if (f.id) this.statics.hit(f.id);
           break;
         case 'gain':
+          {
+            const sound = f.text?.includes('🍖') ? 'bite' : f.text?.includes('💧') ? 'drink' : 'pickup';
+            const rate = sound === 'bite' ? 0.82 : sound === 'drink' ? 1.16 : 1;
+            this.audio?.playAt(sound, f.x, f.y, myX, myY, { volume: 0.36, range: 460, yaw: myYaw, rate });
+          }
           fx.text(f.x, gy + 44, f.y, f.text, '#c8f7c5', 'gain');
           break;
         case 'die':
+          this.audio?.playAt('softBreak', f.x, f.y, myX, myY, { volume: 0.52, range: 700, yaw: myYaw });
           fx.burst(f.x, gy + 15, f.y, f.c || '#ffffff', 28, { speed: 130, size: 3.5, life: 1 });
           fx.burst(f.x, gy + 15, f.y, '#ffffff', 8, { speed: 90 });
           break;
         case 'evolve':
+          this.audio?.playAt('evolve', f.x, f.y, myX, myY, { volume: 0.56, range: 700, yaw: myYaw });
           fx.burst(f.x, gy + 10, f.y, '#b98cff', 34, { speed: 70, up: 1.6, gravity: 40, life: 1.4 });
           fx.burst(f.x, gy + 10, f.y, f.c || '#ffffff', 18, { speed: 50, up: 2, gravity: 30, life: 1.2 });
           break;
         case 'spit':
+          this.audio?.playAt('swing', f.x, f.y, myX, myY, { volume: 0.24, range: 540, yaw: myYaw, rate: 1.18 });
           fx.burst(f.x, gy + 18, f.y, '#8dff5a', 4, { speed: 40, size: 1.8 });
           break;
         case 'splash':
+          this.audio?.playAt('softHit', f.x, f.y, myX, myY, { volume: 0.4, range: 520, yaw: myYaw, rate: 0.92 });
           fx.burst(f.x, gy + 15, f.y, '#8dff5a', 14, { speed: 90, size: 2.2 });
           break;
         case 'thud':
+          this.audio?.playAt('heavyHit', f.x, f.y, myX, myY, { volume: 0.62, range: 720, yaw: myYaw });
           fx.burst(f.x, gy + 8, f.y, '#b5a585', 16, { speed: 100, size: 3 });
           if (Math.hypot(f.x - myX, f.y - myY) < 300) this.shake = Math.max(this.shake, 4);
           break;
         case 'break':
+          {
+            const sound = f.m === 'wood' ? 'woodBreak' : f.m === 'stone' ? 'stoneHit' : 'softBreak';
+            this.audio?.playAt(sound, f.x, f.y, myX, myY, { volume: 0.62, range: 700, yaw: myYaw });
+          }
           for (const c of HIT_COLORS[f.m] || ['#cccccc']) fx.burst(f.x, gy + 20, f.y, c, 18, { speed: 150, size: 4, life: 1.1 });
           break;
         case 'meteor':
+          this.audio?.playAt('heavyHit', f.x, f.y, myX, myY, { volume: 0.74, range: 1150, yaw: myYaw, rate: 0.74 });
           this.meteorImpact(f.x, f.y, myX, myY);
           break;
         default:

@@ -25,8 +25,9 @@ export class Sky {
     sc.bottom = -420;
     sc.near = 10;
     sc.far = 2200;
-    this.sun.shadow.bias = -0.0006;
-    this.sun.shadow.normalBias = 0.8;
+    this.sun.shadow.bias = -0.0003;
+    this.sun.shadow.normalBias = 0.32;
+    this.sun.shadow.radius = 3.5;
     scene.add(this.sun, this.sun.target);
 
     // купол неба с градиентом в цветах вершин

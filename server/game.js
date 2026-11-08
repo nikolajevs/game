@@ -986,7 +986,7 @@ export class Game {
     const n = {
       id: this.nextId++, type: 'npc', kind, look: def.genome, stats, color: def.color,
       x: pos.x, y: pos.y, homeX: pos.x, homeY: pos.y, kbx: 0, kby: 0, angle: Math.random() * Math.PI * 2,
-      hp: def.hp, cd: { melee: 0, spit: 0 }, atkT: 0, hitT: 0, slowT: 0, alertT: 0, combatT: 0,
+      hp: def.hp, cd: { melee: 0, spit: 0 }, atkT: 0, hitT: 0, slowT: 0, alertT: 0, combatT: 0, windupT: 0,
       target: null, wanderT: 0, wx: 0, wy: 0, spikeT: 0,
     };
     this.npcs.set(n.id, n);
@@ -1101,7 +1101,7 @@ export class Game {
   serNpc(n) {
     return {
       i: n.id, k: 'n', t: n.kind, x: Math.round(n.x), y: Math.round(n.y), a: Math.round(n.angle * 100) / 100,
-      h: Math.ceil(n.hp), mh: n.stats.maxHp, c: n.color, g: n.look, at: n.atkT > 0 ? 1 : 0, hf: n.hitT > 0 ? 1 : 0,
+      h: Math.ceil(n.hp), mh: n.stats.maxHp, c: n.color, g: n.look, at: n.atkT > 0 ? 1 : 0, hf: n.hitT > 0 ? 1 : 0, w: n.windupT > 0 ? 1 : 0,
     };
   }
 

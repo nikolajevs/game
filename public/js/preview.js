@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { TILE, MAP_W, MAP_H, T, NPCS, STRUCTURES, RESOURCES, VIEW_MULT, TERRAIN_SPEED, isWater } from '/shared/config.js';
 import { generateMap, generateResources } from '/shared/worldgen.js';
 import { computeStats, decodeGenome } from '/shared/creature.js';
+import { AudioManager } from './audio.js';
 import { Terrain } from './gfx/terrain.js';
 import { Sky } from './gfx/sky.js';
 import { StaticsView } from './gfx/statics3d.js';
@@ -11,12 +12,16 @@ import { Creature3D } from './gfx/creature3d.js';
 import { Decor } from './gfx/decor.js';
 
 const SEED = 1337;
+const audio = new AudioManager();
 const canvas = document.getElementById('c');
 const labelsEl = document.getElementById('labels');
+const perfEl = document.getElementById('perf');
+const measurePerf = new URLSearchParams(location.search).get('perf') === '1';
+perfEl.hidden = !measurePerf;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
 const scene = new THREE.Scene();
@@ -237,7 +242,10 @@ const keys = {};
 const cam = { mode: 'third', yaw: -Math.PI / 2 + 0.35, pitch: 0.3, dist: 240, orbit: 0 };
 let drag = null;
 let attackQueued = false;
-window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+window.addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (e.code === 'KeyM' && !e.repeat) audio.toggleMute();
+});
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 canvas.addEventListener('mousedown', (e) => { drag = { x: e.clientX, y: e.clientY, moved: 0 }; });
@@ -364,6 +372,7 @@ function updateMe(a, dt) {
     attackQueued = false;
     a.angle = cam.yaw;
     a.c.attack();
+    audio.playAt('swing', a.x, a.y, me.x, me.y, { volume: 0.38, range: 650, yaw: me.angle });
   }
   a.speedNow = speed;
 }
@@ -372,11 +381,17 @@ function updateActor(a, dt) {
   if (a.me) return updateMe(a, dt);
   if (a.mode === 'raid') {
     a.speedNow = 0;
-    a.atkT -= dt;
-    if (a.atkT <= 0) {
-      a.atkT = 0.95;
-      a.c.attack();
-      if (damagedWall) statics.hit(damagedWall.s.i);
+    if (a.windupT > 0) {
+      a.windupT = Math.max(0, a.windupT - dt);
+      if (a.windupT === 0) {
+        a.atkT = 0.95;
+        a.c.attack(true);
+        audio.playAt('swing', a.x, a.y, me.x, me.y, { volume: 0.24, range: 650, yaw: me.angle });
+        if (damagedWall) statics.hit(damagedWall.s.i);
+      }
+    } else if ((a.atkT -= dt) <= 0) {
+      a.windupT = 0.36;
+      audio.playAt('danger', a.x, a.y, me.x, me.y, { volume: 0.36, range: 700, yaw: me.angle, rate: 1.12 });
     }
     return;
   }
@@ -413,10 +428,16 @@ function updateActor(a, dt) {
     }
   }
   if (a.fighter) {
-    a.atkT -= dt;
-    if (a.atkT <= 0) {
-      a.atkT = 2 + Math.random() * 4;
-      a.c.attack();
+    if (a.windupT > 0) {
+      a.windupT = Math.max(0, a.windupT - dt);
+      if (a.windupT === 0) {
+        a.atkT = 2 + Math.random() * 4;
+        a.c.attack(true);
+        audio.playAt('swing', a.x, a.y, me.x, me.y, { volume: 0.2, range: 650, yaw: me.angle });
+      }
+    } else if ((a.atkT -= dt) <= 0) {
+      a.windupT = a.look === NPCS.colossus.genome ? 0.56 : 0.3;
+      audio.playAt('danger', a.x, a.y, me.x, me.y, { volume: 0.3, range: 700, yaw: me.angle, rate: 1.18 });
     }
   }
 }
@@ -426,6 +447,8 @@ const target = new THREE.Vector3();
 let last = performance.now();
 let elapsed = 0;
 let firstFrame = true;
+let perfFrames = 0;
+let perfMark = performance.now();
 
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -446,6 +469,17 @@ function frame(now) {
 
   for (const a of actors) {
     updateActor(a, dt);
+    if (a.speedNow > 34) {
+      a.stepTimer = (a.stepTimer ?? Math.random() * 0.25) - dt;
+      if (a.stepTimer <= 0) {
+        const tile = tileAt(Math.floor(a.x / TILE), Math.floor(a.y / TILE));
+        const step = tile === T.ROCK ? 'stepRock' : tile === T.SAND ? 'stepSand' : 'stepGrass';
+        audio.playAt(step, a.x, a.y, me.x, me.y, { volume: a.me ? 0.52 : 0.24, range: 520, yaw: me.angle, rate: a.speedNow > 135 ? 1.08 : 0.96 });
+        a.stepTimer = Math.max(0.3, Math.min(0.54, 0.58 - a.speedNow * 0.00135));
+      }
+    } else {
+      a.stepTimer = 0.1;
+    }
     const ground = terrain.heightAt(a.x, a.y);
     a.gy = Math.max(ground, -a.c.tpl.hb * 0.75);
     a.c.group.position.set(a.x, a.gy, a.y);
@@ -478,9 +512,24 @@ function frame(now) {
   const night = 1 - env.k;
   terrain.update(elapsed);
   statics.update(dt, camera.position, night);
-  for (const a of actors) a.c.update(dt, { speed: a.speedNow, night });
+  for (const a of actors) a.c.update(dt, { speed: a.speedNow, warning: a.windupT > 0, night });
 
   renderer.render(scene, camera);
+  if (measurePerf) {
+    perfFrames++;
+    if (now - perfMark >= 800) {
+      const seconds = (now - perfMark) / 1000;
+      const pools = statics.poolSets
+        ? [...statics.poolSets.values()].flatMap((set) => Object.values(set))
+        : Object.values(statics.pools);
+      const instances = pools.reduce((sum, pool) => sum + pool.mesh.count, 0);
+      const batches = pools.reduce((sum, pool) => sum + (pool.mesh.count ? 1 : 0), 0);
+      const info = renderer.info.render;
+      perfEl.textContent = `${(perfFrames / seconds).toFixed(0)} FPS · ${info.calls} draw calls · ${Math.round(info.triangles / 1000)}k tris · ${instances} instances · ${batches}/${pools.length} foliage batches · ${statics.objs.size} statics`;
+      perfFrames = 0;
+      perfMark = now;
+    }
+  }
 
   // подписи над существами
   for (const a of actors) {
