@@ -45,11 +45,20 @@ button.big { padding: 12px 22px; font-size: 17px; }
 #colors { display: flex; gap: 8px; flex-wrap: wrap; }
 #colors button { width: 34px; height: 34px; border-radius: 50%; padding: 0; border: 3px solid transparent; }
 #colors button.on { border-color: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,0.4); }
+#colors button { width: 26px; height: 26px; }
+/* выбор внешности */
+.look-grid { display: grid; grid-template-columns: 72px 1fr; gap: 8px 10px; align-items: center; }
+.seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.seg button { padding: 6px 10px; font-size: 13px; }
+.seg button.on { border-color: var(--accent); background: #1f3a2a; color: #fff; }
+.swatches { display: flex; gap: 8px; }
+.swatches button { width: 26px; height: 26px; border-radius: 50%; padding: 0; border: 3px solid transparent; }
+.swatches button.on { border-color: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,0.4); }
 #joinErr { color: #ff8a80; font-size: 13px; min-height: 16px; }
 .join-left a { color: var(--muted); text-decoration: none; }
 .join-left a:hover { color: var(--accent2); }
 .join-right { width: 320px; display: flex; flex-direction: column; gap: 10px; }
-#joinPreview { width: 320px; height: 240px; border-radius: 10px; background: radial-gradient(circle at 50% 70%, #24402f, #0f1915); }
+#joinPreview { width: 320px; height: 330px; border-radius: 10px; background: radial-gradient(circle at 50% 70%, #24402f, #0f1915); }
 .rules { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; font-size: 13px; color: #c5d6c6; line-height: 1.35; }
 @media (max-width: 760px) {
   .join-box { flex-direction: column; padding: 18px; }
@@ -186,7 +195,7 @@ canvas#game { cursor: none; }
 .editor-box { display: flex; gap: 22px; padding: 20px; max-width: 1000px; width: 100%; max-height: calc(100vh - 32px); overflow: auto; }
 .ed-left { width: 360px; flex-shrink: 0; }
 .ed-left h2 { margin: 0 0 8px; color: var(--dna); }
-#edPreview { width: 360px; height: 290px; border-radius: 10px; background: radial-gradient(circle at 50% 70%, #2a2440, #12101c); cursor: grab; }
+#edPreview { width: 360px; height: 330px; border-radius: 10px; background: radial-gradient(circle at 50% 70%, #2a2440, #12101c); cursor: grab; }
 #edStats { margin-top: 10px; font-size: 13px; }
 .srow { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
 .srow .up { color: #8cf08f; }

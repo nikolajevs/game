@@ -1,6 +1,8 @@
-// Небольшая 3D-витрина существа: экран входа и редактор генома.
+// Небольшая 3D-витрина персонажа: экран входа и редактор мутаций.
+// С внешностью (ap) показывает человека, без неё — дикое существо.
 import * as THREE from 'three';
 import { Creature3D } from './gfx/creature3d.js';
+import { Human3D } from './gfx/human3d.js';
 
 export class CreaturePreview {
   constructor(canvas) {
@@ -51,20 +53,30 @@ export class CreaturePreview {
     });
   }
 
-  set(look, color) {
-    const key = `${look}|${color}`;
+  set(look, color, ap = null) {
+    const key = `${look}|${color}|${ap}`;
     if (key === this.key) return;
     this.key = key;
     if (this.creature) {
       this.scene.remove(this.creature.group);
       this.creature.dispose();
     }
-    this.creature = new Creature3D(look, color);
+    this.human = !!ap;
+    this.creature = ap ? new Human3D(ap, look, color) : new Creature3D(look, color);
     this.scene.add(this.creature.group);
-    const R = this.creature.R;
-    const h = this.creature.tpl.hb;
-    this.target = new THREE.Vector3(R * 0.1, h * 0.7, 0);
-    this.distance = 80 + R * 4.8;
+    if (this.human) {
+      // человек выше, чем шире: смотрим на грудь, чуть сверху
+      const s = this.creature.size;
+      this.target = new THREE.Vector3(0, 25 * s, 0);
+      this.distance = 105 * s;
+      this.lift = 0.12;
+    } else {
+      const R = this.creature.R;
+      const h = this.creature.tpl.hb;
+      this.target = new THREE.Vector3(R * 0.1, h * 0.7, 0);
+      this.distance = 80 + R * 4.8;
+      this.lift = 0.42;
+    }
   }
 
   start() {
@@ -94,15 +106,15 @@ export class CreaturePreview {
       this.camera.updateProjectionMatrix();
     }
     if (!this.creature) return;
-    this.yaw += dt * 0.25;
+    this.yaw += dt * (this.human ? 0.15 : 0.25);
     this.attackTimer -= dt;
     if (this.attackTimer <= 0) {
-      this.attackTimer = 2.5 + Math.random() * 2;
+      this.attackTimer = this.human ? 5 + Math.random() * 3 : 2.5 + Math.random() * 2;
       this.creature.attack();
     }
-    this.creature.update(dt, { speed: 45 });
+    this.creature.update(dt, { speed: this.human ? 0 : 45 });
     const d = this.distance;
-    this.camera.position.set(this.target.x + Math.cos(this.yaw) * d, this.target.y + d * 0.42, this.target.z + Math.sin(this.yaw) * d);
+    this.camera.position.set(this.target.x + Math.cos(this.yaw) * d, this.target.y + d * this.lift, this.target.z + Math.sin(this.yaw) * d);
     this.camera.lookAt(this.target);
     this.renderer.render(this.scene, this.camera);
   }

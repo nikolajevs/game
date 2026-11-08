@@ -112,13 +112,13 @@ export const RESOURCES = {
   sulfur: { name: 'Сернистая руда', r: 24, cr: 22, hp: 160, give: 'sulfur', rate: 0.12, respawn: 160 },
   bush: { name: 'Ягодный куст', r: 18, cr: 0, hp: 40, give: 'berries', rate: 0.15, respawn: 70 },
   scrap: { name: 'Груда металлолома', r: 22, cr: 18, hp: 140, give: 'scrap', rate: 0.12, respawn: 120 },
-  crystal: { name: 'Кристалл мутагена', r: 16, cr: 12, hp: 45, give: 'crystal', fixed: 15, dna: 6, respawn: 0 },
+  crystal: { name: 'Кристалл мутагена', r: 16, cr: 12, hp: 45, give: 'crystal', fixed: 15, dna: 4, respawn: 0 },
 };
 
 // Пища: сколько насыщает и множитель по типу рта
 export const FOOD = {
-  berries: { food: 8, water: 4, dna: 1, mult: { herb: 2, carn: 0.4, omni: 1 } },
-  meat: { food: 18, water: 0, dna: 2, mult: { herb: 0.35, carn: 1.6, omni: 1 } },
+  berries: { food: 8, water: 4, mult: { herb: 2, carn: 0.4, omni: 1 } },
+  meat: { food: 18, water: 0, mult: { herb: 0.35, carn: 1.6, omni: 1 } },
 };
 
 // Постройки занимают одну клетку TILE x TILE
@@ -153,8 +153,27 @@ export const RAD = {
   antirad: 45,
   zones: 6, // сколько зон на острове
   meteorZone: { lvl: 1, r: 230 }, // воронка упавшего метеорита фонит, пока там кристаллы
+  mutagen: 0.5, // мутагена в секунду на уровень зоны — облучение меняет тело
 };
-export const CRATE = { name: 'Ящик с добычей', perZone: 4, respawn: 200, rolls: 3 };
+export const CRATE = { name: 'Ящик с добычей', respawn: 200, rolls: 3, mutagen: [2, 6] }; // мутаген × уровень зоны
+
+// ---- Особые места острова ----
+// ruins — радиоактивные руины (их число — RAD.zones), mine — старые рудники, lair — логова колоссов.
+// lvl — сила радиации в центре, crates — ящики с добычей, guards — кто охраняет (возрождаются, когда рядом нет игроков).
+export const SITES = {
+  ruins: {
+    name: 'Радиоактивные руины', icon: '☢', crates: 4, guards: { mutant: 3 },
+    enter: 'Радиоактивные руины: ящики с добычей и металлолом. Здесь бродят мутанты, облучение копит мутаген.',
+  },
+  mine: {
+    name: 'Старый рудник', icon: '⛏', count: 3, r: 220, lvl: 1, crates: 3, guards: { mutant: 4 },
+    enter: 'Старый рудник: богатая руда, сера и металлолом. Слабая радиация, охрана — мутанты.',
+  },
+  lair: {
+    name: 'Логово колосса', icon: '🦴', count: 4, r: 180, lvl: 0, crates: 2, guards: { colossus: 1, stalker: 3 },
+    enter: 'Логово колосса: тайник с добычей, мясо и кости. Хозяин и его стая где-то рядом!',
+  },
+};
 // [предмет, мин, макс, вес]
 export const CRATE_LOOT = [
   ['scrap', 4, 12, 10], ['sulfur', 5, 15, 6], ['bullets', 3, 8, 4], ['arrows', 4, 10, 5],
@@ -162,46 +181,48 @@ export const CRATE_LOOT = [
   ['crossbow', 1, 1, 1], ['pistol', 1, 1, 0.6], ['shotgun', 1, 1, 0.35], ['bomb', 1, 1, 0.5],
 ];
 
-// ---- Эволюция ----
+// ---- Мутации ----
+// Тело выжившего меняется под действием мутагена (копится в радиации, есть в кристаллах и ящиках).
+// Рты остались от диких существ: у людей всегда «всеядный».
 export const MOUTHS = {
   herb: { name: 'Клюв травоеда', icon: '🌿', desc: 'Ягоды насыщают вдвое и собираются вдвое быстрее. Мясо почти не насыщает.' },
   omni: { name: 'Всеядная пасть', icon: '🍽️', desc: '+2 к урону. Любая пища усваивается нормально.' },
   carn: { name: 'Челюсти хищника', icon: '🦷', desc: '+5 к урону. Мясо насыщает сильнее, ягоды — слабо.' },
 };
 export const PARTS = {
-  legs: { name: 'Ноги', icon: '🦵', max: 3, desc: 'Скорость передвижения' },
-  claws: { name: 'Когти', icon: '🐾', max: 3, desc: 'Урон и добыча. Нужны, чтобы держать оружие' },
-  armor: { name: 'Панцирь', icon: '🛡️', max: 3, desc: 'Здоровье и снижение урона, но медленнее' },
+  legs: { name: 'Жилистые ноги', icon: '🦵', max: 3, desc: 'Скорость передвижения' },
+  claws: { name: 'Когти', icon: '🐾', max: 3, desc: 'Урон кулаком и быстрая добыча' },
+  armor: { name: 'Костяные пластины', icon: '🛡️', max: 3, desc: 'Здоровье и снижение урона, но медленнее' },
   spikes: { name: 'Шипы', icon: '🌵', max: 3, desc: 'Отражают часть урона тем, кто бьёт вплотную' },
-  eyes: { name: 'Глаза', icon: '👁️', max: 3, desc: 'Дальность обзора (и ночного зрения)' },
+  eyes: { name: 'Лишние глаза', icon: '👁️', max: 3, desc: 'Дальность обзора (и ночного зрения)' },
   horns: { name: 'Рога', icon: '🦏', max: 3, desc: 'Таран [Пробел]: рывок с уроном, ломает постройки' },
   acid: { name: 'Кислотная железа', icon: '🧪', max: 3, desc: 'Плевок кислотой [Q], замедляет цель' },
-  fins: { name: 'Плавники', icon: '🐟', max: 2, desc: 'Быстрое плавание' },
-  glow: { name: 'Биолюминесценция', icon: '✨', max: 1, desc: 'Светитесь в темноте (вас тоже видно!)' },
-  stomach: { name: 'Желудок', icon: '🫙', max: 2, desc: 'Голод и жажда растут медленнее' },
-  size: { name: 'Масса тела', icon: '🐘', max: 3, desc: 'Больше здоровья и урона, но крупнее и медленнее' },
+  fins: { name: 'Жабры и перепонки', icon: '🐟', max: 2, desc: 'Быстрое плавание' },
+  glow: { name: 'Свечение', icon: '✨', max: 1, desc: 'Кожа светится в темноте (вас тоже видно!)' },
+  stomach: { name: 'Желудок мутанта', icon: '🫙', max: 2, desc: 'Голод и жажда растут медленнее' },
+  size: { name: 'Гигантизм', icon: '🦍', max: 3, desc: 'Больше здоровья и урона, но крупнее и медленнее' },
   radres: { name: 'Радиорезистентность', icon: '☢️', max: 3, desc: 'Радиация копится медленнее (−30% за уровень)' },
 };
 export const PART_KEYS = Object.keys(PARTS);
-export const LEVEL_COST = [0, 10, 25, 50]; // ДНК за каждый уровень части
+export const LEVEL_COST = [0, 10, 25, 50]; // мутаген за каждый уровень мутации
 export const LEVEL3_CRYSTALS = 3; // 3-й уровень требует кристаллы мутагена
-export const COMPLEXITY_CAP = 12; // максимум суммарных уровней частей
+export const COMPLEXITY_CAP = 12; // максимум суммарных уровней мутаций
 export const MOUTH_CHANGE_COST = 10;
 
 // ---- Дикие существа ----
 // genome: буква рта + уровни частей в порядке PART_KEYS (недостающие = 0)
 export const NPCS = {
-  grazer: { name: 'Травник', genome: 'h20001000000', color: '#c8a46a', hp: 50, speed: 115, dmg: 0, behavior: 'passive', flee: 230, dna: 5, meat: 3, bone: 2, biomes: [T.GRASS, T.FOREST] },
-  stalker: { name: 'Клыкач', genome: 'c22102000001', color: '#8a3344', hp: 85, speed: 148, dmg: 9, behavior: 'aggressive', aggro: 230, nightAggro: 380, dna: 12, meat: 4, bone: 3, biomes: [T.FOREST, T.ROCK, T.GRASS] },
-  colossus: { name: 'Колосс', genome: 'o30300200003', color: '#5b7a3d', hp: 650, speed: 78, dmg: 28, behavior: 'territorial', aggro: 170, dna: 60, meat: 14, bone: 12, crystal: 3, attackCd: 1.3, biomes: [T.ROCK, T.FOREST] },
-  mutant: { name: 'Мутант', genome: 'c22011010100', color: '#9b4be0', hp: 120, speed: 160, dmg: 12, behavior: 'aggressive', aggro: 420, nightAggro: 420, dna: 22, meat: 2, bone: 3, crystal: 1, biomes: [] },
+  grazer: { name: 'Травник', genome: 'h20001000000', color: '#c8a46a', hp: 50, speed: 115, dmg: 0, behavior: 'passive', flee: 230, dna: 0, meat: 3, bone: 2, biomes: [T.GRASS] }, // пасутся на лугах
+  stalker: { name: 'Клыкач', genome: 'c22102000001', color: '#8a3344', hp: 85, speed: 148, dmg: 9, behavior: 'aggressive', aggro: 230, nightAggro: 380, dna: 0, meat: 4, bone: 3, biomes: [T.FOREST, T.ROCK] }, // охотятся в лесах и скалах
+  colossus: { name: 'Колосс', genome: 'o30300200003', color: '#5b7a3d', hp: 650, speed: 78, dmg: 28, behavior: 'territorial', aggro: 170, dna: 20, meat: 14, bone: 12, crystal: 3, attackCd: 1.3, biomes: [] }, // только в логовах
+  mutant: { name: 'Мутант', genome: 'c22011010100', color: '#9b4be0', hp: 120, speed: 160, dmg: 12, behavior: 'aggressive', aggro: 420, nightAggro: 420, dna: 12, meat: 2, bone: 3, crystal: 1, biomes: [] },
 };
-export const NPC_TARGET = { grazer: 150, stalker: 45, colossus: 6 };
+// сколько бродит по острову вне особых мест (охрана мест — в SITES)
+export const NPC_TARGET = { grazer: 150, stalker: 45 };
 export const NIGHT_EXTRA_STALKERS = 36;
-export const MUTANTS_PER_ZONE = 3;
 
 export const PLAYER = {
-  startDna: 15,
+  startDna: 0, // мутаген на старте: мутации начинаются с облучения
   hungerRate: 0.3,
   thirstRate: 0.38,
   starveDmg: 3,

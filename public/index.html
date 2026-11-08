@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Мутаген</title>
-<script type="importmap">{ "imports": { "three": "/vendor/three/three.module.js" } }</script>
+<script type="importmap">{ "imports": { "three": "/vendor/three/three.module.js", "three/addons/": "/vendor/three-addons/" } }</script>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -24,8 +24,8 @@
       <div class="bar hidden" id="barRad" title="Радиация"><span class="ico">☢</span><div class="track"><div class="fill"></div></div><span class="num"></span></div>
     </div>
     <div id="dnaPanel" class="panel">
-      <div class="dna">🧬 <b id="dnaVal">0</b> <span>ДНК</span></div>
-      <button id="btnEvolve">Геном <kbd>G</kbd></button>
+      <div class="dna" title="Мутаген копится в радиации, есть в кристаллах и ящиках">☣ <b id="dnaVal">0</b> <span>мутаген</span></div>
+      <button id="btnEvolve">Мутации <kbd>G</kbd></button>
     </div>
     <div id="inv" class="panel"></div>
   </div>
@@ -50,12 +50,12 @@
     <div class="help-title">Управление <span class="muted">(H — скрыть)</span></div>
     <div><kbd>W A S D</kbd> идти, <kbd>Shift</kbd> бег</div>
     <div><kbd>Курсор</kbd> прицел, <kbd>ЛКМ</kbd> удар и добыча</div>
-    <div><kbd>Q</kbd> или щелчок <kbd>ПКМ</kbd> кислота, <kbd>Пробел</kbd> таран</div>
+    <div><kbd>Q</kbd> или щелчок <kbd>ПКМ</kbd> кислота, <kbd>Пробел</kbd> таран (мутации)</div>
     <div>Потянуть с <kbd>ЛКМ</kbd>/<kbd>ПКМ</kbd> или <kbd>← →</kbd> — камера, <kbd>Колесо</kbd> — отдалить</div>
     <div><kbd>E</kbd> пить / открыть, <kbd>F</kbd> есть, <kbd>R</kbd> антирад</div>
     <div><kbd>C</kbd> крафт, <kbd>1–9</kbd> оружие из пояса</div>
     <div><kbd>B</kbd> стройка (там <kbd>1–8</kbd> — постройки), <kbd>X</kbd> снести своё</div>
-    <div><kbd>G</kbd> геном, <kbd>Tab</kbd> игроки, <kbd>Enter</kbd> чат</div>
+    <div><kbd>G</kbd> мутации, <kbd>Tab</kbd> игроки, <kbd>Enter</kbd> чат</div>
     <div><kbd>M</kbd> звук вкл./выкл.</div>
   </div>
 </div>
@@ -63,7 +63,7 @@
 
 <div id="craft" class="panel hidden">
   <div class="cont-head"><span>🔨 Крафт <span class="muted small">(C — закрыть)</span></span><button id="craftClose" title="Закрыть (C)">✕</button></div>
-  <div class="muted small">Оружие держат когтями. Огнестрел, патроны и взрывчатка — только у верстака.</div>
+  <div class="muted small">Огнестрел, патроны и взрывчатка — только у верстака.</div>
   <div id="craftBody"></div>
 </div>
 
@@ -76,23 +76,29 @@
   <div class="join-box panel">
     <div class="join-left">
       <h1>МУТАГЕН</h1>
-      <p class="tag">Выживай. Строй. Эволюционируй.</p>
-      <label class="field">Имя существа
-        <input id="nameInput" maxlength="16" placeholder="Например, Клацатель" autocomplete="off">
+      <p class="tag">После ядерной войны. Выживай. Добывай. Мутируй.</p>
+      <label class="field">Имя выжившего
+        <input id="nameInput" maxlength="16" placeholder="Например, Вера" autocomplete="off">
       </label>
-      <div class="field-label">Окраска</div>
-      <div id="colors"></div>
+      <div class="look-grid">
+        <div class="field-label">Пол</div><div class="seg" id="lookSex"></div>
+        <div class="field-label">Кожа</div><div class="seg" id="lookSkin"></div>
+        <div class="field-label">Причёска</div><div class="seg" id="lookHair"></div>
+        <div class="field-label">Волосы</div><div class="swatches" id="lookHairColor"></div>
+        <div class="field-label" id="lookBeardLabel">Борода</div><div class="seg" id="lookBeard"></div>
+        <div class="field-label">Метка</div><div id="colors"></div>
+      </div>
       <button id="playBtn" class="primary big">Играть</button>
       <div id="joinErr"></div>
       <a href="/preview.html" target="_blank" class="muted small">Посмотреть мир без входа →</a>
     </div>
     <div class="join-right">
-      <canvas id="joinPreview" width="320" height="240"></canvas>
+      <canvas id="joinPreview" width="320" height="330"></canvas>
       <ul class="rules">
-        <li>🪵 Добывайте ресурсы, стройте базу с дверью и хранилищем</li>
-        <li>🧬 Копите ДНК и отращивайте ноги, когти, рога, панцирь, кислоту</li>
-        <li>☠ При смерти всё, что несли, остаётся в останках — геном сохраняется</li>
-        <li>☄️ Метеориты приносят кристаллы мутагена для высших мутаций</li>
+        <li>🪵 Добывайте ресурсы, крафтите оружие, стройте базу</li>
+        <li>☢ Радиация копит мутаген — тратьте его на мутации: когти, рога, пластины, кислоту</li>
+        <li>⛏ Рудники и руины охраняют мутанты, зато там лучшая добыча</li>
+        <li>☠ При смерти всё, что несли, остаётся в останках — мутации сохраняются</li>
       </ul>
     </div>
   </div>
@@ -102,7 +108,7 @@
   <div class="death-box panel">
     <h2>Вы погибли</h2>
     <p id="deathBy"></p>
-    <p class="muted">Всё, что вы несли, осталось в останках. Геном сохранён.</p>
+    <p class="muted">Всё, что вы несли, осталось в останках. Мутации сохранены.</p>
     <div class="row">
       <button id="respNest" class="primary">Возродиться в гнезде</button>
       <button id="respRandom">На случайном берегу</button>
@@ -113,22 +119,21 @@
 <div id="editor" class="screen hidden">
   <div class="editor-box panel">
     <div class="ed-left">
-      <h2>🧬 Геном</h2>
-      <canvas id="edPreview" width="360" height="290"></canvas>
+      <h2>☣ Мутации</h2>
+      <canvas id="edPreview" width="360" height="330"></canvas>
       <div class="muted small center">Потяните мышью, чтобы покрутить</div>
       <div id="edStats"></div>
     </div>
     <div class="ed-right">
-      <div class="ed-title">Рот — тип питания</div>
-      <div id="edMouths"></div>
-      <div class="ed-title">Части тела <span id="edComplexity"></span></div>
+      <div class="ed-title">Мутации тела <span id="edComplexity"></span></div>
+      <div class="muted small">Мутаген копится, пока вы в радиации; ещё он есть в кристаллах, ящиках зон и у мутантов.</div>
       <div id="edParts"></div>
       <div id="edFooter">
         <div id="edCost"></div>
         <div class="row">
           <button id="edReset">Сбросить</button>
           <button id="edClose">Закрыть <kbd>G</kbd></button>
-          <button id="edApply" class="primary">Эволюционировать</button>
+          <button id="edApply" class="primary">Мутировать</button>
         </div>
       </div>
     </div>

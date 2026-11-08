@@ -5,6 +5,7 @@ import { Terrain } from './gfx/terrain.js';
 import { Sky } from './gfx/sky.js';
 import { StaticsView } from './gfx/statics3d.js';
 import { Creature3D } from './gfx/creature3d.js';
+import { Human3D } from './gfx/human3d.js';
 import { Effects } from './gfx/effects.js';
 import { Decor } from './gfx/decor.js';
 import { ZonesView } from './gfx/zones3d.js';
@@ -133,9 +134,10 @@ export class WorldView {
 
   // ---------- существа ----------
   addEnt(e) {
-    const creature = new Creature3D(e.g, e.c);
+    // игроки — люди (модели со скелетом), дикие существа — процедурные создания
+    const creature = e.k === 'p' ? new Human3D(e.ap, e.g, e.c) : new Creature3D(e.g, e.c);
     this.scene.add(creature.group);
-    const v = { creature, look: e.g, color: e.c, px: e.x, py: e.y, speed: 0, stepTimer: Math.random() * 0.25, at: 0, hf: 0, label: null, hpFill: null, lastHp: -1 };
+    const v = { creature, look: e.g, ap: e.ap, color: e.c, dd: !!e.dd, px: e.x, py: e.y, speed: 0, stepTimer: Math.random() * 0.25, at: 0, hf: 0, label: null, hpFill: null, lastHp: -1 };
     const el = document.createElement('div');
     el.className = 'label';
     const nm = document.createElement('span');
@@ -160,6 +162,17 @@ export class WorldView {
     v.hpFill = fill;
     this.ents.set(e.i, v);
     return v;
+  }
+
+  // ближайшее к точке существо/игрок (для эффектов без id)
+  nearestEnt(x, y, maxD) {
+    let best = null;
+    let bd = maxD;
+    for (const v of this.ents.values()) {
+      const d = Math.hypot(v.x - x, v.y - y);
+      if (d < bd) { bd = d; best = v; }
+    }
+    return best;
   }
 
   removeEnt(id) {
@@ -192,7 +205,8 @@ export class WorldView {
       }
       seen.add(e.i);
       let v = this.ents.get(e.i);
-      if (v && (v.look !== e.g || v.color !== e.c)) {
+      // пересоздаём, если сменились мутации/внешность или погибший игрок возродился
+      if (v && (v.look !== e.g || v.color !== e.c || v.ap !== e.ap || (v.dd && !e.dd))) {
         this.removeEnt(e.i);
         v = null;
       }
@@ -222,11 +236,16 @@ export class WorldView {
       if (e.hf && !v.hf) v.creature.hit();
       v.hf = e.hf;
       v.warning = warns;
+      v.dd = !!e.dd;
+      const ground = this.ground(x, y);
       const gy = this.standY(x, y, v.creature.tpl.hb);
-      v.creature.group.position.set(x, gy, y);
+      v.creature.group.position.set(x, e.dd ? Math.max(ground, 0) : gy, y);
       v.creature.group.rotation.y = -a;
-      v.creature.setWeapon(e.k === 'p' ? e.w || null : null);
-      v.creature.update(dt, { speed: v.speed, charging: !!e.ch, warning: warns, night: this.night });
+      v.creature.setWeapon(e.k === 'p' && !e.dd ? e.w || null : null);
+      v.creature.update(dt, {
+        speed: e.dd ? 0 : v.speed, charging: !!e.ch, warning: warns, night: this.night,
+        swim: ground < -v.creature.tpl.hb * 0.6, dead: !!e.dd,
+      });
       // шаги: звук по типу почвы
       if (v.speed > 34) {
         v.stepTimer -= dt;
@@ -303,6 +322,7 @@ export class WorldView {
           break;
         case 'spit':
           snd('swing', f, { volume: 0.24, range: 540, rate: 1.18 });
+          this.nearestEnt(f.x, f.y, 40)?.creature.spit?.();
           fx.burst(f.x, gy + 18, f.y, '#8dff5a', 4, { speed: 40, size: 1.8 });
           break;
         case 'splash':
@@ -552,7 +572,7 @@ export class WorldView {
         if (v.label.style.display !== 'none') v.label.style.display = 'none';
         continue;
       }
-      _v.set(v.x, v.gy + v.creature.tpl.hb + v.creature.R * 1.3 + 10, v.y);
+      _v.set(v.x, v.gy + (v.creature.labelHeight ?? v.creature.tpl.hb + v.creature.R * 1.3) + 10, v.y);
       const dist = _v.distanceTo(this.camera.position);
       _v.project(this.camera);
       if (_v.z > 1 || dist > far) {

@@ -1,6 +1,6 @@
 // Генерация острова и раскладка ресурсов по зерну (seed).
 // Общий код: сервер строит по нему мир, браузер — превью.
-import { MAP_W, MAP_H, TILE, T, RESOURCES, RAD } from './config.js';
+import { MAP_W, MAP_H, TILE, T, RESOURCES, RAD, SITES } from './config.js';
 
 export function mulberry32(a) {
   return function rand() {
@@ -82,16 +82,20 @@ export function generateMap(seed) {
   return tiles;
 }
 
-// Радиационные зоны (руины): круги на суше, далеко друг от друга. [{ id, x, y, r, lvl }]
+// Особые места: радиоактивные руины, рудники и логова — круги на суше, далеко друг от друга.
+// [{ id, kind, x, y, r, lvl }]; руины идут первыми (их раскладка не зависит от остальных мест).
 export function generateZones(tiles, seed) {
   const R = mulberry32(seed ^ 0x2545f491);
   const HS = TILE / 2;
   const zones = [];
-  const isLand = (x, y) => {
+  const tileOf = (x, y) => {
     const tx = Math.floor(x / TILE);
     const ty = Math.floor(y / TILE);
-    if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return false;
-    const t = tiles[ty * MAP_W + tx];
+    if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return T.DEEP;
+    return tiles[ty * MAP_W + tx];
+  };
+  const isLand = (x, y) => {
+    const t = tileOf(x, y);
     return t !== T.DEEP && t !== T.SHALLOW;
   };
   for (let tries = 0; tries < 6000 && zones.length < RAD.zones; tries++) {
@@ -108,19 +112,53 @@ export function generateZones(tiles, seed) {
     }
     if (land / n < 0.88) continue;
     if (zones.some((z) => Math.hypot(z.x - x, z.y - y) < z.r + r + 700)) continue;
-    zones.push({ id: zones.length, x, y, r: Math.round(r), lvl: 1 + Math.floor(R() * 3) });
+    zones.push({ id: zones.length, kind: 'ruins', x, y, r: Math.round(r), lvl: 1 + Math.floor(R() * 3) });
   }
+  // рудники — в скалах, логова — в лесу или у скал
+  const R2 = mulberry32(seed ^ 0x68e31da4);
+  const place = (kind, accept, minShare) => {
+    const def = SITES[kind];
+    let placed = 0;
+    for (let tries = 0; tries < 8000 && placed < def.count; tries++) {
+      const x = (12 + Math.floor(R2() * (MAP_W - 24))) * TILE + HS;
+      const y = (12 + Math.floor(R2() * (MAP_H - 24))) * TILE + HS;
+      if (!accept(tileOf(x, y))) continue;
+      const r = def.r;
+      let land = 0;
+      let good = 0;
+      let n = 0;
+      for (let a = 0; a < 10; a++) {
+        for (const k of [0.35, 0.8]) {
+          const t = tileOf(x + Math.cos(a * 0.628) * r * k, y + Math.sin(a * 0.628) * r * k);
+          n++;
+          if (t !== T.DEEP && t !== T.SHALLOW) land++;
+          if (accept(t)) good++;
+        }
+      }
+      if (land / n < 0.92 || good / n < minShare) continue;
+      if (zones.some((z) => Math.hypot(z.x - x, z.y - y) < z.r + r + 450)) continue;
+      zones.push({ id: zones.length, kind, x, y, r, lvl: def.lvl });
+      placed++;
+    }
+  };
+  place('mine', (t) => t === T.ROCK, 0.4);
+  place('lair', (t) => t === T.FOREST || t === T.ROCK, 0.55);
   return zones;
+}
+
+// Насколько точка внутри места: 1 в центральной части, к краю спадает до 0
+export function zoneFalloff(z, x, y) {
+  const d = Math.hypot(x - z.x, y - z.y);
+  if (d >= z.r) return 0;
+  return d < z.r * 0.6 ? 1 : (z.r - d) / (z.r * 0.4);
 }
 
 // Сила радиации в точке: 0 снаружи, до уровня зоны (1–3) ближе к центру
 export function zoneStrength(zones, x, y) {
   let best = 0;
   for (const z of zones) {
-    const d = Math.hypot(x - z.x, y - z.y);
-    if (d >= z.r) continue;
-    const k = d < z.r * 0.6 ? 1 : (z.r - d) / (z.r * 0.4);
-    best = Math.max(best, z.lvl * k);
+    if (!z.lvl) continue;
+    best = Math.max(best, z.lvl * zoneFalloff(z, x, y));
   }
   return best;
 }
@@ -147,7 +185,15 @@ export function generateResources(tiles, seed, zones = []) {
       const v = R();
       let kind = null;
       if (t === T.DEEP || t === T.SHALLOW) continue;
-      if (zoneAt(zones, x, y)) {
+      const site = zoneAt(zones, x, y);
+      if (site && site.kind !== 'ruins' && Math.hypot(x - site.x, y - site.y) < 70) continue; // место под шахту/гнездо
+      if (site?.kind === 'mine') {
+        // рудник: много руды, серы и металлолома
+        kind = r < 0.17 ? (r2 < 0.45 ? 'sulfur' : 'rock') : r < 0.22 ? 'scrap' : null;
+      } else if (site?.kind === 'lair') {
+        // вытоптанная поляна: редкие камни и деревья
+        kind = r < 0.03 ? 'rock' : r < 0.05 ? 'tree' : null;
+      } else if (site) {
         // в руинах растительности нет — только металлолом и редкие камни
         kind = r < 0.08 ? 'scrap' : r < 0.1 ? 'rock' : null;
       } else if (t === T.FOREST) kind = r < 0.26 ? 'tree' : r < 0.32 ? 'bush' : r < 0.34 ? 'rock' : null;

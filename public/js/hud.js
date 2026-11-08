@@ -1,7 +1,7 @@
 // Интерфейс поверх 3D: полоски, инвентарь, пояс с оружием, крафт, мини-карта, чат, хранилище.
 import {
   ITEMS, ITEM_KEYS, RES_KEYS, STRUCTURES, STRUCT_ORDER, MAP_W, MAP_H, TILE, lightAt,
-  WEAPONS, WEAPON_ORDER, RECIPES, RECIPE_GROUPS, RAD,
+  WEAPONS, WEAPON_ORDER, RECIPES, RECIPE_GROUPS, RAD, SITES,
 } from '/shared/config.js';
 
 const $ = (id) => document.getElementById(id);
@@ -95,10 +95,16 @@ export class Hud {
       img.data[i * 4 + 3] = 255;
     }
     g.putImageData(img, 0, 0);
-    // радиационные зоны — жёлто-зелёные круги
+    // особые места: руины — жёлто-зелёные, рудники — охристые, логова — бурые
+    const SITE_COLORS = {
+      ruins: ['rgba(190, 230, 60, 0.35)', 'rgba(230, 210, 40, 0.9)'],
+      mine: ['rgba(200, 150, 80, 0.35)', 'rgba(230, 170, 70, 0.9)'],
+      lair: ['rgba(150, 70, 50, 0.35)', 'rgba(200, 90, 60, 0.9)'],
+    };
     for (const z of this.zones) {
-      g.fillStyle = 'rgba(190, 230, 60, 0.35)';
-      g.strokeStyle = 'rgba(230, 210, 40, 0.9)';
+      const [fill, stroke] = SITE_COLORS[z.kind] || SITE_COLORS.ruins;
+      g.fillStyle = fill;
+      g.strokeStyle = stroke;
       g.lineWidth = 1;
       g.beginPath();
       g.arc(z.x / TILE, z.y / TILE, z.r / TILE, 0, Math.PI * 2);
@@ -150,9 +156,9 @@ export class Hud {
     if (!this.craftEl.classList.contains('hidden')) this.renderCraft(you);
     let status = '';
     if (you.sp) status = '🛡 Защита после появления';
-    else if (you.cb) status = '⚔ В бою — эволюция недоступна';
+    else if (you.cb) status = '⚔ В бою — мутировать нельзя';
     else if (you.fire) status = '🔥 У костра: здоровье восстанавливается быстрее';
-    if (you.rz > 0) status = `☢ Радиационная зона (уровень ${Math.ceil(you.rz)}) — облучение растёт`;
+    if (you.rz > 0) status = `☢ ${this.siteName || 'Радиационная зона'} (радиация ${Math.ceil(you.rz)}) — облучение растёт, копится мутаген`;
     if (you.rad >= RAD.dmgStart) status = '☢ Лучевая болезнь! Уйдите из зоны и примите антирад [R]';
     if (you.f <= 0 || you.w <= 0) status = '⚠ Вы голодаете — поешьте [F] или попейте у воды [E]';
     if (this.cache.status !== status) {
@@ -291,7 +297,7 @@ export class Hud {
     g.textBaseline = 'middle';
     for (const z of this.zones) {
       g.fillStyle = '#1d1d1f';
-      g.fillText('☢', z.x * s, z.y * s);
+      g.fillText(SITES[z.kind]?.icon || '☢', z.x * s, z.y * s);
     }
     if (nest) {
       g.fillStyle = '#ffd23f';
@@ -431,7 +437,7 @@ export class Hud {
       rows++;
       const row = document.createElement('div');
       row.className = 'crow';
-      row.innerHTML = `<span>${isDna ? '🧬' : ITEMS[k].icon}</span><span>${isDna ? 'ДНК' : ITEMS[k].name}<br><span class="cnt">${mine} → ${inside}</span></span>`;
+      row.innerHTML = `<span>${isDna ? '☣' : ITEMS[k].icon}</span><span>${isDna ? 'Мутаген' : ITEMS[k].name}<br><span class="cnt">${mine} → ${inside}</span></span>`;
       const btns = document.createElement('div');
       btns.className = 'btns';
       const mk = (label, op, n, disabled) => {

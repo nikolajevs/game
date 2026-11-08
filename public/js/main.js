@@ -1,7 +1,8 @@
 // Клиент игры: вход, сеть, интерполяция, управление, стройка, интерфейс.
 import {
-  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS,
+  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES,
 } from '/shared/config.js';
+import { zoneAt } from '/shared/worldgen.js';
 import { computeStats, decodeGenome, defaultGenome, encodeGenome } from '/shared/creature.js';
 import { Net } from './net.js';
 import { AudioManager } from './audio.js';
@@ -10,6 +11,7 @@ import { Input } from './input.js';
 import { Hud } from './hud.js';
 import { Editor } from './editor.js';
 import { CreaturePreview } from './creature-preview.js';
+import { HAIR_COLORS, parseLook } from './gfx/human3d.js';
 
 const $ = (id) => document.getElementById(id);
 const INTERP = 100; // мс задержки отрисовки чужих существ для плавности
@@ -41,6 +43,7 @@ const S = {
   structAt: new Map(), dead: false, chatOpen: false,
   lastInput: '', lastInputAt: 0, spitUntil: 0, lastMini: 0,
   aim: { x: 0, y: 0, sky: true }, // точка на земле под курсором
+  siteId: -1, siteToast: {}, // текущее особое место и когда о нём последний раз подсказывали
 };
 const cursorEl = $('cursor');
 
@@ -48,22 +51,66 @@ const cursorEl = $('cursor');
 let color = store.get('mutagen.color') || PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)];
 const nameInput = $('nameInput');
 nameInput.value = store.get('mutagen.name') || '';
+// внешность: пол.кожа.причёска.цвет волос.борода
+const look = parseLook(store.get('mutagen.ap') || `${Math.random() < 0.5 ? 'm' : 'f'}.0.1.0.0`);
+const lookStr = () => `${look.sex}.${look.skin}.${look.hair}.${look.hairColor}.${look.sex === 'm' && look.beard ? 1 : 0}`;
+const HAIR_NAMES = { m: ['Лысый', 'Ёжик', 'Пробор'], f: ['Длинные', 'Пучки', 'Короткая'] };
 const joinPreview = new CreaturePreview($('joinPreview'));
-joinPreview.set(encodeGenome(defaultGenome()), color);
-joinPreview.start();
+const updatePreview = () => joinPreview.set(encodeGenome(defaultGenome()), color, lookStr());
+// ряд кнопок-переключателей
+function segment(el, options, get, set) {
+  el.innerHTML = '';
+  options.forEach(([value, label]) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.className = get() === value ? 'on' : '';
+    b.addEventListener('click', () => {
+      set(value);
+      renderLook();
+    });
+    el.appendChild(b);
+  });
+}
+function renderLook() {
+  segment($('lookSex'), [['m', 'Мужчина'], ['f', 'Женщина']], () => look.sex, (v) => {
+    if (look.sex !== v) look.hair = v === 'm' ? 1 : 0;
+    look.sex = v;
+  });
+  segment($('lookSkin'), [[0, 'Смуглая'], [1, 'Светлая']], () => look.skin, (v) => { look.skin = v; });
+  segment($('lookHair'), HAIR_NAMES[look.sex].map((n, i) => [i, n]), () => look.hair, (v) => { look.hair = v; });
+  const male = look.sex === 'm';
+  $('lookBeardLabel').style.visibility = male ? '' : 'hidden';
+  $('lookBeard').style.visibility = male ? '' : 'hidden';
+  segment($('lookBeard'), [[false, 'Нет'], [true, 'Есть']], () => look.beard, (v) => { look.beard = v; });
+  const sw = $('lookHairColor');
+  sw.innerHTML = '';
+  HAIR_COLORS.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.style.background = c;
+    b.className = look.hairColor === i ? 'on' : '';
+    b.addEventListener('click', () => {
+      look.hairColor = i;
+      renderLook();
+    });
+    sw.appendChild(b);
+  });
+  updatePreview();
+}
 const colorsEl = $('colors');
 for (const c of PLAYER_COLORS) {
   const b = document.createElement('button');
   b.style.background = c;
   b.className = c === color ? 'on' : '';
-  b.title = c;
+  b.title = 'Цвет метки на карте';
   b.addEventListener('click', () => {
     color = c;
     for (const o of colorsEl.children) o.classList.toggle('on', o === b);
-    joinPreview.set(encodeGenome(defaultGenome()), color);
+    updatePreview();
   });
   colorsEl.appendChild(b);
 }
+renderLook();
+joinPreview.start();
 setTimeout(() => nameInput.focus(), 50);
 
 async function join() {
@@ -73,6 +120,7 @@ async function join() {
   const name = nameInput.value.trim() || 'Безымянный';
   store.set('mutagen.name', name);
   store.set('mutagen.color', color);
+  store.set('mutagen.ap', lookStr());
   try {
     await net.connect();
   } catch (e) {
@@ -80,7 +128,7 @@ async function join() {
     btn.disabled = false;
     return;
   }
-  net.send({ t: 'join', name, color, token: store.get('mutagen.token') });
+  net.send({ t: 'join', name, color, ap: lookStr(), token: store.get('mutagen.token') });
 }
 $('playBtn').addEventListener('click', join);
 nameInput.addEventListener('keydown', (e) => {
@@ -102,6 +150,7 @@ net.on('welcome', (m) => {
   hud.setMap(tiles, S.zones);
   $('join').classList.add('hidden');
   joinPreview.dispose();
+  editor.ap = lookStr();
   hud.show();
   input.enabled = true;
   hud.toast('Добро пожаловать на остров! Курсор — прицел, щелчок ЛКМ — удар, потянуть мышью — вращать камеру.');
@@ -191,7 +240,7 @@ function applyStatics(sa, sd) {
 // ================= смерть =================
 function showDeath(m) {
   S.dead = true;
-  $('deathBy').textContent = `Причина: ${m.by}${m.lost ? ` · ${m.lost} 🧬 остались в останках` : ''}`;
+  $('deathBy').textContent = `Причина: ${m.by}${m.lost ? ` · ${m.lost} ☣ мутагена осталось в останках` : ''}`;
   $('respNest').disabled = !m.nest;
   $('death').classList.remove('hidden');
   input.enabled = false;
@@ -278,9 +327,10 @@ function buildCheck(kind, x, y) {
   for (const [r, v] of Object.entries(def.cost)) if (you.inv[r] < v) return 'Не хватает ресурсов';
   if (def.solid === true) {
     for (const v of world.ents.values()) {
+      if (v.dd) continue; // павшие не мешают
       const px = clamp(v.x, x - TILE / 2, x + TILE / 2);
       const py = clamp(v.y, y - TILE / 2, y + TILE / 2);
-      if (Math.hypot(v.x - px, v.y - py) < v.creature.R) return v.isMe ? 'Мешаете вы сами — отойдите' : 'Мешает существо';
+      if (Math.hypot(v.x - px, v.y - py) < v.creature.R) return v.isMe ? 'Мешаете вы сами — отойдите' : (v.e?.k === 'p' ? 'Мешает игрок' : 'Мешает существо');
     }
   }
   for (const o of world.statics.objs.values()) {
@@ -507,6 +557,16 @@ function frame(now) {
   if (showCursor) cursorEl.style.transform = `translate(${input.pos.x}px, ${input.pos.y}px)`;
   world.render(dt, S.phase, you.dead ? 900 : S.stats.vision * VIEW_MULT);
 
+  // особое место под ногами: подсказка при входе и название в строке состояния
+  const site = you.dead ? null : zoneAt(S.zones, S.me.x, S.me.y);
+  if ((site?.id ?? -1) !== S.siteId) {
+    S.siteId = site?.id ?? -1;
+    if (site && performance.now() - (S.siteToast[site.id] || -1e9) > 60000) {
+      S.siteToast[site.id] = performance.now();
+      hud.toast(`${SITES[site.kind].icon} ${SITES[site.kind].enter}`);
+    }
+  }
+  hud.siteName = site ? SITES[site.kind].name : '';
   hud.update(you, S.stats, { buildKind: S.buildKind });
   hud.clock(S.phase);
   if (now - S.lastMini > 100) {

@@ -1,6 +1,6 @@
 // Пространственная сетка для быстрых запросов «что рядом».
 // Генерация острова живёт в shared/worldgen.js (её использует и браузер).
-export { generateMap, generateResources, generateZones, zoneStrength, zoneAt, mulberry32 } from '../shared/worldgen.js';
+export { generateMap, generateResources, generateZones, zoneStrength, zoneAt, zoneFalloff, mulberry32 } from '../shared/worldgen.js';
 
 // Сетка для статичных объектов (ресурсы, постройки, останки)
 export class Grid {

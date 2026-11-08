@@ -1,5 +1,5 @@
-// Редактор генома: меняем части тела за ДНК, видим результат в 3D.
-import { PARTS, PART_KEYS, MOUTHS, LEVEL_COST, LEVEL3_CRYSTALS, COMPLEXITY_CAP, MOUTH_CHANGE_COST, VIEW_MULT } from '/shared/config.js';
+// Редактор мутаций: тратим мутаген (и кристаллы) на изменения тела, видим результат в 3D.
+import { PARTS, PART_KEYS, LEVEL_COST, LEVEL3_CRYSTALS, COMPLEXITY_CAP, VIEW_MULT } from '/shared/config.js';
 import { decodeGenome, encodeGenome, cloneGenome, evolveCost, complexity, computeStats } from '/shared/creature.js';
 import { CreaturePreview } from './creature-preview.js';
 
@@ -25,6 +25,7 @@ export class Editor {
     this.root = $('editor');
     this.preview = null;
     this.isOpen = false;
+    this.ap = null; // внешность своего персонажа — для превью
     $('edClose').addEventListener('click', () => this.close());
     $('edReset').addEventListener('click', () => {
       this.draft = cloneGenome(this.base);
@@ -55,7 +56,7 @@ export class Editor {
     this.onClose?.();
   }
 
-  // свежие ДНК/кристаллы/бой без сброса черновика
+  // свежий мутаген/кристаллы/бой без сброса черновика
   refresh(you) {
     if (!this.isOpen) return;
     const prev = this.you;
@@ -77,22 +78,8 @@ export class Editor {
   }
 
   render() {
-    this.preview.set(encodeGenome(this.draft), this.color);
-    // рты
-    const mouths = $('edMouths');
-    mouths.innerHTML = '';
-    for (const [k, m] of Object.entries(MOUTHS)) {
-      const b = document.createElement('button');
-      b.className = `mouth${this.draft.mouth === k ? ' on' : ''}`;
-      const cost = k !== this.base.mouth ? ` · ${MOUTH_CHANGE_COST}🧬` : '';
-      b.innerHTML = `<div class="mn">${m.icon} ${m.name}${cost}</div><div class="md">${m.desc}</div>`;
-      b.addEventListener('click', () => {
-        this.draft.mouth = k;
-        this.render();
-      });
-      mouths.appendChild(b);
-    }
-    // части
+    this.preview.set(encodeGenome(this.draft), this.color, this.ap || 'm.0.1.0.0');
+    // мутации
     const parts = $('edParts');
     parts.innerHTML = '';
     for (const k of PART_KEYS) {
@@ -109,7 +96,7 @@ export class Editor {
         else if (i <= was) cls = 'lost';
         pips += `<div class="pip ${cls}"></div>`;
       }
-      const next = lv < def.max ? `${LEVEL_COST[lv + 1]}🧬${lv + 1 >= 3 ? ` +${LEVEL3_CRYSTALS}💎` : ''}` : 'макс.';
+      const next = lv < def.max ? `${LEVEL_COST[lv + 1]}☣${lv + 1 >= 3 ? ` +${LEVEL3_CRYSTALS}💎` : ''}` : 'макс.';
       row.innerHTML = `<div class="pi">${def.icon}</div><div><div class="pn">${def.name}</div><div class="pd">${def.desc}</div></div><div class="pips">${pips}</div>`;
       const minus = document.createElement('button');
       minus.textContent = '−';
@@ -157,15 +144,15 @@ export class Editor {
     const parts = [];
     const poorDna = c.net > you.dna;
     const poorCr = c.crystals > you.inv.crystal;
-    if (c.net >= 0) parts.push(`<span class="${poorDna ? 'bad' : ''}">Цена: ${c.net} 🧬</span>`);
-    else parts.push(`Возврат: ${-c.net} 🧬`);
+    if (c.net >= 0) parts.push(`<span class="${poorDna ? 'bad' : ''}">Цена: ${c.net} ☣</span>`);
+    else parts.push(`Возврат: ${-c.net} ☣`);
     if (c.crystals) parts.push(`<span class="${poorCr ? 'bad' : ''}">${c.crystals} 💎</span>`);
-    parts.push(`<span class="muted">· у вас ${you.dna} 🧬, ${you.inv.crystal} 💎</span>`);
+    parts.push(`<span class="muted">· у вас ${you.dna} ☣, ${you.inv.crystal} 💎</span>`);
     let reason = '';
-    if (you.cb) reason = 'В бою эволюция недоступна';
-    else if (cx > COMPLEXITY_CAP) reason = 'Слишком много частей';
-    else if (poorDna) reason = 'Не хватает ДНК';
-    else if (poorCr) reason = 'Нужны кристаллы мутагена (метеориты, колоссы)';
+    if (you.cb) reason = 'В бою мутировать нельзя';
+    else if (cx > COMPLEXITY_CAP) reason = 'Тело не выдержит столько мутаций';
+    else if (poorDna) reason = 'Не хватает мутагена — побудьте в радиации';
+    else if (poorCr) reason = 'Нужны кристаллы мутагена (метеориты, колоссы, ящики в зонах)';
     $('edCost').innerHTML = parts.join(' ') + (reason && changed ? `<div class="bad small">${reason}</div>` : '');
     $('edApply').disabled = !changed || !!reason;
   }

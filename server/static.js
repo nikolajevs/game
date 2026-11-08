@@ -10,11 +10,15 @@ const MIME = {
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+  '.glb': 'model/gltf-binary',
+  '.ogg': 'audio/ogg',
 };
 
 export function createStaticHandler(root) {
   const routes = [
     ['/vendor/three/', path.join(root, 'node_modules', 'three', 'build')],
+    ['/vendor/three-addons/', path.join(root, 'node_modules', 'three', 'examples', 'jsm')],
     ['/shared/', path.join(root, 'shared')],
     ['/', path.join(root, 'public')],
   ];

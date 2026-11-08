@@ -3,7 +3,7 @@
 // Рельеф нарезан на участки: рисуются только видимые и не слишком далёкие.
 import * as THREE from 'three';
 import { TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T } from '/shared/config.js';
-import { makeNoise, zoneStrength } from '/shared/worldgen.js';
+import { makeNoise, zoneAt, zoneFalloff } from '/shared/worldgen.js';
 import { hash2 } from './util.js';
 
 // 2 вершины на клетку: на большом острове 3 дали бы ~3 млн вершин и сотни МБ памяти
@@ -21,6 +21,8 @@ const DRY = new THREE.Color('#b5b866');
 const LUSH = new THREE.Color('#3f8a45');
 const WASTE = new THREE.Color('#857f55'); // выжженная земля радиационных зон
 const ASH = new THREE.Color('#5c5848');
+const DUST = new THREE.Color('#7f7564'); // пыль и отвалы рудника
+const TRAMPLED = new THREE.Color('#54452f'); // вытоптанная земля логова
 const smoothstep = (a, b, x) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
@@ -206,8 +208,15 @@ export class Terrain {
         c.lerp(CLIFF, cliff * 0.92);
         c.lerp(SNOWY, smoothstep(55, 88, h));
         if (h > 0 && this.zones.length) {
-          const zs = zoneStrength(this.zones, x, z);
-          if (zs > 0) {
+          const site = zoneAt(this.zones, x, z);
+          const k = site ? zoneFalloff(site, x, z) : 0;
+          if (k > 0 && site.kind === 'mine') {
+            c.lerp(DUST, Math.min(0.85, 0.3 + k * 0.5));
+            if (hash2(i, j, 77) < 0.22) c.lerp(ASH, 0.45);
+          } else if (k > 0 && site.kind === 'lair') {
+            c.lerp(TRAMPLED, Math.min(0.75, k * 0.7));
+          } else if (k > 0) {
+            const zs = site.lvl * k;
             c.lerp(WASTE, Math.min(0.85, 0.35 + zs * 0.25));
             if (hash2(i, j, 77) < 0.18) c.lerp(ASH, 0.6);
           }

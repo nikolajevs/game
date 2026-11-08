@@ -88,7 +88,7 @@ export function computeStats(g) {
     glow: L('glow') ? 260 : 0,
     metabolism: 1 - L('stomach') * 0.25,
     radResist: L('radres') * 0.3,
-    canHold: L('claws') > 0, // держать оружие можно только когтями
+    canHold: true, // выживший держит оружие руками
     diet: g.mouth,
   };
 }

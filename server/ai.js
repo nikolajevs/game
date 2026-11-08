@@ -72,6 +72,11 @@ export function updateNpc(g, n, dt, night) {
       n.target = null;
       target = null;
     }
+    // страж места бросает погоню далеко за его границей
+    if (target && n.leash && Math.hypot(target.x - n.homeX, target.y - n.homeY) > n.leash + 520) {
+      n.target = null;
+      target = null;
+    }
     if (!target) n.windupT = 0;
 
     if (target) {
@@ -104,7 +109,7 @@ export function updateNpc(g, n, dt, night) {
         n.cd.spit = n.stats.spit.cd * 1.8;
         g.spit(n);
       }
-    } else if (def.behavior === 'territorial' && Math.hypot(n.x - n.homeX, n.y - n.homeY) > 220) {
+    } else if (Math.hypot(n.x - n.homeX, n.y - n.homeY) > (n.leash || (def.behavior === 'territorial' ? 220 : Infinity))) {
       const dx = n.homeX - n.x;
       const dy = n.homeY - n.y;
       const d = Math.hypot(dx, dy) || 1;

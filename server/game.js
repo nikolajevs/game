@@ -4,7 +4,7 @@ import {
   TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, TERRAIN_SPEED, isWater, DAY_LENGTH, isNight,
   ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, NPCS, NPC_TARGET,
   NIGHT_EXTRA_STALKERS, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
-  RAD, CRATE, CRATE_LOOT, BENCH_RANGE, MUTANTS_PER_ZONE,
+  RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES,
 } from '../shared/config.js';
 import {
   computeStats, decodeGenome, encodeGenome, evolveCost, sanitizeGenome, defaultGenome, complexity, cloneGenome,
@@ -19,6 +19,8 @@ const HS = TILE / 2;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const emptyInv = () => Object.fromEntries(ITEM_KEYS.map((k) => [k, 0]));
 const round1 = (v) => Math.round(v * 10) / 10;
+// внешность игрока: пол.кожа.причёска.цвет волос.борода
+const AP_RE = /^[mf]\.[01]\.[0-2]\.[0-4]\.[01]$/;
 const idleInput = () => ({ mx: 0, my: 0, sprint: false, attack: false, spit: false });
 
 function circleBox(cx, cy, r, bx, by) {
@@ -62,14 +64,17 @@ export class Game {
     this.zones = generateZones(this.tiles, seed);
     for (const r of generateResources(this.tiles, seed, this.zones)) this.addResource(r.kind, r.x, r.y, r.v);
     for (const z of this.zones) {
-      for (let i = 0; i < CRATE.perZone; i++) this.spawnCrate(z);
+      for (let i = 0; i < SITES[z.kind].crates; i++) this.spawnCrate(z);
     }
     if (saved) this.loadSaved(saved);
     for (const kind of Object.keys(NPC_TARGET)) {
       for (let i = 0; i < NPC_TARGET[kind]; i++) this.spawnNpc(kind, true);
     }
+    // охрана особых мест: мутанты в руинах и рудниках, колосс со стаей в логове
     for (const z of this.zones) {
-      for (let i = 0; i < MUTANTS_PER_ZONE; i++) this.spawnMutantInZone(z);
+      for (const [kind, n] of Object.entries(SITES[z.kind].guards)) {
+        for (let i = 0; i < n; i++) this.spawnGuard(z, kind);
+      }
     }
     this.sAdd.clear();
     this.sDel.clear();
@@ -111,7 +116,9 @@ export class Game {
       const y = z.y + Math.sin(a) * d;
       if (isWater(this.tileAt(x, y))) continue;
       if (this.grid.query(x, y, 40).some((s) => Math.hypot(s.x - x, s.y - y) < (s.r || 20) + 18)) continue;
-      const s = { id: this.nextId++, cat: 'crate', kind: 'crate', x, y, r: 18, inv: this.rollLoot(), dna: 0, zone: z.id };
+      const [mn, mx] = CRATE.mutagen;
+      const dna = (mn + Math.floor(Math.random() * (mx - mn + 1))) * (z.lvl || 1);
+      const s = { id: this.nextId++, cat: 'crate', kind: 'crate', x, y, r: 18, inv: this.rollLoot(), dna, zone: z.id };
       this.statics.set(s.id, s);
       this.grid.insert(s);
       this.sAdd.set(s.id, s);
@@ -260,7 +267,6 @@ export class Game {
       return;
     }
     if (!WEAPONS[item] || !(p.inv[item] > 0)) return;
-    if (!p.stats.canHold) return this.toast(p, 'Чтобы держать оружие, нужны когти (геном — G)');
     p.weapon = item;
   }
 
@@ -308,6 +314,9 @@ export class Game {
     }
     prof.name = name;
     prof.color = color;
+    // внешность: пол.кожа.причёска.цвет волос.борода
+    if (typeof msg.ap === 'string' && AP_RE.test(msg.ap)) prof.ap = msg.ap;
+    if (!prof.ap) prof.ap = 'm.0.1.0.0';
     const p = this.createPlayer(client, token, prof);
     client.player = p;
     this.send(client, {
@@ -321,7 +330,7 @@ export class Game {
   createPlayer(client, token, prof) {
     const p = {
       id: this.nextId++, type: 'player', client, token, uid: prof.uid, prof,
-      name: prof.name, color: prof.color, genome: sanitizeGenome(prof.genome), look: '', stats: null,
+      name: prof.name, color: prof.color, ap: prof.ap, genome: sanitizeGenome(prof.genome), look: '', stats: null, mutAcc: 0,
       x: 0, y: 0, kbx: 0, kby: 0, angle: 0,
       hp: 100, food: 80, water: 80, stamina: 100, dna: Math.max(0, Math.floor(prof.dna || 0)), inv: cleanInv(prof.inv),
       input: idleInput(),
@@ -351,6 +360,7 @@ export class Game {
 
   applyGenome(p) {
     const oldMax = p.stats ? p.stats.maxHp : 0;
+    p.genome.mouth = 'omni'; // человек всеяден
     p.stats = computeStats(p.genome);
     p.look = encodeGenome(p.genome);
     if (oldMax) p.hp = clamp((p.hp / oldMax) * p.stats.maxHp, 1, p.stats.maxHp);
@@ -447,18 +457,18 @@ export class Game {
     if (p.dead) return;
     if (p.combatT > 0) return this.toast(p, 'Нельзя эволюционировать в бою');
     const g = sanitizeGenome(m.genome);
-    if (complexity(g) > COMPLEXITY_CAP) return this.toast(p, 'Слишком сложное существо');
+    g.mouth = 'omni';
+    if (complexity(g) > COMPLEXITY_CAP) return this.toast(p, 'Тело не выдержит столько мутаций');
     const c = evolveCost(p.genome, g);
-    if (c.net > p.dna) return this.toast(p, 'Не хватает ДНК');
+    if (c.net > p.dna) return this.toast(p, 'Не хватает мутагена');
     if (c.crystals > p.inv.crystal) return this.toast(p, 'Не хватает кристаллов мутагена');
     p.dna -= c.net;
     p.inv.crystal -= c.crystals;
     p.genome = g;
     this.applyGenome(p);
-    if (!p.stats.canHold) p.weapon = null;
     this.fx.push({ k: 'evolve', x: p.x, y: p.y, c: p.color });
     this.send(p.client, { t: 'evolved' });
-    this.toast(p, 'Эволюция завершена!');
+    this.toast(p, 'Мутация прижилась!');
   }
 
   onEat(p, m) {
@@ -477,8 +487,7 @@ export class Game {
     p.food = Math.min(100, p.food + food);
     p.water = Math.min(100, p.water + f.water);
     p.hp = Math.min(p.stats.maxHp, p.hp + 3);
-    p.dna += f.dna;
-    p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${Math.round(food)} 🍖  +${f.dna} 🧬` });
+    p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${Math.round(food)} 🍖${f.water ? `  +${f.water} 💧` : ''}` });
   }
 
   onInteract(p) {
@@ -623,8 +632,17 @@ export class Game {
 
     // радиация: копится в зонах, снаружи спадает
     p.radHere = this.radAt(p.x, p.y);
-    if (p.radHere > 0) p.rad = Math.min(100, p.rad + RAD.ratePerLevel * p.radHere * (1 - st.radResist) * dt);
-    else p.rad = Math.max(0, p.rad - RAD.decay * dt);
+    if (p.radHere > 0) {
+      p.rad = Math.min(100, p.rad + RAD.ratePerLevel * p.radHere * (1 - st.radResist) * dt);
+      // облучение копит мутаген (не зависит от радиорезистентности)
+      p.mutAcc += RAD.mutagen * p.radHere * dt;
+      if (p.mutAcc >= 3) {
+        const n = Math.floor(p.mutAcc);
+        p.mutAcc -= n;
+        p.dna += n;
+        p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${n} ☣ мутаген` });
+      }
+    } else p.rad = Math.max(0, p.rad - RAD.decay * dt);
     if (p.rad > RAD.dmgStart) this.damageCreature(p, (p.rad - RAD.dmgStart) * RAD.dmgPerPoint * dt, null, 'rad');
     if (p.dead) return;
 
@@ -944,7 +962,7 @@ export class Game {
     }
     if (def.dna) {
       p.dna += def.dna;
-      text += `  +${def.dna} 🧬`;
+      text += `  +${def.dna} ☣`;
     }
     if (text) p.pfx.push({ k: 'gain', x: s.x, y: s.y, text });
     this.fx.push({ k: 'hit', x: s.x, y: s.y, m: s.kind, id: s.id });
@@ -989,7 +1007,7 @@ export class Game {
         src.inv.meat += def.meat;
         src.inv.bone += def.bone || 0;
         if (def.crystal) src.inv.crystal += def.crystal;
-        src.pfx.push({ k: 'gain', x: t.x, y: t.y, text: `+${def.dna} 🧬  +${def.meat} 🥩  +${def.bone || 0} 🦴${def.crystal ? `  +${def.crystal} 💎` : ''}` });
+        src.pfx.push({ k: 'gain', x: t.x, y: t.y, text: `${def.dna ? `+${def.dna} ☣  ` : ''}+${def.meat} 🥩  +${def.bone || 0} 🦴${def.crystal ? `  +${def.crystal} 💎` : ''}` });
       }
       return;
     }
@@ -1204,16 +1222,22 @@ export class Game {
     return n;
   }
 
-  spawnMutantInZone(z, initial = true) {
+  // страж места: появляется внутри него и далеко не уходит (колосс держится у центра логова)
+  spawnGuard(z, kind, initial = true) {
+    const spread = kind === 'colossus' ? 0.25 : 0.7;
     for (let i = 0; i < 30; i++) {
       const a = Math.random() * Math.PI * 2;
-      const d = Math.sqrt(Math.random()) * z.r * 0.7;
+      const d = Math.sqrt(Math.random()) * z.r * spread;
       const x = z.x + Math.cos(a) * d;
       const y = z.y + Math.sin(a) * d;
       if (isWater(this.tileAt(x, y))) continue;
-      if (!initial && this.nearestPlayer(x, y, 500, false)) continue;
-      const n = this.spawnNpc('mutant', true, { x, y });
-      if (n) n.zone = z.id;
+      if (!initial && this.nearestPlayer(x, y, 500, false)) return null;
+      const n = this.spawnNpc(kind, true, { x, y });
+      if (!n) return null;
+      n.zone = z.id;
+      n.homeX = z.x;
+      n.homeY = z.y;
+      n.leash = z.r * 0.8;
       return n;
     }
     return null;
@@ -1221,13 +1245,17 @@ export class Game {
 
   maintainNpcs(night) {
     const counts = { grazer: 0, stalker: 0, colossus: 0, mutant: 0 };
-    const perZone = new Map();
+    const guards = new Map(); // "место:вид" -> сколько живо
     for (const n of this.npcs.values()) {
-      counts[n.kind]++;
-      if (n.zone !== undefined) perZone.set(n.zone, (perZone.get(n.zone) || 0) + 1);
+      if (n.zone !== undefined) {
+        const key = `${n.zone}:${n.kind}`;
+        guards.set(key, (guards.get(key) || 0) + 1);
+      } else counts[n.kind]++;
     }
     for (const z of this.zones) {
-      if ((perZone.get(z.id) || 0) < MUTANTS_PER_ZONE) this.spawnMutantInZone(z, false);
+      for (const [kind, want] of Object.entries(SITES[z.kind].guards)) {
+        if ((guards.get(`${z.id}:${kind}`) || 0) < want) this.spawnGuard(z, kind, false);
+      }
     }
     for (const kind of Object.keys(NPC_TARGET)) {
       const target = NPC_TARGET[kind] + (kind === 'stalker' && night ? NIGHT_EXTRA_STALKERS : 0);
@@ -1237,7 +1265,7 @@ export class Game {
     // днём лишние ночные хищники уходят (если их никто не видит)
     if (!night && counts.stalker > NPC_TARGET.stalker) {
       for (const n of this.npcs.values()) {
-        if (n.kind === 'stalker' && !n.target && !this.nearestPlayer(n.x, n.y, 900, false)) {
+        if (n.kind === 'stalker' && n.zone === undefined && !n.target && !this.nearestPlayer(n.x, n.y, 900, false)) {
           this.npcs.delete(n.id);
           break;
         }
@@ -1334,7 +1362,7 @@ export class Game {
   serPlayer(p) {
     return {
       i: p.id, k: 'p', x: Math.round(p.x), y: Math.round(p.y), a: Math.round(p.angle * 100) / 100,
-      h: Math.ceil(p.hp), mh: p.stats.maxHp, n: p.name, c: p.color, g: p.look,
+      h: Math.ceil(p.hp), mh: p.stats.maxHp, n: p.name, c: p.color, g: p.look, ap: p.ap, dd: p.dead ? 1 : undefined,
       at: p.atkT > 0 ? 1 : 0, hf: p.hitT > 0 ? 1 : 0, ch: p.charging > 0 ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0,
       w: p.weapon || undefined,
     };
@@ -1368,7 +1396,7 @@ export class Game {
     this.sAdd.clear();
     this.sDel.clear();
     const dyn = [];
-    for (const p of this.players.values()) if (!p.dead) dyn.push(this.serPlayer(p));
+    for (const p of this.players.values()) dyn.push(this.serPlayer(p)); // погибшие тоже — лежат до возрождения
     for (const n of this.npcs.values()) dyn.push(this.serNpc(n));
     for (const j of this.projectiles.values()) dyn.push({ i: j.id, k: 'j', t: j.kind, x: Math.round(j.x), y: Math.round(j.y), a: Math.round(j.a * 100) / 100 });
     const fx = this.fx;
