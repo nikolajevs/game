@@ -31,10 +31,18 @@ function pickSeed() {
   return 1337;
 }
 
-const saved = process.env.FRESH ? null : loadWorld(SAVE_FILE);
+let saved = process.env.FRESH ? null : loadWorld(SAVE_FILE);
+let note = '';
+// Сохранение со старым размером карты: остров другой, поэтому постройки не переносим,
+// а геномы и вещи игроков оставляем (они появятся заново на новом острове)
+if (saved && saved.mapW !== MAP_W) {
+  const profiles = (saved.profiles || []).map(([token, prof]) => [token, { ...prof, alive: false }]);
+  saved = { profiles };
+  note = ' — карта сменилась, постройки сброшены, игроки сохранены';
+}
 const seed = saved?.seed ?? pickSeed();
 const game = new Game(seed, saved);
-console.log(saved ? `Загружен сохранённый мир (зерно ${seed})` : `Создан новый мир (зерно ${seed})`);
+console.log(saved?.seed ? `Загружен сохранённый мир (зерно ${seed})` : `Создан новый мир (зерно ${seed})${note}`);
 
 const server = http.createServer(createStaticHandler(ROOT));
 const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });

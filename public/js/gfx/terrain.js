@@ -1,14 +1,16 @@
 // Low-poly рельеф острова, вода и морское дно.
 // Высоты чисто визуальные: игровая логика на сервере плоская (x, y).
+// Рельеф нарезан на участки: рисуются только видимые и не слишком далёкие.
 import * as THREE from 'three';
 import { TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T } from '/shared/config.js';
-import { makeNoise } from '/shared/worldgen.js';
+import { makeNoise, zoneStrength } from '/shared/worldgen.js';
 import { hash2 } from './util.js';
 
 const RES = 2; // вершин на клетку
 export const CELL = TILE / RES;
 const GW = MAP_W * RES + 1;
 const GH = MAP_H * RES + 1;
+const CHUNK_CELLS = 48; // клеток сетки в стороне участка
 const BASE_H = [-46, -13, 4, 12, 16, 26];
 const TILE_COL = ['#1b4f63', '#3c8a86', '#e3d09a', '#78b153', '#3f8040', '#8f8e86'];
 const BEACH = new THREE.Color('#e8d7a2');
@@ -16,15 +18,19 @@ const CLIFF = new THREE.Color('#7d7a72');
 const SNOWY = new THREE.Color('#b9b8b0');
 const DRY = new THREE.Color('#b5b866');
 const LUSH = new THREE.Color('#3f8a45');
+const WASTE = new THREE.Color('#857f55'); // выжженная земля радиационных зон
+const ASH = new THREE.Color('#5c5848');
 
 export class Terrain {
-  constructor(tiles, seed) {
+  constructor(tiles, seed, zones = []) {
     this.tiles = tiles;
+    this.zones = zones;
     this.h = new Float32Array(GW * GH);
     this.group = new THREE.Group();
+    this.chunks = [];
     this.computeHeights(seed);
     this.patch = makeNoise(seed + 779);
-    this.group.add(this.buildMesh());
+    this.buildChunks();
     this.water = this.buildWater();
     this.group.add(this.water);
     this.group.add(this.buildSeabed());
@@ -106,25 +112,45 @@ export class Terrain {
     return hd + (hc - hd) * (1 - u) + (hb - hd) * (1 - v);
   }
 
-  buildMesh() {
-    const quads = (GW - 1) * (GH - 1);
-    const pos = new Float32Array(quads * 18);
-    const col = new Float32Array(quads * 18);
-    const vc = [];
-    // цвета в вершинах сетки — билинейно по клеткам
+  buildChunks() {
+    // цвета в узлах сетки — билинейно по клеткам
     const tileCols = TILE_COL.map((c) => new THREE.Color(c));
+    const vcol = new Float32Array(GW * GH * 3);
     for (let j = 0; j < GH; j++) {
       for (let i = 0; i < GW; i++) {
         const x = i * CELL;
         const z = j * CELL;
-        const c = new THREE.Color(0, 0, 0);
+        let r = 0;
+        let g = 0;
+        let b = 0;
         for (let t = 0; t < 6; t++) {
           const w = this.sampleTiles(x, z, (tt) => (tt === t ? 1 : 0));
-          if (w > 0) c.r += tileCols[t].r * w, c.g += tileCols[t].g * w, c.b += tileCols[t].b * w;
+          if (w > 0) {
+            r += tileCols[t].r * w;
+            g += tileCols[t].g * w;
+            b += tileCols[t].b * w;
+          }
         }
-        vc.push(c);
+        const o = (j * GW + i) * 3;
+        vcol[o] = r;
+        vcol[o + 1] = g;
+        vcol[o + 2] = b;
       }
     }
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0 });
+    for (let cj = 0; cj < GH - 1; cj += CHUNK_CELLS) {
+      for (let ci = 0; ci < GW - 1; ci += CHUNK_CELLS) {
+        const mesh = this.buildChunk(ci, cj, Math.min(ci + CHUNK_CELLS, GW - 1), Math.min(cj + CHUNK_CELLS, GH - 1), vcol, mat);
+        this.group.add(mesh);
+        this.chunks.push(mesh);
+      }
+    }
+  }
+
+  buildChunk(i0, j0, i1, j1, vcol, mat) {
+    const quads = (i1 - i0) * (j1 - j0);
+    const pos = new Float32Array(quads * 18);
+    const col = new Float32Array(quads * 18);
     const tmp = new THREE.Color();
     let o = 0;
     const put = (i, j) => {
@@ -150,14 +176,14 @@ export class Terrain {
       const nz = ax * by - ay * bx;
       const slope = Math.abs(ny) / Math.hypot(nx, ny, nz);
       const hAvg = (pos[start + 1] + pos[start + 4] + pos[start + 7]) / 3;
-      const ca = vc[ja * GW + ia];
-      const cb = vc[jb * GW + ib];
-      const cc = vc[jc * GW + ic];
-      tmp.setRGB((ca.r + cb.r + cc.r) / 3, (ca.g + cb.g + cc.g) / 3, (ca.b + cb.b + cc.b) / 3);
+      const a = (ja * GW + ia) * 3;
+      const b = (jb * GW + ib) * 3;
+      const c = (jc * GW + ic) * 3;
+      tmp.setRGB((vcol[a] + vcol[b] + vcol[c]) / 3, (vcol[a + 1] + vcol[b + 1] + vcol[c + 1]) / 3, (vcol[a + 2] + vcol[b + 2] + vcol[c + 2]) / 3);
+      const px = (pos[start] + pos[start + 3] + pos[start + 6]) / 3;
+      const pz = (pos[start + 2] + pos[start + 5] + pos[start + 8]) / 3;
       // пятна сухой травы и тёмной зелени, чтобы луг не был однотонным
       if (hAvg > 3.5) {
-        const px = pos[start];
-        const pz = pos[start + 2];
         const p = this.patch(px / 260, pz / 260, 3);
         if (p > 0.55) tmp.lerp(DRY, Math.min(0.55, (p - 0.55) * 3));
         else if (p < 0.42) tmp.lerp(LUSH, Math.min(0.5, (0.42 - p) * 3));
@@ -165,6 +191,14 @@ export class Terrain {
       if (hAvg > -3 && hAvg < 3.5) tmp.lerp(BEACH, 0.75); // полоса пляжа
       if (hAvg > 3 && slope < 0.72) tmp.lerp(CLIFF, Math.min(1, (0.72 - slope) * 4));
       if (hAvg > 55) tmp.lerp(SNOWY, Math.min(1, (hAvg - 55) / 30));
+      // радиационная зона: выжженная земля с пятнами пепла
+      if (hAvg > 0 && this.zones.length) {
+        const zs = zoneStrength(this.zones, px, pz);
+        if (zs > 0) {
+          tmp.lerp(WASTE, Math.min(0.85, 0.35 + zs * 0.25));
+          if (hash2(ia, ja, 77) < 0.18) tmp.lerp(ASH, 0.6);
+        }
+      }
       if (hAvg < -3) tmp.multiplyScalar(Math.max(0.35, 1 + hAvg / 70)); // глубже — темнее
       const jit = 0.94 + hash2(ia * 3 + salt, ja * 7, 11) * 0.12;
       tmp.multiplyScalar(jit);
@@ -174,8 +208,8 @@ export class Terrain {
         col[start + k * 3 + 2] = tmp.b;
       }
     };
-    for (let j = 0; j < GH - 1; j++) {
-      for (let i = 0; i < GW - 1; i++) {
+    for (let j = j0; j < j1; j++) {
+      for (let i = i0; i < i1; i++) {
         tri(i, j, i, j + 1, i + 1, j, 0); // a, c, b
         tri(i, j + 1, i + 1, j + 1, i + 1, j, 1); // c, d, b
       }
@@ -185,9 +219,9 @@ export class Terrain {
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0 });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
+    mesh.userData.center = new THREE.Vector2(((i0 + i1) / 2) * CELL, ((j0 + j1) / 2) * CELL);
     return mesh;
   }
 
@@ -214,8 +248,15 @@ export class Terrain {
     return mesh;
   }
 
-  update(t) {
+  // target — точка, вокруг которой рисуем; far — дальность видимости
+  update(t, target, far) {
     // лёгкое «дыхание» воды
     this.water.position.y = Math.sin(t * 0.8) * 0.6;
+    if (!target) return;
+    const lim = far + CHUNK_CELLS * CELL;
+    for (const m of this.chunks) {
+      const c = m.userData.center;
+      m.visible = Math.hypot(c.x - target.x, c.y - target.z) < lim;
+    }
   }
 }

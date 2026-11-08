@@ -1,6 +1,6 @@
 // Генерация острова и раскладка ресурсов по зерну (seed).
 // Общий код: сервер строит по нему мир, браузер — превью.
-import { MAP_W, MAP_H, TILE, T, RESOURCES } from './config.js';
+import { MAP_W, MAP_H, TILE, T, RESOURCES, RAD } from './config.js';
 
 export function mulberry32(a) {
   return function rand() {
@@ -82,8 +82,55 @@ export function generateMap(seed) {
   return tiles;
 }
 
-// Раскладка деревьев, камней и кустов. Возвращает [{ kind, x, y, v }]
-export function generateResources(tiles, seed) {
+// Радиационные зоны (руины): круги на суше, далеко друг от друга. [{ id, x, y, r, lvl }]
+export function generateZones(tiles, seed) {
+  const R = mulberry32(seed ^ 0x2545f491);
+  const HS = TILE / 2;
+  const zones = [];
+  const isLand = (x, y) => {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return false;
+    const t = tiles[ty * MAP_W + tx];
+    return t !== T.DEEP && t !== T.SHALLOW;
+  };
+  for (let tries = 0; tries < 6000 && zones.length < RAD.zones; tries++) {
+    const x = (15 + Math.floor(R() * (MAP_W - 30))) * TILE + HS;
+    const y = (15 + Math.floor(R() * (MAP_H - 30))) * TILE + HS;
+    const r = 260 + R() * 140;
+    let land = isLand(x, y) ? 1 : 0;
+    let n = 1;
+    for (let a = 0; a < 8; a++) {
+      for (const k of [0.4, 0.85]) {
+        n++;
+        if (isLand(x + Math.cos(a * 0.785) * r * k, y + Math.sin(a * 0.785) * r * k)) land++;
+      }
+    }
+    if (land / n < 0.88) continue;
+    if (zones.some((z) => Math.hypot(z.x - x, z.y - y) < z.r + r + 700)) continue;
+    zones.push({ id: zones.length, x, y, r: Math.round(r), lvl: 1 + Math.floor(R() * 3) });
+  }
+  return zones;
+}
+
+// Сила радиации в точке: 0 снаружи, до уровня зоны (1–3) ближе к центру
+export function zoneStrength(zones, x, y) {
+  let best = 0;
+  for (const z of zones) {
+    const d = Math.hypot(x - z.x, y - z.y);
+    if (d >= z.r) continue;
+    const k = d < z.r * 0.6 ? 1 : (z.r - d) / (z.r * 0.4);
+    best = Math.max(best, z.lvl * k);
+  }
+  return best;
+}
+
+export function zoneAt(zones, x, y) {
+  return zones.find((z) => Math.hypot(x - z.x, y - z.y) < z.r) || null;
+}
+
+// Раскладка деревьев, камней, кустов, серы и металлолома. Возвращает [{ kind, x, y, v }]
+export function generateResources(tiles, seed, zones = []) {
   const R = mulberry32(seed ^ 0x5bd1e995);
   const out = [];
   const cell = 80;
@@ -94,14 +141,19 @@ export function generateResources(tiles, seed) {
     for (let tx = 2; tx < MAP_W - 2; tx++) {
       const t = tiles[ty * MAP_W + tx];
       const r = R();
-      let kind = null;
-      if (t === T.FOREST) kind = r < 0.26 ? 'tree' : r < 0.32 ? 'bush' : r < 0.34 ? 'rock' : null;
-      else if (t === T.GRASS) kind = r < 0.035 ? 'tree' : r < 0.075 ? 'bush' : r < 0.09 ? 'rock' : null;
-      else if (t === T.ROCK) kind = r < 0.2 ? 'rock' : r < 0.23 ? 'tree' : null;
-      else if (t === T.SAND) kind = r < 0.015 ? 'rock' : null;
+      const r2 = R();
       const x = tx * TILE + HS + (R() - 0.5) * TILE * 0.6;
       const y = ty * TILE + HS + (R() - 0.5) * TILE * 0.6;
       const v = R();
+      let kind = null;
+      if (t === T.DEEP || t === T.SHALLOW) continue;
+      if (zoneAt(zones, x, y)) {
+        // в руинах растительности нет — только металлолом и редкие камни
+        kind = r < 0.08 ? 'scrap' : r < 0.1 ? 'rock' : null;
+      } else if (t === T.FOREST) kind = r < 0.26 ? 'tree' : r < 0.32 ? 'bush' : r < 0.34 ? 'rock' : null;
+      else if (t === T.GRASS) kind = r < 0.035 ? 'tree' : r < 0.075 ? 'bush' : r < 0.09 ? 'rock' : null;
+      else if (t === T.ROCK) kind = r < 0.2 ? (r2 < 0.3 ? 'sulfur' : 'rock') : r < 0.23 ? 'tree' : null;
+      else if (t === T.SAND) kind = r < 0.015 ? 'rock' : null;
       if (!kind) continue;
       const def = RESOURCES[kind];
       const cx = Math.floor(x / cell);

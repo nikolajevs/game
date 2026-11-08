@@ -1,13 +1,32 @@
 // 3D-сцена игры: рельеф, объекты, существа с сервера, эффекты, камера.
 import * as THREE from 'three';
-import { NPCS } from '/shared/config.js';
+import { NPCS, PLAYER } from '/shared/config.js';
 import { Terrain } from './gfx/terrain.js';
 import { Sky } from './gfx/sky.js';
 import { StaticsView } from './gfx/statics3d.js';
 import { Creature3D } from './gfx/creature3d.js';
 import { Effects } from './gfx/effects.js';
 import { Decor } from './gfx/decor.js';
-import { G } from './gfx/util.js';
+import { ZonesView } from './gfx/zones3d.js';
+import { G, M, mergeParts } from './gfx/util.js';
+
+// след за снарядом: [цвет, вероятность частицы за кадр, размер]
+const PROJ_TRAIL = { acid: ['#8dff5a', 0.5, 1.6], bomb: ['#ff8a2a', 0.8, 1.8], bullet: ['#ffe9a8', 0.6, 1.1] };
+// модели снарядов (смотрят вдоль +X)
+const PROJ_GEO = {
+  acid: mergeParts([{ geom: G.sphere, matrix: M(0, 0, 0, 0, 0, 0, 6), color: '#8dff5a' }]),
+  stone: mergeParts([{ geom: G.dodeca, matrix: M(0, 0, 0, 0, 0, 0, 3.2), color: '#8a8a85' }]),
+  arrow: mergeParts([
+    { geom: G.cyl6, matrix: M(0, 0, 0, 0, 0, -Math.PI / 2, 0.5, 20, 0.5), color: '#c9b48a' },
+    { geom: G.cone5, matrix: M(11, 0, 0, 0, 0, -Math.PI / 2, 1.3, 3, 1.3), color: '#8a8a85' },
+    { geom: G.box, matrix: M(-9, 0, 0, 0, 0, 0, 3, 0.2, 2.4), color: '#e8e0c8' },
+  ]),
+  bullet: mergeParts([{ geom: G.cyl6, matrix: M(0, 0, 0, 0, 0, -Math.PI / 2, 0.9, 12, 0.9), color: '#fff2b0' }]),
+  bomb: mergeParts([
+    { geom: G.sphere, matrix: M(0, 0, 0, 0, 0, 0, 5), color: '#2b2b2e' },
+    { geom: G.box, matrix: M(0, 0, 0, 0, 0, 0, 10.4, 2, 2), color: '#c9a227' },
+  ]),
+};
 
 const HIT_COLORS = {
   tree: ['#6b4423', '#4f8a3a'], rock: ['#8a8a85', '#6e6e68'], bush: ['#3f7d3a', '#c8324b'],
@@ -15,6 +34,7 @@ const HIT_COLORS = {
 };
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
 
 export class WorldView {
   constructor(canvas, labelsEl, floatersEl) {
@@ -38,13 +58,15 @@ export class WorldView {
     this.night = 0;
     this.time = 0;
     this.camTarget = new THREE.Vector3();
+    this.rayDir = new THREE.Vector3(1, 0, 0);
     this.projMat = new THREE.MeshStandardMaterial({ color: '#8dff5a', emissive: '#3fd400', emissiveIntensity: 1, roughness: 0.3 });
     this.bubbleMat = new THREE.MeshBasicMaterial({ color: '#9cf0a4', transparent: true, opacity: 0.16, depthWrite: false });
   }
 
-  init(tiles, seed, myUid) {
-    this.terrain = new Terrain(tiles, seed);
+  init(tiles, seed, myUid, zones = []) {
+    this.terrain = new Terrain(tiles, seed, zones);
     this.scene.add(this.terrain.group);
+    this.zonesView = new ZonesView(this.scene, this.terrain, zones);
     this.decor = new Decor(this.terrain, tiles, seed);
     this.scene.add(this.decor.group);
     this.statics = new StaticsView(this.scene, this.terrain);
@@ -53,10 +75,29 @@ export class WorldView {
     this.ghost.visible = false;
     this.ghost.renderOrder = 5;
     this.scene.add(this.ghost);
+    const ringMat = (color, opacity) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, fog: false });
+    this.aimRing = new THREE.Mesh(new THREE.RingGeometry(7, 10, 28), ringMat('#ffffff', 0.6));
+    this.rangeRing = new THREE.Mesh(new THREE.RingGeometry(PLAYER.buildRange - 2.5, PLAYER.buildRange, 72), ringMat('#9cf0a4', 0.35));
+    for (const r of [this.aimRing, this.rangeRing]) {
+      r.rotation.x = -Math.PI / 2;
+      r.renderOrder = 10;
+      r.visible = false;
+      this.scene.add(r);
+    }
   }
 
   ground(x, y) {
     return this.terrain.heightAt(x, y);
+  }
+
+  makeProjectile(kind) {
+    if (!this.projStdMat) {
+      this.projStdMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.6 });
+      this.bulletMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+    }
+    const geo = PROJ_GEO[kind] || PROJ_GEO.acid;
+    const mat = kind === 'acid' ? this.projMat : kind === 'bullet' ? this.bulletMat : this.projStdMat;
+    return new THREE.Mesh(geo, mat);
   }
 
   // высота, на которой стоит существо (в глубокой воде — плывёт)
@@ -122,13 +163,14 @@ export class WorldView {
         seenJ.add(e.i);
         let m = this.projs.get(e.i);
         if (!m) {
-          m = new THREE.Mesh(G.sphere, this.projMat);
-          m.scale.setScalar(6);
+          m = this.makeProjectile(e.t || 'acid');
           this.scene.add(m);
           this.projs.set(e.i, m);
         }
         m.position.set(e.x, this.standY(e.x, e.y, 20) + 18, e.y);
-        if (Math.random() < 0.5) this.effects.burst(e.x, m.position.y, e.y, '#8dff5a', 1, { speed: 15, size: 1.6, life: 0.35, gravity: 0 });
+        m.rotation.y = -(e.a || 0);
+        const trail = PROJ_TRAIL[e.t || 'acid'];
+        if (trail && Math.random() < trail[1]) this.effects.burst(e.x, m.position.y, e.y, trail[0], 1, { speed: 12, size: trail[2], life: 0.3, gravity: 0 });
         continue;
       }
       seen.add(e.i);
@@ -153,6 +195,7 @@ export class WorldView {
       const gy = this.standY(x, y, v.creature.tpl.hb);
       v.creature.group.position.set(x, gy, y);
       v.creature.group.rotation.y = -a;
+      v.creature.setWeapon(e.w || null);
       v.creature.update(dt, { speed: v.speed, charging: !!e.ch, night: this.night });
       if (e.sp && !v.bubble) {
         v.bubble = new THREE.Mesh(G.sphere, this.bubbleMat);
@@ -217,6 +260,32 @@ export class WorldView {
         case 'meteor':
           this.meteorImpact(f.x, f.y, myX, myY);
           break;
+        case 'shot':
+          if (f.m === 'bullet') {
+            fx.burst(f.x, gy + 18, f.y, '#ffe066', 6, { speed: 60, size: 2.2, life: 0.18, gravity: 0 });
+            fx.burst(f.x, gy + 18, f.y, '#9a9a9a', 4, { speed: 25, size: 3, life: 0.6, gravity: -20 });
+            if (Math.hypot(f.x - myX, f.y - myY) < 60) this.shake = Math.max(this.shake, 1.5);
+          }
+          break;
+        case 'impact':
+          fx.burst(f.x, gy + 16, f.y, f.m === 'bullet' ? '#ffd166' : '#b5a585', 5, { speed: 70, size: 1.8, life: 0.35 });
+          break;
+        case 'boom': {
+          fx.burst(f.x, gy + 10, f.y, '#ff8a2a', 45, { speed: 220, size: 5, life: 0.9 });
+          fx.burst(f.x, gy + 10, f.y, '#ffe066', 20, { speed: 160, size: 4, life: 0.5 });
+          fx.burst(f.x, gy + 10, f.y, '#3a3a3a', 30, { speed: 120, size: 7, life: 1.6, gravity: -30 });
+          const d = Math.hypot(f.x - myX, f.y - myY);
+          this.shake = Math.max(this.shake, Math.max(0, 16 - d / 30));
+          const scorch = new THREE.Mesh(
+            new THREE.CircleGeometry(45, 16),
+            new THREE.MeshStandardMaterial({ color: '#1d1a18', roughness: 1, transparent: true, opacity: 0.85, polygonOffset: true, polygonOffsetFactor: -4 }),
+          );
+          scorch.rotation.x = -Math.PI / 2;
+          scorch.position.set(f.x, Math.max(gy, 0) + 1.2, f.y);
+          this.scene.add(scorch);
+          this.decals.push({ mesh: scorch, life: 60 });
+          break;
+        }
         default:
           break;
       }
@@ -303,17 +372,47 @@ export class WorldView {
     this.ghost.visible = true;
   }
 
-  // точка на земле под прицелом (центр экрана)
-  groundPick(maxDist = 1400) {
-    const dir = _v.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
+  // Точка на земле (или воде) под экранной точкой — луч из камеры через курсор.
+  // Если луч уходит в небо, возвращает null, а горизонтальное направление луча лежит в this.rayDir.
+  pickAt(cx, cy, maxDist = 2500) {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const dir = _v.set((cx / w) * 2 - 1, -(cy / h) * 2 + 1, 0.5).unproject(this.camera).sub(this.camera.position).normalize();
+    this.rayDir.copy(dir);
     const p = _v2.copy(this.camera.position);
+    const surf = (q) => Math.max(this.ground(q.x, q.z), 0);
     let step = 4;
     for (let d = 0; d < maxDist; d += step) {
       p.addScaledVector(dir, step);
-      if (p.y <= Math.max(this.ground(p.x, p.z), 0)) return { x: p.x, y: p.z };
-      step = Math.min(14, step * 1.04);
+      if (p.y <= surf(p)) {
+        // уточняем точку пересечения делением отрезка пополам
+        let lo = -step;
+        let hi = 0;
+        for (let i = 0; i < 6; i++) {
+          const mid = (lo + hi) / 2;
+          _v3.copy(p).addScaledVector(dir, mid);
+          if (_v3.y <= surf(_v3)) hi = mid;
+          else lo = mid;
+        }
+        p.addScaledVector(dir, hi);
+        return { x: p.x, y: p.z };
+      }
+      step = Math.min(16, step * 1.04);
     }
     return null;
+  }
+
+  // кольцо на земле в точке прицела
+  setAim(p, show) {
+    this.aimRing.visible = !!(show && p);
+    if (!this.aimRing.visible) return;
+    this.aimRing.position.set(p.x, Math.max(this.ground(p.x, p.y), 0) + 1, p.y);
+  }
+
+  // круг радиуса стройки вокруг игрока
+  setBuildRange(x, y, show) {
+    this.rangeRing.visible = !!show;
+    if (show) this.rangeRing.position.set(x, Math.max(this.ground(x, y), 0) + 1, y);
   }
 
   // ---------- кадр ----------
@@ -332,6 +431,7 @@ export class WorldView {
       this.shake = Math.max(0, this.shake - dt * 30);
     }
     this.camera.lookAt(this.camTarget);
+    this.camera.updateMatrixWorld(); // нужно для луча из курсора в этом же кадре
   }
 
   render(dt, phase, view) {
@@ -347,7 +447,8 @@ export class WorldView {
     const env = this.sky.update(phase, this.camTarget, view);
     this.night = 1 - env.k;
     this.decor.update(this.camTarget, this.scene.fog.far);
-    this.terrain.update(this.time);
+    this.terrain.update(this.time, this.camTarget, this.scene.fog.far);
+    this.zonesView.update(dt, this.camTarget, this.scene.fog.far);
     this.statics.update(dt, this.camera.position, this.night, this.camTarget);
     this.updateMeteor(dt);
     for (const dcl of this.decals) {

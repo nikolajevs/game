@@ -87,6 +87,8 @@ export function computeStats(g) {
     charge: L('horns') ? { dmg: 16 + L('horns') * 12, cd: 6.5 - L('horns'), speed: 760 } : null,
     glow: L('glow') ? 260 : 0,
     metabolism: 1 - L('stomach') * 0.25,
+    radResist: L('radres') * 0.3,
+    canHold: L('claws') > 0, // держать оружие можно только когтями
     diet: g.mouth,
   };
 }

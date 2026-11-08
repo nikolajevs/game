@@ -15,6 +15,7 @@ const STAT_ROWS = [
   ['Кислота', (s) => (s.spit ? s.spit.dmg : 0), ''],
   ['Таран', (s) => (s.charge ? s.charge.dmg : 0), ''],
   ['Плавание', (s) => s.swim, ''],
+  ['Радиозащита', (s) => Math.round(s.radResist * 100), '%'],
   ['Расход пищи', (s) => Math.round(s.metabolism * 100), '%', true],
 ];
 

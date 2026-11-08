@@ -2,6 +2,7 @@
 // Разбит на участки, чтобы рисовать только то, что рядом с камерой.
 import * as THREE from 'three';
 import { TILE, MAP_W, MAP_H, T } from '/shared/config.js';
+import { zoneAt } from '/shared/worldgen.js';
 import { G, M, mergeParts, hash2 } from './util.js';
 
 const CHUNK = 480; // размер участка в единицах мира
@@ -56,6 +57,10 @@ export class Decor {
           const z = ty * TILE + hash2(tx, ty, seed + k * 31 + 2) * TILE;
           const s = 0.7 + hash2(tx, ty, seed + k * 31 + 3) * 0.7;
           if (terrain.heightAt(x, z) < 0.5) continue; // под водой не растёт
+          if (terrain.zones.length && zoneAt(terrain.zones, x, z)) {
+            if (r < 0.25) push('pebble', x, z, s * 2.6, k); // в зонах только обломки
+            continue;
+          }
           if (t === T.GRASS) {
             if (r < 0.55) push('tuft', x, z, s);
             else if (r < 0.62) push('flower', x, z, s, k);

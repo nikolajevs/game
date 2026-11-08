@@ -1,6 +1,6 @@
 // Клиент игры: вход, сеть, интерполяция, управление, стройка, интерфейс.
 import {
-  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater,
+  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS,
 } from '/shared/config.js';
 import { computeStats, decodeGenome, defaultGenome, encodeGenome } from '/shared/creature.js';
 import { Net } from './net.js';
@@ -37,8 +37,10 @@ const S = {
   me: { x: 0, y: 0, face: 0, init: false }, srv: null, srvPrev: null,
   buildKind: null, lastBuildKind: 'wall_wood', ghost: null,
   structAt: new Map(), dead: false, chatOpen: false,
-  lastInput: '', lastInputAt: 0, attackUntil: 0, lastMini: 0,
+  lastInput: '', lastInputAt: 0, spitUntil: 0, lastMini: 0,
+  aim: { x: 0, y: 0, sky: true }, // точка на земле под курсором
 };
+const cursorEl = $('cursor');
 
 // ================= экран входа =================
 let color = store.get('mutagen.color') || PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)];
@@ -92,14 +94,15 @@ net.on('welcome', (m) => {
   const tiles = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) tiles[i] = bin.charCodeAt(i);
   S.tiles = tiles;
-  world.init(tiles, m.seed, m.uid);
+  S.zones = m.zones || [];
+  world.init(tiles, m.seed, m.uid, S.zones);
   applyStatics(m.statics, null);
-  hud.setMap(tiles);
+  hud.setMap(tiles, S.zones);
   $('join').classList.add('hidden');
   joinPreview.dispose();
   hud.show();
   input.enabled = true;
-  hud.toast('Добро пожаловать на остров! Щёлкните по экрану, чтобы управлять камерой.');
+  hud.toast('Добро пожаловать на остров! Курсор — прицел, ЛКМ — удар, зажатая ПКМ — вращать камеру.');
   requestAnimationFrame(frame);
 });
 
@@ -115,6 +118,10 @@ net.on('s', (m) => {
   if (m.sa || m.sd) applyStatics(m.sa, m.sd);
 
   const prev = S.you;
+  // сервер шлёт только ненулевые предметы — дополняем нулями
+  const inv = {};
+  for (const k of ITEM_KEYS) inv[k] = m.you.inv[k] || 0;
+  m.you.inv = inv;
   S.you = m.you;
   S.phase = m.ph;
   S.meteor = m.m;
@@ -127,7 +134,9 @@ net.on('s', (m) => {
   if (mine) {
     S.srvPrev = S.srv;
     S.srv = { x: mine.x, y: mine.y, t: now };
-    if (!S.me.init || Math.hypot(mine.x - S.me.x, mine.y - S.me.y) > 250) {
+    const respawned = prev && prev.dead && !m.you.dead;
+    // после возрождения сразу ставим в новую точку, без «пробежки» от места гибели
+    if (!S.me.init || respawned || Math.hypot(mine.x - S.me.x, mine.y - S.me.y) > 250) {
       S.me.x = mine.x;
       S.me.y = mine.y;
       S.me.face = mine.a;
@@ -148,16 +157,11 @@ net.on('chat', (m) => hud.chat(m));
 net.on('pl', (m) => hud.setPlayers(m.list));
 net.on('dead', (m) => showDeath(m));
 net.on('evolved', () => editor.close());
-net.on('cont', (m) => {
-  const wasOpen = !!hud.cont;
-  hud.openContainer(m, S.you);
-  if (!wasOpen) input.releaseLock();
-});
+net.on('cont', (m) => hud.openContainer(m, S.you));
 net.on('contClose', () => hud.closeContainer());
 net.on('close', () => {
   $('disconnected').classList.remove('hidden');
   input.enabled = false;
-  input.releaseLock();
 });
 
 const invSig = (y) => `${y.dna}|${Object.values(y.inv).join(',')}`;
@@ -181,7 +185,7 @@ function showDeath(m) {
   $('respNest').disabled = !m.nest;
   $('death').classList.remove('hidden');
   input.enabled = false;
-  input.releaseLock();
+  input.suppressHeld();
   editor.close();
   hud.closeContainer();
   setBuild(null);
@@ -189,6 +193,10 @@ function showDeath(m) {
 function hideDeath() {
   S.dead = false;
   $('death').classList.add('hidden');
+  // клавиши, зажатые на экране смерти, тоже не должны сразу двигать существо
+  input.suppressHeld();
+  // кнопка «Возродиться» не должна оставаться в фокусе (Пробел/Enter нажимали бы её снова)
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   input.enabled = !anyModal();
 }
 $('respNest').addEventListener('click', () => net.send({ t: 'respawn', nest: true }));
@@ -227,7 +235,6 @@ function toggleEditor() {
   setBuild(null);
   input.enabled = false;
   input.clear();
-  input.releaseLock();
   editor.open(S.you);
 }
 editor.onClose = () => {
@@ -242,6 +249,7 @@ function setBuild(kind) {
   if (!kind) world.setGhost(null);
 }
 hud.onPickBuild = (k) => setBuild(k);
+hud.onEquip = (item) => net.send({ t: 'equip', item });
 hud.onCloseCont = () => {
   net.send({ t: 'close' });
   hud.closeContainer();
@@ -256,6 +264,13 @@ function buildCheck(kind, x, y) {
   if (isWater(S.tiles[ty * MAP_W + tx])) return 'Нельзя строить на воде';
   if (S.structAt.has(`${x},${y}`)) return 'Место занято';
   for (const [r, v] of Object.entries(def.cost)) if (you.inv[r] < v) return 'Не хватает ресурсов';
+  if (def.solid === true) {
+    for (const v of world.ents.values()) {
+      const px = clamp(v.x, x - TILE / 2, x + TILE / 2);
+      const py = clamp(v.y, y - TILE / 2, y + TILE / 2);
+      if (Math.hypot(v.x - px, v.y - py) < v.creature.R) return v.isMe ? 'Мешаете вы сами — отойдите' : 'Мешает существо';
+    }
+  }
   for (const o of world.statics.objs.values()) {
     const s = o.s;
     const rd = RESOURCES[s.k];
@@ -267,26 +282,31 @@ function buildCheck(kind, x, y) {
   return '';
 }
 
+// Призрак постройки идёт за курсором; если курсор дальше радиуса стройки — прижимается к краю круга
 function updateBuild() {
-  if (!S.buildKind || !S.you || S.you.dead) {
+  const active = !!(S.buildKind && S.you && !S.you.dead);
+  world.setBuildRange(S.me.x, S.me.y, active);
+  if (!active) {
     world.setGhost(null);
     S.ghost = null;
     return;
   }
-  const p = world.groundPick();
-  if (!p) {
-    world.setGhost(null);
-    S.ghost = null;
-    return;
+  let ax = S.aim.x;
+  let ay = S.aim.y;
+  const d = Math.hypot(ax - S.me.x, ay - S.me.y);
+  const R = PLAYER.buildRange;
+  if (d > R) {
+    ax = S.me.x + ((ax - S.me.x) / d) * R;
+    ay = S.me.y + ((ay - S.me.y) / d) * R;
   }
-  const x = Math.floor(p.x / TILE) * TILE + TILE / 2;
-  const y = Math.floor(p.y / TILE) * TILE + TILE / 2;
+  const x = Math.floor(ax / TILE) * TILE + TILE / 2;
+  const y = Math.floor(ay / TILE) * TILE + TILE / 2;
   const reason = buildCheck(S.buildKind, x, y);
   S.ghost = { x, y, reason };
   world.setGhost(S.buildKind, x, y, !reason);
 }
 
-input.onClickWorld = () => {
+input.onLeftDown = () => {
   if (!S.buildKind) return false;
   if (S.ghost) {
     if (S.ghost.reason) hud.toast(S.ghost.reason);
@@ -295,15 +315,27 @@ input.onClickWorld = () => {
   return true;
 };
 
-// постройка под прицелом
+// щелчок ПКМ: в стройке — отмена, иначе плевок кислотой
+input.onRightClick = () => {
+  if (S.buildKind) setBuild(null);
+  else S.spitUntil = performance.now() + 90;
+};
+
+// постройка под курсором
 function targetStructure() {
-  const p = world.groundPick();
-  if (!p) return null;
-  const x = Math.floor(p.x / TILE) * TILE + TILE / 2;
-  const y = Math.floor(p.y / TILE) * TILE + TILE / 2;
+  if (S.aim.sky) return null;
+  const x = Math.floor(S.aim.x / TILE) * TILE + TILE / 2;
+  const y = Math.floor(S.aim.y / TILE) * TILE + TILE / 2;
   const s = S.structAt.get(`${x},${y}`);
   if (!s || Math.hypot(s.x - S.me.x, s.y - S.me.y) > PLAYER.buildRange + TILE * 2) return null;
   return world.statics.objs.get(s.i)?.s || s;
+}
+
+// угол от своего существа к точке прицела
+function aimAngle() {
+  const dx = S.aim.x - S.me.x;
+  const dy = S.aim.y - S.me.y;
+  return Math.hypot(dx, dy) > 8 ? Math.atan2(dy, dx) : S.me.face;
 }
 
 // ================= клавиши =================
@@ -327,10 +359,20 @@ input.onPress = (code) => {
     return;
   }
   if (code === 'KeyF') return net.send({ t: 'eat' });
+  if (code === 'KeyR') return net.send({ t: 'use', item: 'antirad' });
+  if (code === 'KeyC') return hud.toggleCraft();
   if (code === 'KeyB') return setBuild(S.buildKind ? null : S.lastBuildKind);
   if (code.startsWith('Digit')) {
-    const k = STRUCT_ORDER[Number(code.slice(5)) - 1];
-    if (k) setBuild(k);
+    const n = Number(code.slice(5));
+    if (S.buildKind) {
+      // в режиме стройки цифры выбирают постройку
+      const k = STRUCT_ORDER[n - 1];
+      if (k) setBuild(k);
+    } else {
+      // иначе — оружие из пояса; повторное нажатие убирает его
+      const k = hud.belt[n - 1];
+      if (k) net.send({ t: 'equip', item: S.you.wp === k ? null : k });
+    }
     return;
   }
   if (code === 'KeyX') {
@@ -340,17 +382,13 @@ input.onPress = (code) => {
     return;
   }
   if (code === 'Space' && S.stats.charge && input.enabled) {
-    S.me.face = input.cam.yaw;
-    net.send({ t: 'charge', ang: Math.round(input.cam.yaw * 100) / 100 });
+    S.me.face = aimAngle();
+    net.send({ t: 'charge', ang: Math.round(S.me.face * 100) / 100 });
   }
 };
 input.onRelease = (code) => {
   if (code === 'Tab') hud.togglePlayers(false);
 };
-// короткий щелчок не должен потеряться между отправками ввода
-input.canvas.addEventListener('mousedown', (e) => {
-  if (e.button === 0 && input.enabled && input.locked && !S.buildKind) S.attackUntil = performance.now() + 80;
-});
 
 // ================= интерполяция =================
 function interpolate(now) {
@@ -383,30 +421,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   if (!S.you) return;
   const you = S.you;
-
-  // ввод
-  const mv = input.moveVector();
-  const attacking = input.enabled && !S.buildKind && (input.mouse.l || now < S.attackUntil);
-  const spitting = input.enabled && !S.buildKind && input.mouse.r;
-  if (S.buildKind && input.mouse.r) {
-    setBuild(null);
-    input.mouse.r = false;
-  }
-  if (!you.dead) {
-    if (attacking || spitting) S.me.face = input.cam.yaw;
-    else if (mv.x || mv.y) S.me.face = angleLerp(S.me.face, Math.atan2(mv.y, mv.x), 1 - Math.exp(-dt * 12));
-  }
-  const msg = {
-    t: 'in', mx: Math.round(mv.x * 100) / 100, my: Math.round(mv.y * 100) / 100,
-    s: input.enabled && (input.keys.ShiftLeft || input.keys.ShiftRight) ? 1 : 0,
-    a: attacking ? 1 : 0, b: spitting ? 1 : 0, ang: Math.round(S.me.face * 100) / 100,
-  };
-  const sig = `${msg.mx},${msg.my},${msg.s},${msg.a},${msg.b},${msg.ang}`;
-  if ((sig !== S.lastInput && now - S.lastInputAt > 33) || now - S.lastInputAt > 250) {
-    net.send(msg);
-    S.lastInput = sig;
-    S.lastInputAt = now;
-  }
+  input.update(dt);
 
   // своё существо: догоняем сервер с небольшим предсказанием по скорости
   if (S.srv) {
@@ -422,14 +437,50 @@ function frame(now) {
     S.me.y += (ty - S.me.y) * f;
   }
 
-  const ents = interpolate(now);
-  world.syncEntities(ents, dt, S.myId, S.me);
+  // камера, затем точка прицела под курсором
   const myView = world.ents.get(S.myId);
   const hb = myView ? myView.creature.tpl.hb : 20;
   if (you.dead) input.cam.yaw += dt * 0.15;
   world.updateCamera(S.me.x, S.me.y, hb, input.cam, dt);
+  const hit = world.pickAt(input.pos.x, input.pos.y);
+  if (hit) S.aim = { x: hit.x, y: hit.y, sky: false };
+  else {
+    // курсор в небе — целимся по горизонтальному направлению луча
+    const d = world.rayDir;
+    const len = Math.hypot(d.x, d.z) || 1;
+    S.aim = { x: S.me.x + (d.x / len) * 400, y: S.me.y + (d.z / len) * 400, sky: true };
+  }
+
+  // ввод: существо смотрит на курсор, когда бьёт, плюётся, строит или стоит на месте
+  const mv = input.moveVector();
+  const attacking = input.enabled && !S.buildKind && (input.mouse.l || now - (input.lastClick || 0) < 90);
+  const spitting = input.enabled && !S.buildKind && (input.keys.KeyQ || now < S.spitUntil);
+  if (!you.dead) {
+    const aim = aimAngle();
+    if (attacking || spitting || S.buildKind) S.me.face = aim;
+    else if (mv.x || mv.y) S.me.face = angleLerp(S.me.face, Math.atan2(mv.y, mv.x), 1 - Math.exp(-dt * 12));
+    else if (input.pos.inside && !input.rotating) S.me.face = angleLerp(S.me.face, aim, 1 - Math.exp(-dt * 6));
+  }
+  const msg = {
+    t: 'in', mx: Math.round(mv.x * 100) / 100, my: Math.round(mv.y * 100) / 100,
+    s: input.enabled && (input.keys.ShiftLeft || input.keys.ShiftRight) ? 1 : 0,
+    a: attacking ? 1 : 0, b: spitting ? 1 : 0, ang: Math.round(S.me.face * 100) / 100,
+  };
+  const sig = `${msg.mx},${msg.my},${msg.s},${msg.a},${msg.b},${msg.ang}`;
+  if ((sig !== S.lastInput && now - S.lastInputAt > 33) || now - S.lastInputAt > 250) {
+    net.send(msg);
+    S.lastInput = sig;
+    S.lastInputAt = now;
+  }
+
+  const ents = interpolate(now);
+  world.syncEntities(ents, dt, S.myId, S.me);
   updateBuild();
   updateHint();
+  const showCursor = input.enabled && input.pos.inside && !you.dead;
+  world.setAim(S.aim.sky ? null : S.aim, showCursor && !S.buildKind);
+  cursorEl.style.display = showCursor ? '' : 'none';
+  if (showCursor) cursorEl.style.transform = `translate(${input.pos.x}px, ${input.pos.y}px)`;
   world.render(dt, S.phase, you.dead ? 900 : S.stats.vision * VIEW_MULT);
 
   hud.update(you, S.stats, { buildKind: S.buildKind });
@@ -439,12 +490,6 @@ function frame(now) {
     const mine = [];
     for (const s of S.structAt.values()) if (s.o === S.uid) mine.push(s);
     hud.drawMinimap(S.me, S.me.face, you.nest, S.meteor, mine, now / 1000);
-  }
-  const showLock = input.enabled && !input.locked && !input.dragMode && !hud.cont;
-  $('lockHint').classList.toggle('hidden', !showLock);
-  if (input.dragMode && !S.dragHintShown) {
-    S.dragHintShown = true;
-    hud.toast('Захват мыши недоступен: зажмите ЛКМ и тяните, чтобы вращать камеру. Щелчок — удар.');
   }
 }
 
@@ -471,12 +516,13 @@ function updateHint() {
   let cont = null;
   for (const o of world.statics.objs.values()) {
     const s = o.s;
-    if (s.k !== 'storage' && s.k !== 'remains') continue;
+    if (s.k !== 'storage' && s.k !== 'remains' && s.k !== 'crate') continue;
     if (Math.abs(s.x - S.me.x) > R + 30 || Math.abs(s.y - S.me.y) > R + 30) continue;
-    if (Math.hypot(s.x - S.me.x, s.y - S.me.y) - (s.k === 'remains' ? 16 : 20) <= R) cont = s;
+    if (Math.hypot(s.x - S.me.x, s.y - S.me.y) - (s.k === 'storage' ? 20 : 16) <= R) cont = s;
   }
+  const contLabel = { remains: `обыскать останки (${cont?.on || '?'})`, crate: 'открыть ящик с добычей', storage: 'открыть хранилище' };
   if (hud.cont) lines.push('<b>E</b> — закрыть');
-  else if (cont) lines.push(cont.k === 'remains' ? `<b>E</b> — обыскать останки (${cont.on || '?'})` : '<b>E</b> — открыть хранилище');
+  else if (cont) lines.push(`<b>E</b> — ${contLabel[cont.k]}`);
   else if (nearWater(S.me.x, S.me.y, S.stats.radius + 26) && you.w < 99) lines.push('<b>E</b> — пить');
   const t = targetStructure();
   if (t) {

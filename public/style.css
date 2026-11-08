@@ -62,10 +62,11 @@ button.big { padding: 12px 22px; font-size: 17px; }
 /* ---------- HUD ---------- */
 #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
 #hud .panel, #hud button, #chatInput, #playerList { pointer-events: auto; }
-#crosshair { position: fixed; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px 0 0 -10px; }
-#crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255, 255, 255, 0.85); box-shadow: 0 0 2px #000; }
-#crosshair::before { left: 9px; top: 3px; width: 2px; height: 14px; }
-#crosshair::after { top: 9px; left: 3px; height: 2px; width: 14px; }
+/* прицел, который ходит за мышью (системный курсор над игрой скрыт) */
+canvas#game { cursor: none; }
+#cursor { position: fixed; left: 0; top: 0; width: 26px; height: 26px; margin: -13px 0 0 -13px; pointer-events: none; z-index: 6; display: none; will-change: transform; }
+#cursor::before { content: ''; position: absolute; inset: 3px; border: 2px solid rgba(255, 255, 255, 0.9); border-radius: 50%; box-shadow: 0 0 3px #000, inset 0 0 2px #000; }
+#cursor::after { content: ''; position: absolute; left: 11px; top: 11px; width: 4px; height: 4px; border-radius: 50%; background: #fff; box-shadow: 0 0 2px #000; }
 
 #topLeft { position: fixed; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 8px; width: 230px; }
 #vitals { padding: 9px 11px; }
@@ -78,6 +79,8 @@ button.big { padding: 12px 22px; font-size: 17px; }
 #barFood .fill { background: linear-gradient(90deg, #c27c2c, #e0a34f); }
 #barWater .fill { background: linear-gradient(90deg, #2c7fc2, #4fa3e0); }
 #barSta .fill { background: linear-gradient(90deg, #b5a52c, #e0d24f); }
+#barRad .fill { background: linear-gradient(90deg, #7bbf2a, #c6f03a); }
+#barRad .ico { color: #c6f03a; }
 .bar.low .track { box-shadow: 0 0 0 1px #ff5d5d; animation: pulse 0.8s infinite alternate; }
 @keyframes pulse { from { opacity: 1; } to { opacity: 0.55; } }
 
@@ -88,7 +91,7 @@ button.big { padding: 12px 22px; font-size: 17px; }
 #btnEvolve { padding: 5px 9px; font-size: 13px; border-color: #6a4f9a; background: #2a2140; }
 #btnEvolve:hover { background: #3a2d58; }
 #btnEvolve.ready { box-shadow: 0 0 10px rgba(185, 140, 255, 0.6); }
-#inv { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 7px; }
+#inv { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 7px; }
 .chip { display: flex; flex-direction: column; align-items: center; padding: 3px 0; border-radius: 6px; background: rgba(255,255,255,0.04); font-size: 16px; }
 .chip b { font-size: 12px; font-variant-numeric: tabular-nums; }
 .chip.zero { opacity: 0.38; }
@@ -107,7 +110,27 @@ button.big { padding: 12px 22px; font-size: 17px; }
 .ab kbd { position: absolute; top: 3px; left: 3px; font-size: 9px; min-width: 0; padding: 0 3px; }
 .ab .cdv { position: absolute; left: 0; bottom: 0; width: 100%; background: rgba(0, 0, 0, 0.6); }
 .ab.off { opacity: 0.35; }
-#buildBar { display: flex; gap: 5px; padding: 6px; }
+#buildBar { display: flex; gap: 5px; padding: 6px; flex-wrap: wrap; justify-content: center; }
+#belt { display: flex; gap: 4px; padding: 5px; flex-wrap: wrap; justify-content: center; }
+.wslot { position: relative; width: 66px; padding: 4px 3px 3px; border-radius: 8px; background: rgba(255,255,255,0.04); border: 1px solid transparent; text-align: center; cursor: pointer; }
+.wslot .wi { font-size: 19px; line-height: 1.2; }
+.wslot .wn { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wslot .wa { font-size: 10.5px; color: #ffd8a8; min-height: 13px; }
+.wslot kbd { position: absolute; top: 2px; left: 2px; font-size: 9px; min-width: 0; padding: 0 3px; }
+.wslot.on { border-color: #e0a34f; background: rgba(224, 163, 79, 0.18); }
+.wslot.off { opacity: 0.4; }
+.bslot .bc .poor, .cc .poor { color: #ff8a80; }
+#radFx { position: fixed; inset: 0; pointer-events: none; z-index: 3; opacity: 0; transition: opacity 0.6s;
+  background: radial-gradient(ellipse at center, rgba(120, 255, 60, 0) 45%, rgba(120, 220, 40, 0.35) 80%, rgba(90, 180, 20, 0.6) 100%); }
+#craft { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 140px); overflow-y: auto; z-index: 10; padding: 14px 16px; }
+.craft-group { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent2); }
+.crow2 { display: grid; grid-template-columns: 30px 1fr auto auto; align-items: center; gap: 10px; padding: 6px 4px; border-top: 1px solid rgba(255,255,255,0.06); }
+.crow2 .ci { font-size: 20px; text-align: center; }
+.crow2 .cn b { font-size: 13.5px; }
+.crow2 .cd { font-size: 11.5px; color: var(--muted); }
+.crow2 .cd .bench { color: #ffd8a8; }
+.crow2 .cc { font-size: 12.5px; white-space: nowrap; }
+.crow2 button { padding: 5px 10px; font-size: 12.5px; }
 .bslot { width: 86px; padding: 5px 4px; border-radius: 8px; background: rgba(255,255,255,0.04); border: 1px solid transparent; text-align: center; font-size: 11px; cursor: pointer; }
 .bslot .bn { font-weight: 600; font-size: 11.5px; line-height: 1.2; margin: 2px 0; min-height: 28px; display: flex; align-items: center; justify-content: center; }
 .bslot .bc { color: var(--muted); }
@@ -115,7 +138,7 @@ button.big { padding: 12px 22px; font-size: 17px; }
 .bslot.poor .bc { color: #ff8a80; }
 .bslot kbd { font-size: 9px; }
 
-#hint { position: fixed; left: 50%; top: calc(50% + 26px); transform: translateX(-50%); font-size: 13.5px; text-shadow: 0 1px 3px #000, 0 0 2px #000; white-space: nowrap; text-align: center; line-height: 1.5; }
+#hint { position: fixed; left: 50%; bottom: 215px; transform: translateX(-50%); font-size: 13.5px; text-shadow: 0 1px 3px #000, 0 0 2px #000; white-space: nowrap; text-align: center; line-height: 1.5; }
 #hint .sub { color: var(--muted); font-size: 12px; }
 
 #chat { position: fixed; left: 12px; bottom: 14px; width: 360px; max-width: calc(100vw - 24px); }
@@ -135,7 +158,6 @@ button.big { padding: 12px 22px; font-size: 17px; }
 #playerList table { width: 100%; border-collapse: collapse; font-size: 14px; }
 #playerList th { text-align: left; color: var(--muted); font-weight: 500; padding-bottom: 6px; }
 #playerList td { padding: 3px 0; }
-#lockHint { position: fixed; left: 50%; top: 38%; transform: translateX(-50%); padding: 8px 16px; border-radius: 10px; background: rgba(0,0,0,0.55); font-size: 14px; }
 #helpBox { position: fixed; right: 12px; top: 262px; padding: 9px 12px; font-size: 12.5px; line-height: 1.75; color: #c5d6c6; }
 .help-title { font-weight: 600; color: #fff; margin-bottom: 2px; }
 

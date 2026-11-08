@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { computeStats, decodeGenome } from '/shared/creature.js';
 import { G, M, between, mergeParts, shade, mix, taper, glowTexture } from './util.js';
+import { weaponGeometry, weaponMaterial } from './weapons3d.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const BONE = '#efe6cf';
@@ -202,7 +203,7 @@ function buildTemplate(look, color) {
         const spread = (c - (clawN - 1) / 2) * 0.45;
         coneAlong(al, hand.clone().add(V(R * 0.05, 0, spread * R * 0.15)), V(1, -0.35, spread * 0.6), R * 0.06, clawLen, BONE);
       }
-      arms.push({ pos: V(R * 0.75, hb - R * 0.05, side * R * 0.62), geom: mergeParts(al), side });
+      arms.push({ pos: V(R * 0.75, hb - R * 0.05, side * R * 0.62), geom: mergeParts(al), side, hand });
     }
   }
 
@@ -274,6 +275,18 @@ export class Creature3D {
       this.root.add(pivot);
       return { pivot, ...a };
     });
+    // точка хвата оружия — в правой лапе (сторона +Z)
+    this.hand = new THREE.Group();
+    const right = this.arms.find((a) => a.side > 0);
+    if (right) {
+      this.hand.position.copy(right.hand);
+      right.pivot.add(this.hand);
+    } else {
+      this.hand.position.set(tpl.R * 1.4, tpl.hb, tpl.R * 0.4);
+      this.root.add(this.hand);
+    }
+    this.weaponKind = null;
+    this.weaponMesh = null;
     this.jaw = null;
     if (tpl.jaw) {
       this.jaw = new THREE.Group();
@@ -306,6 +319,24 @@ export class Creature3D {
 
   attack() {
     this.atk = 1;
+  }
+
+  // оружие в лапе (null — убрать)
+  setWeapon(kind) {
+    if (kind === this.weaponKind) return;
+    this.weaponKind = kind;
+    if (this.weaponMesh) {
+      this.hand.remove(this.weaponMesh);
+      this.weaponMesh = null;
+    }
+    const geo = kind ? weaponGeometry(kind) : null;
+    if (!geo) return;
+    const m = new THREE.Mesh(geo, weaponMaterial);
+    m.castShadow = true;
+    m.scale.setScalar(this.R / 18);
+    m.rotation.z = 0.15;
+    this.hand.add(m);
+    this.weaponMesh = m;
   }
 
   hit() {

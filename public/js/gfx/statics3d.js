@@ -186,6 +186,31 @@ function buildStructureGeoms() {
     parts.push({ geom: G.ico1, matrix: M(8, 6, 6, 0, 0, 0, 8, 6.5, 7), color: '#7a5a34' });
     out.remains = mergeParts(parts);
   }
+
+  // ящик с добычей: армейский зелёный, с полосой и защёлками
+  {
+    const parts = [];
+    parts.push({ geom: G.box, matrix: M(0, 9, 0, 0, 0, 0, 30, 18, 20), color: '#4c5e3a' });
+    parts.push({ geom: G.box, matrix: M(0, 19, 0, 0, 0, 0, 31, 3, 21), color: '#3e4d30' });
+    parts.push({ geom: G.box, matrix: M(0, 10, 10.2, 0, 0, 0, 30, 4, 0.8), color: '#d9b43a' });
+    for (const x of [-9, 9]) parts.push({ geom: G.box, matrix: M(x, 15, 10.6, 0, 0, 0, 3, 5, 1.2), color: '#9a9a9a' });
+    for (const x of [-15.5, 15.5]) parts.push({ geom: G.box, matrix: M(x, 11, 0, 0, 0, 0, 1.5, 6, 8), color: '#2e3a24' });
+    out.crate = mergeParts(parts);
+  }
+
+  // верстак: стол с тисками, пилой и молотом
+  {
+    const parts = [];
+    parts.push({ geom: G.box, matrix: M(0, 20, 0, 0, 0, 0, 38, 4, 26), color: '#8b5a2b' });
+    for (const [x, z] of [[-16, -10], [16, -10], [-16, 10], [16, 10]]) parts.push({ geom: G.box, matrix: M(x, 9, z, 0, 0, 0, 4, 18, 4), color: '#6b4423' });
+    parts.push({ geom: G.box, matrix: M(0, 6, 0, 0, 0, 0, 34, 2, 22), color: '#5a3a1c' });
+    parts.push({ geom: G.box, matrix: M(-11, 25, -6, 0, 0, 0, 9, 6, 7), color: '#5e5e64' });
+    parts.push({ geom: G.cyl6, matrix: M(-11, 25, 0, Math.PI / 2, 0, 0, 1.2, 10, 1.2), color: '#3d3d40' });
+    parts.push({ geom: G.box, matrix: M(8, 22.6, 4, 0, 0.4, 0, 18, 1, 6), color: '#c0c0c8' });
+    parts.push({ geom: G.cyl6, matrix: M(10, 23, -7, 0, 0, Math.PI / 2, 1, 14, 1), color: '#7a4e25' });
+    parts.push({ geom: G.box, matrix: M(17, 23, -7, 0, 0, 0, 4, 5, 6), color: '#5e5e64' });
+    out.workbench = mergeParts(parts);
+  }
   return out;
 }
 
@@ -196,16 +221,22 @@ export class StaticsView {
     this.group = new THREE.Group();
     scene.add(this.group);
     this.objs = new Map(); // id -> { s, parts: [[pool, key]], mesh, extra }
+    this.cutObjs = new Set(); // деревья и камни, которые прячем перед камерой
+    this.lightObjs = new Set(); // костры и кристаллы — источники света
+    this.shakeObjs = new Set(); // объекты, которые сейчас трясутся от удара
     this.time = 0;
 
     const leaf = flatMat({ roughness: 0.9 });
     this.pools = {
-      trunk: new Pool(this.group, G.cyl6, flatMat(), 2000),
-      pine: new Pool(this.group, G.cone, leaf, 5000),
-      blob: new Pool(this.group, G.ico, leaf, 6000),
-      rock: new Pool(this.group, G.dodeca, flatMat({ roughness: 0.95 }), 2000),
-      bush: new Pool(this.group, G.ico1, flatMat(), 3000),
-      berry: new Pool(this.group, G.ico, flatMat({ roughness: 0.4 }), 9000, false),
+      trunk: new Pool(this.group, G.cyl6, flatMat(), 6000),
+      pine: new Pool(this.group, G.cone, leaf, 12000),
+      blob: new Pool(this.group, G.ico, leaf, 14000),
+      rock: new Pool(this.group, G.dodeca, flatMat({ roughness: 0.95 }), 6000),
+      ore: new Pool(this.group, G.octa, new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: '#6a5a00', emissiveIntensity: 0.35, roughness: 0.4, flatShading: true }), 2000, false),
+      scrap: new Pool(this.group, G.box, flatMat({ roughness: 0.7, metalness: 0.35 }), 3000),
+      barrel: new Pool(this.group, G.cyl, flatMat({ roughness: 0.6, metalness: 0.3 }), 1500),
+      bush: new Pool(this.group, G.ico1, flatMat(), 9000),
+      berry: new Pool(this.group, G.ico, flatMat({ roughness: 0.4 }), 24000, false),
       crystal: new Pool(this.group, G.octa, new THREE.MeshStandardMaterial({
         color: 0xffffff, emissive: '#7a2bd6', emissiveIntensity: 0.9, roughness: 0.2, metalness: 0.3, flatShading: true,
       }), 600),
@@ -248,10 +279,13 @@ export class StaticsView {
     const o = { s, parts: [], mesh: null, extra: null, shake: 0 };
     this.objs.set(s.i, o);
     if (s.k === 'tree') this.addTree(o);
-    else if (s.k === 'rock') this.addRock(o);
+    else if (s.k === 'rock' || s.k === 'sulfur') this.addRock(o);
     else if (s.k === 'bush') this.addBush(o);
     else if (s.k === 'crystal') this.addCrystal(o);
+    else if (s.k === 'scrap') this.addScrap(o);
     else this.addStructure(o);
+    if (s.k === 'tree' || s.k === 'rock' || s.k === 'sulfur') this.cutObjs.add(o);
+    if (o.light) this.lightObjs.add(o);
   }
 
   remove(id) {
@@ -262,18 +296,45 @@ export class StaticsView {
       this.group.remove(o.mesh);
     }
     this.objs.delete(id);
+    this.cutObjs.delete(o);
+    this.lightObjs.delete(o);
+    this.shakeObjs.delete(o);
   }
 
   hit(id) {
     const o = this.objs.get(id);
-    if (o) o.shake = 0.35;
+    if (!o) return;
+    o.shake = 0.35;
+    this.shakeObjs.add(o);
   }
 
   onHpChange(o) {
     const k = o.s.k;
-    if (k === 'rock' && !o.hidden) this.addRock(o);
+    if ((k === 'rock' || k === 'sulfur') && !o.hidden) this.addRock(o);
     else if (k === 'bush') this.addBush(o);
     else if (k === 'crystal') this.addCrystal(o);
+    else if (k === 'scrap') this.addScrap(o);
+  }
+
+  // груда металлолома: ржавые ящики, листы и бочка
+  addScrap(o) {
+    const s = o.s;
+    const r = rng(s.v || 0.4);
+    const gy = this.ground(s.x, s.y);
+    const k = 0.6 + 0.4 * (s.h / (s.m || 1));
+    const rust = ['#8a5a3a', '#6e4a36', '#7d7a74', '#9a6a3a', '#5e5a55'];
+    for (let i = 0; i < 5; i++) {
+      const key = `${s.i}:${i}`;
+      const a = r() * Math.PI * 2;
+      const d = i === 0 ? 0 : 8 + r() * 8;
+      const w = (8 + r() * 10) * k;
+      const h = (4 + r() * 8) * k;
+      this.pools.scrap.set(key, M(s.x + Math.cos(a) * d, gy + h / 2 + (i === 0 ? 0 : r() * 4), s.y + Math.sin(a) * d, (r() - 0.5) * 0.8, r() * 3, (r() - 0.5) * 0.8, w, h, w * (0.4 + r() * 0.8)), _c.set(rust[i]).clone());
+      if (o.parts.length < 5) o.parts.push([this.pools.scrap, key]);
+    }
+    const bk = `${s.i}:barrel`;
+    this.pools.barrel.set(bk, M(s.x + 12, gy + 9 * k, s.y - 8, 0, 0, r() < 0.4 ? Math.PI / 2 : 0, 6 * k, 18 * k, 6 * k), _c.set(r() < 0.5 ? '#c9a227' : '#4a6b3a').clone());
+    if (o.parts.length < 6) o.parts.push([this.pools.barrel, bk]);
   }
 
   addTree(o) {
@@ -316,7 +377,8 @@ export class StaticsView {
     const k = 0.55 + 0.45 * (s.h / (s.m || 1));
     const base = 20 * k;
     const g = 0.42 + r() * 0.12;
-    const col = new THREE.Color(g, g, g * 0.95);
+    const sulfur = s.k === 'sulfur';
+    const col = sulfur ? new THREE.Color(g * 1.15, g * 1.05, g * 0.55) : new THREE.Color(g, g, g * 0.95);
     const key = s.i;
     const m = M(s.x, gy + base * 0.35, s.y, r() * 3, r() * 3, r() * 3, base * (1 + r() * 0.4), base * (0.7 + r() * 0.3), base * (1 + r() * 0.4));
     this.pools.rock.set(key, m, col);
@@ -326,6 +388,15 @@ export class StaticsView {
     const m2 = M(s.x + (r() - 0.5) * 26, gy + 3, s.y + (r() - 0.5) * 26, r() * 3, r() * 3, r() * 3, base * 0.45);
     this.pools.rock.set(key2, m2, col.clone().multiplyScalar(0.9));
     if (o.parts.length < 2) o.parts.push([this.pools.rock, key2]);
+    // жёлтые кристаллы серы на валуне
+    if (sulfur) {
+      for (let i = 0; i < 4; i++) {
+        const ok = `${s.i}:o${i}`;
+        const a = r() * Math.PI * 2;
+        this.pools.ore.set(ok, M(s.x + Math.cos(a) * base * 0.55, gy + base * (0.55 + r() * 0.3), s.y + Math.sin(a) * base * 0.55, r() * 3, r() * 3, r() * 3, 3.2 * k, 5.5 * k, 3.2 * k), _c.setHSL(0.14, 0.9, 0.55).clone());
+        if (o.parts.length < 6) o.parts.push([this.pools.ore, ok]);
+      }
+    }
   }
 
   addBush(o) {
@@ -419,7 +490,7 @@ export class StaticsView {
       o.extra = { f1, f2, glow };
       o.light = 'fire';
     }
-    if (s.k === 'remains') grp.rotation.y = (s.i * 1.7) % (Math.PI * 2);
+    if (s.k === 'remains' || s.k === 'crate') grp.rotation.y = (s.i * 1.7) % (Math.PI * 2);
     o.mesh = grp;
     this.group.add(grp);
   }
@@ -444,9 +515,9 @@ export class StaticsView {
     const dx = target.x - ax;
     const dz = target.z - az;
     const len2 = dx * dx + dz * dz || 1;
-    for (const o of this.objs.values()) {
+    for (const o of this.cutObjs) {
       const tree = o.s.k === 'tree' && o.base;
-      const rock = o.s.k === 'rock';
+      const rock = o.s.k === 'rock' || o.s.k === 'sulfur';
       if (!tree && !rock) continue;
       const t = ((o.s.x - ax) * dx + (o.s.y - az) * dz) / len2;
       let hide = false;
@@ -474,17 +545,18 @@ export class StaticsView {
     const t = this.time;
     if (target) this.cutaway(camPos, target);
     const lightSources = [];
-    for (const o of this.objs.values()) {
-      if (o.shake > 0) {
-        o.shake -= dt;
-        const amp = Math.max(0, o.shake) * 6;
-        for (const [pool, key, m, color] of o.base || []) {
-          if (o.hidden && pool !== this.pools.trunk) continue;
-          _m.copy(m);
-          if (pool !== this.pools.trunk) _m.elements[12] += Math.sin(t * 50) * amp;
-          pool.set(key, _m, color);
-        }
+    for (const o of this.shakeObjs) {
+      o.shake -= dt;
+      if (o.shake <= 0) this.shakeObjs.delete(o);
+      const amp = Math.max(0, o.shake) * 6;
+      for (const [pool, key, m, color] of o.base || []) {
+        if (o.hidden && pool !== this.pools.trunk) continue;
+        _m.copy(m);
+        if (pool !== this.pools.trunk) _m.elements[12] += Math.sin(t * 50) * amp;
+        pool.set(key, _m, color);
       }
+    }
+    for (const o of this.lightObjs) {
       if (o.extra) {
         const fl = 1 + Math.sin(t * 13 + o.s.i) * 0.12 + Math.sin(t * 23 + o.s.i * 2) * 0.08;
         o.extra.f1.scale.set(7 * fl, 20 * fl, 7 * fl);

@@ -3,18 +3,23 @@ import crypto from 'node:crypto';
 import {
   TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, TERRAIN_SPEED, isWater, DAY_LENGTH, isNight,
   ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, NPCS, NPC_TARGET,
-  NIGHT_EXTRA_STALKERS, PLAYER, COMPLEXITY_CAP, VIEW_MULT,
+  NIGHT_EXTRA_STALKERS, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
+  RAD, CRATE, CRATE_LOOT, BENCH_RANGE, MUTANTS_PER_ZONE,
 } from '../shared/config.js';
 import {
   computeStats, decodeGenome, encodeGenome, evolveCost, sanitizeGenome, defaultGenome, complexity, cloneGenome,
 } from '../shared/creature.js';
-import { generateMap, generateResources, Grid } from './world.js';
+import { generateMap, generateResources, generateZones, zoneStrength, zoneAt, Grid } from './world.js';
 import { updateNpc } from './ai.js';
+
+// снаряды: радиус попадания
+const PROJ_R = { acid: 7, stone: 5, arrow: 4, bullet: 3, bomb: 8 };
 
 const HS = TILE / 2;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const emptyInv = () => Object.fromEntries(ITEM_KEYS.map((k) => [k, 0]));
 const round1 = (v) => Math.round(v * 10) / 10;
+const idleInput = () => ({ mx: 0, my: 0, sprint: false, attack: false, spit: false });
 
 function circleBox(cx, cy, r, bx, by) {
   const px = clamp(cx, bx - HS, bx + HS);
@@ -54,13 +59,65 @@ export class Game {
     this.meteor = { state: 'idle', next: this.time + 150, x: 0, y: 0, impactAt: 0, until: 0 };
     this.timers = { npc: 0, second: 0, list: 0 };
 
-    for (const r of generateResources(this.tiles, seed)) this.addResource(r.kind, r.x, r.y, r.v);
+    this.zones = generateZones(this.tiles, seed);
+    for (const r of generateResources(this.tiles, seed, this.zones)) this.addResource(r.kind, r.x, r.y, r.v);
+    for (const z of this.zones) {
+      for (let i = 0; i < CRATE.perZone; i++) this.spawnCrate(z);
+    }
     if (saved) this.loadSaved(saved);
     for (const kind of Object.keys(NPC_TARGET)) {
       for (let i = 0; i < NPC_TARGET[kind]; i++) this.spawnNpc(kind, true);
     }
+    for (const z of this.zones) {
+      for (let i = 0; i < MUTANTS_PER_ZONE; i++) this.spawnMutantInZone(z);
+    }
     this.sAdd.clear();
     this.sDel.clear();
+  }
+
+  // сила радиации в точке: постоянные зоны + воронка свежего метеорита
+  radAt(x, y) {
+    let s = zoneStrength(this.zones, x, y);
+    const m = this.meteor;
+    if (m.state === 'landed') {
+      const d = Math.hypot(x - m.x, y - m.y);
+      if (d < RAD.meteorZone.r) s = Math.max(s, RAD.meteorZone.lvl * Math.min(1, (RAD.meteorZone.r - d) / (RAD.meteorZone.r * 0.4)));
+    }
+    return s;
+  }
+
+  // ---------- ящики с добычей в радиационных зонах ----------
+  rollLoot() {
+    const inv = emptyInv();
+    const total = CRATE_LOOT.reduce((a, l) => a + l[3], 0);
+    for (let i = 0; i < CRATE.rolls; i++) {
+      let r = Math.random() * total;
+      for (const [item, min, max, w] of CRATE_LOOT) {
+        r -= w;
+        if (r <= 0) {
+          inv[item] += min + Math.floor(Math.random() * (max - min + 1));
+          break;
+        }
+      }
+    }
+    return inv;
+  }
+
+  spawnCrate(z) {
+    for (let i = 0; i < 40; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.sqrt(Math.random()) * z.r * 0.8;
+      const x = z.x + Math.cos(a) * d;
+      const y = z.y + Math.sin(a) * d;
+      if (isWater(this.tileAt(x, y))) continue;
+      if (this.grid.query(x, y, 40).some((s) => Math.hypot(s.x - x, s.y - y) < (s.r || 20) + 18)) continue;
+      const s = { id: this.nextId++, cat: 'crate', kind: 'crate', x, y, r: 18, inv: this.rollLoot(), dna: 0, zone: z.id };
+      this.statics.set(s.id, s);
+      this.grid.insert(s);
+      this.sAdd.set(s.id, s);
+      return s;
+    }
+    return null;
   }
 
   phase() {
@@ -132,7 +189,13 @@ export class Game {
     const base = { i: s.id, k: s.kind, x: Math.round(s.x), y: Math.round(s.y) };
     if (s.cat === 'res') return { ...base, h: Math.ceil(s.hp), m: s.maxHp, v: s.v };
     if (s.cat === 'struct') return { ...base, h: Math.ceil(s.hp), m: s.maxHp, o: s.owner, on: s.ownerName, c: s.ownerColor };
+    if (s.cat === 'crate') return base;
     return { ...base, on: s.ownerName };
+  }
+
+  // контейнер, из которого можно только забирать (останки и ящики)
+  isLootBox(s) {
+    return s.cat === 'remains' || s.cat === 'crate';
   }
 
   // ================= клиенты =================
@@ -181,8 +244,53 @@ export class Game {
       case 'close': p.openCont = null; return undefined;
       case 'respawn': return this.onRespawn(p, msg);
       case 'chat': return this.onChat(p, msg);
+      case 'equip': return this.onEquip(p, msg);
+      case 'craft': return this.onCraft(p, msg);
+      case 'use': return this.onUse(p, msg);
       default: return undefined;
     }
+  }
+
+  // ---------- оружие и крафт ----------
+  onEquip(p, m) {
+    if (p.dead) return;
+    const item = m.item;
+    if (!item) {
+      p.weapon = null;
+      return;
+    }
+    if (!WEAPONS[item] || !(p.inv[item] > 0)) return;
+    if (!p.stats.canHold) return this.toast(p, 'Чтобы держать оружие, нужны когти (геном — G)');
+    p.weapon = item;
+  }
+
+  nearBench(p) {
+    for (const s of this.grid.query(p.x, p.y, BENCH_RANGE + TILE)) {
+      if (s.kind === 'workbench' && Math.hypot(s.x - p.x, s.y - p.y) <= BENCH_RANGE) return true;
+    }
+    return false;
+  }
+
+  onCraft(p, m) {
+    if (p.dead) return;
+    const rec = RECIPES[m.item];
+    if (!rec) return;
+    if (rec.bench && !this.nearBench(p)) return this.toast(p, 'Нужен верстак рядом');
+    for (const k in rec.cost) if ((p.inv[k] || 0) < rec.cost[k]) return this.toast(p, 'Не хватает ресурсов');
+    for (const k in rec.cost) p.inv[k] -= rec.cost[k];
+    const out = rec.out || 1;
+    p.inv[m.item] += out;
+    p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${out} ${ITEMS[m.item].icon} ${ITEMS[m.item].name}` });
+    // новое оружие сразу в лапы, если они свободны
+    if (WEAPONS[m.item] && !p.weapon && p.stats.canHold) p.weapon = m.item;
+  }
+
+  onUse(p, m) {
+    if (p.dead || m.item !== 'antirad') return;
+    if (!(p.inv.antirad > 0)) return this.toast(p, 'Нет антирада — создайте его в меню крафта (C)');
+    p.inv.antirad--;
+    p.rad = Math.max(0, p.rad - RAD.antirad);
+    p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `−${RAD.antirad} ☢` });
   }
 
   onJoin(client, msg) {
@@ -203,7 +311,7 @@ export class Game {
     const p = this.createPlayer(client, token, prof);
     client.player = p;
     this.send(client, {
-      t: 'welcome', id: p.id, uid: prof.uid, token, seed: this.seed, tiles: this.tilesB64,
+      t: 'welcome', id: p.id, uid: prof.uid, token, seed: this.seed, tiles: this.tilesB64, zones: this.zones,
       statics: [...this.statics.values()].map((s) => this.serStatic(s)),
     });
     this.broadcast({ t: 'chat', sys: true, text: `${name} появился на острове` });
@@ -216,12 +324,12 @@ export class Game {
       name: prof.name, color: prof.color, genome: sanitizeGenome(prof.genome), look: '', stats: null,
       x: 0, y: 0, kbx: 0, kby: 0, angle: 0,
       hp: 100, food: 80, water: 80, stamina: 100, dna: Math.max(0, Math.floor(prof.dna || 0)), inv: cleanInv(prof.inv),
-      input: { mx: 0, my: 0, sprint: false, attack: false, spit: false },
+      input: idleInput(),
       cd: { melee: 0, spit: 0, charge: 0 },
       combatT: 0, atkT: 0, hitT: 0, slowT: 0, spikeT: 0, drinkT: 0, eatT: 0, lastChat: -10,
       charging: 0, chargeDir: 0, chargeHit: null,
       spawnProtect: PLAYER.spawnProtect, dead: false, openCont: null, nearFire: false,
-      kills: prof.kills || 0, pfx: [],
+      kills: prof.kills || 0, pfx: [], weapon: null, rad: clamp(Number(prof.rad) || 0, 0, 100), radHere: 0, warnT: 0,
     };
     this.applyGenome(p);
     if (prof.alive && Number.isFinite(prof.x)) {
@@ -260,6 +368,7 @@ export class Game {
     prof.food = p.food;
     prof.water = p.water;
     prof.kills = p.kills;
+    prof.rad = p.rad;
   }
 
   // ================= действия игрока =================
@@ -346,6 +455,7 @@ export class Game {
     p.inv.crystal -= c.crystals;
     p.genome = g;
     this.applyGenome(p);
+    if (!p.stats.canHold) p.weapon = null;
     this.fx.push({ k: 'evolve', x: p.x, y: p.y, c: p.color });
     this.send(p.client, { t: 'evolved' });
     this.toast(p, 'Эволюция завершена!');
@@ -377,7 +487,7 @@ export class Game {
     let bd = Infinity;
     const range = p.stats.radius + PLAYER.interactRange;
     for (const s of this.grid.query(p.x, p.y, range + TILE)) {
-      if (s.cat !== 'remains' && !(s.cat === 'struct' && STRUCTURES[s.kind].storage)) continue;
+      if (!this.isLootBox(s) && !(s.cat === 'struct' && STRUCTURES[s.kind].storage)) continue;
       const d = Math.hypot(s.x - p.x, s.y - p.y) - s.r;
       if (d < bd) {
         bd = d;
@@ -398,8 +508,11 @@ export class Game {
   }
 
   sendCont(p, s) {
-    const title = s.cat === 'remains' ? `Останки: ${s.ownerName}` : `${STRUCTURES[s.kind].name}${s.ownerName ? ` (${s.ownerName})` : ''}`;
-    this.send(p.client, { t: 'cont', id: s.id, title, inv: s.inv, dna: s.dna || 0, remains: s.cat === 'remains', cap: STORAGE_CAP });
+    let title;
+    if (s.cat === 'remains') title = `Останки: ${s.ownerName}`;
+    else if (s.cat === 'crate') title = CRATE.name;
+    else title = `${STRUCTURES[s.kind].name}${s.ownerName ? ` (${s.ownerName})` : ''}`;
+    this.send(p.client, { t: 'cont', id: s.id, title, inv: s.inv, dna: s.dna || 0, remains: this.isLootBox(s), cap: STORAGE_CAP });
   }
 
   onCont(p, m) {
@@ -430,8 +543,10 @@ export class Game {
       p.inv[res] -= put;
       s.inv[res] += put;
     } else return;
-    if (s.cat === 'remains' && !(s.dna > 0) && ITEM_KEYS.every((k) => !s.inv[k])) {
+    if (this.isLootBox(s) && !(s.dna > 0) && ITEM_KEYS.every((k) => !s.inv[k])) {
       this.removeStatic(s);
+      // пустой ящик через время появится снова где-то в той же зоне
+      if (s.cat === 'crate') this.respawnQueue.push({ crate: s.zone, at: this.time + CRATE.respawn * (0.8 + Math.random() * 0.4) });
       return;
     }
     for (const q of this.players.values()) if (q.openCont === s.id) this.sendCont(q, s);
@@ -444,6 +559,7 @@ export class Game {
     Object.assign(p, {
       x: pos.x, y: pos.y, dead: false, hp: p.stats.maxHp, food: 75, water: 75, stamina: 100,
       spawnProtect: PLAYER.spawnProtect, kbx: 0, kby: 0, charging: 0, combatT: 0, slowT: 0,
+      input: idleInput(), // не продолжаем движение, начатое до смерти
     });
     p.cd.melee = 0;
     p.cd.spit = 0;
@@ -498,17 +614,26 @@ export class Game {
     p.slowT = Math.max(0, p.slowT - dt);
     p.drinkT = Math.max(0, p.drinkT - dt);
     p.eatT = Math.max(0, p.eatT - dt);
+    p.warnT = Math.max(0, p.warnT - dt);
     p.spawnProtect = Math.max(0, p.spawnProtect - dt);
+    if (p.weapon && !(p.inv[p.weapon] > 0)) p.weapon = null; // оружие выложили или потратили
 
     const moving = p.input.mx !== 0 || p.input.my !== 0;
     const sprinting = p.input.sprint && moving && p.stamina > 1 && p.charging <= 0;
+
+    // радиация: копится в зонах, снаружи спадает
+    p.radHere = this.radAt(p.x, p.y);
+    if (p.radHere > 0) p.rad = Math.min(100, p.rad + RAD.ratePerLevel * p.radHere * (1 - st.radResist) * dt);
+    else p.rad = Math.max(0, p.rad - RAD.decay * dt);
+    if (p.rad > RAD.dmgStart) this.damageCreature(p, (p.rad - RAD.dmgStart) * RAD.dmgPerPoint * dt, null, 'rad');
+    if (p.dead) return;
 
     // голод, жажда, регенерация
     p.food = Math.max(0, p.food - PLAYER.hungerRate * st.metabolism * (sprinting ? 1.6 : 1) * dt);
     p.water = Math.max(0, p.water - PLAYER.thirstRate * st.metabolism * dt);
     p.nearFire = this.nearKind(p.x, p.y, 'campfire', 140);
     if (p.food <= 0 || p.water <= 0) this.damageCreature(p, PLAYER.starveDmg * dt, null, 'starve');
-    else if (p.food > 35 && p.water > 35 && p.hp < st.maxHp) {
+    else if (p.food > 35 && p.water > 35 && p.rad < RAD.regenBlock && p.hp < st.maxHp) {
       p.hp = Math.min(st.maxHp, p.hp + (PLAYER.regen + (p.nearFire ? PLAYER.fireRegen : 0)) * dt);
     }
     if (p.dead) return;
@@ -535,11 +660,7 @@ export class Game {
     this.envEffects(p, dt);
     if (p.dead) return;
 
-    if (p.input.attack && p.cd.melee <= 0 && p.charging <= 0) {
-      p.cd.melee = st.attackCd;
-      p.atkT = 0.25;
-      this.melee(p, st.meleeDmg);
-    }
+    if (p.input.attack && p.cd.melee <= 0 && p.charging <= 0) this.attack(p);
     if (p.input.spit && st.spit && p.cd.spit <= 0) {
       p.cd.spit = st.spit.cd;
       this.spit(p);
@@ -708,9 +829,57 @@ export class Game {
   }
 
   // ================= бой и добыча =================
-  melee(a, dmg) {
+  // Атака игрока: удар голыми лапами/оружием ближнего боя, выстрел или бросок
+  attack(p) {
+    const st = p.stats;
+    const w = p.weapon ? WEAPONS[p.weapon] : null;
+    if (!w || w.type === 'melee') {
+      p.cd.melee = w ? w.cd : st.attackCd;
+      p.atkT = 0.25;
+      this.melee(p, st.meleeDmg + (w ? w.dmg : 0), w);
+      return;
+    }
+    if (w.type === 'ranged' && !(p.inv[w.ammo] > 0)) {
+      p.cd.melee = 0.4;
+      if (p.warnT <= 0) {
+        p.warnT = 2;
+        this.toast(p, `Нет боеприпасов: ${ITEMS[w.ammo].name.toLowerCase()}`);
+      }
+      return;
+    }
+    if (w.type === 'ranged') p.inv[w.ammo]--;
+    else p.inv[p.weapon]--; // бросок расходует само оружие
+    p.cd.melee = w.cd;
+    p.atkT = 0.2;
+    this.fireWeapon(p, w);
+  }
+
+  fireWeapon(p, w) {
+    const n = w.pellets || 1;
+    const r0 = p.stats.radius + 8;
+    for (let i = 0; i < n; i++) {
+      const ang = p.angle + (Math.random() - 0.5) * 2 * (w.spread || 0);
+      const ca = Math.cos(ang);
+      const sa = Math.sin(ang);
+      const sp = w.speed * (n > 1 ? 0.85 + Math.random() * 0.3 : 1);
+      this.addProjectile(p, w.proj, p.x + ca * r0, p.y + sa * r0, ca * sp, sa * sp, w.dmg, w.life * (n > 1 ? 0.8 + Math.random() * 0.4 : 1), w);
+    }
+    this.fx.push({ k: 'shot', x: p.x + Math.cos(p.angle) * r0, y: p.y + Math.sin(p.angle) * r0, m: w.proj });
+  }
+
+  addProjectile(owner, kind, x, y, vx, vy, dmg, life, w = null) {
+    const j = { id: this.nextId++, owner: owner.id, kind, x, y, vx, vy, dmg, life, a: Math.atan2(vy, vx) };
+    if (kind === 'bomb') {
+      j.radius = w.radius;
+      j.structDmg = w.structDmg;
+    }
+    this.projectiles.set(j.id, j);
+    return j;
+  }
+
+  melee(a, dmg, w = null) {
     const st = a.stats;
-    const reach = st.radius + st.reach;
+    const reach = st.radius + st.reach + (w ? w.reach : 0);
     const ca = Math.cos(a.angle);
     const sa = Math.sin(a.angle);
     let hitCreature = false;
@@ -733,7 +902,7 @@ export class Game {
     let best = null;
     let bestD = Infinity;
     for (const s of this.grid.query(a.x + ca * reach * 0.5, a.y + sa * reach * 0.5, reach + TILE)) {
-      if (s.cat === 'remains') continue;
+      if (this.isLootBox(s)) continue;
       let d;
       if (s.cat === 'struct') {
         const cx = clamp(a.x, s.x - HS, s.x + HS);
@@ -756,14 +925,15 @@ export class Game {
       }
     }
     if (!best) return;
-    if (best.cat === 'res') this.gather(a, best, dmg);
-    else this.damageStructure(best, dmg * STRUCT_DMG.melee[STRUCTURES[best.kind].mat], a);
+    if (best.cat === 'res') this.gather(a, best, dmg, w);
+    else if (best.cat === 'struct') this.damageStructure(best, dmg * STRUCT_DMG.melee[STRUCTURES[best.kind].mat] * (w?.struct || 1), a);
   }
 
-  gather(p, s, dmg) {
+  gather(p, s, dmg, w = null) {
     const def = RESOURCES[s.kind];
     let rate = def.rate || 0;
     if (s.kind === 'bush' && p.stats.diet === 'herb') rate *= 2;
+    if (w && w.gather && w.gather[def.give]) rate *= w.gather[def.give];
     const before = s.hp;
     s.hp = Math.max(0, s.hp - (def.fixed ?? dmg));
     const amount = def.fixed ? 1 : Math.floor((s.maxHp - s.hp) * rate) - Math.floor((s.maxHp - before) * rate);
@@ -786,10 +956,11 @@ export class Game {
 
   damageCreature(t, amount, src, kind) {
     if (t.dead || amount <= 0) return 0;
-    if (t.type === 'player' && t.spawnProtect > 0 && kind !== 'starve') return 0;
-    if (kind !== 'starve') amount *= 1 - t.stats.defense;
+    const silent = kind === 'starve' || kind === 'rad'; // урон «изнутри»: без цифр и защиты
+    if (t.type === 'player' && t.spawnProtect > 0 && !silent) return 0;
+    if (!silent) amount *= 1 - t.stats.defense;
     t.hp -= amount;
-    if (kind !== 'starve') {
+    if (!silent) {
       t.hitT = 0.15;
       t.combatT = 6;
       this.fx.push({ k: 'dmg', x: t.x, y: t.y, n: Math.max(1, Math.round(amount)), c: t.type === 'player' ? '#ff6b6b' : '#ffd166' });
@@ -816,8 +987,9 @@ export class Game {
       if (killerIsPlayer) {
         src.dna += def.dna;
         src.inv.meat += def.meat;
+        src.inv.bone += def.bone || 0;
         if (def.crystal) src.inv.crystal += def.crystal;
-        src.pfx.push({ k: 'gain', x: t.x, y: t.y, text: `+${def.dna} 🧬  +${def.meat} 🥩${def.crystal ? `  +${def.crystal} 💎` : ''}` });
+        src.pfx.push({ k: 'gain', x: t.x, y: t.y, text: `+${def.dna} 🧬  +${def.meat} 🥩  +${def.bone || 0} 🦴${def.crystal ? `  +${def.crystal} 💎` : ''}` });
       }
       return;
     }
@@ -826,12 +998,15 @@ export class Game {
     t.hp = 0;
     t.charging = 0;
     t.openCont = null;
+    t.input = idleInput();
+    t.weapon = null;
+    t.rad = 0;
     const dnaDrop = Math.floor(t.dna * PLAYER.remainsDnaShare);
     t.dna -= dnaDrop;
     if (dnaDrop > 0 || ITEM_KEYS.some((k) => t.inv[k] > 0)) this.addRemains(t.x, t.y, t.inv, dnaDrop, t.name);
     t.inv = emptyInv();
     this.fx.push({ k: 'die', x: t.x, y: t.y, c: t.color, r: t.stats.radius });
-    const reasons = { starve: 'голод и жажда', spikes: 'колья', meteor: 'метеорит' };
+    const reasons = { starve: 'голод и жажда', spikes: 'колья', meteor: 'метеорит', rad: 'радиация' };
     const killer = src ? (src.type === 'player' ? src.name : NPCS[src.kind].name) : reasons[kind] || 'неизвестность';
     if (killerIsPlayer) {
       src.kills++;
@@ -862,51 +1037,86 @@ export class Game {
     const sp = a.stats.spit;
     const ca = Math.cos(a.angle);
     const sa = Math.sin(a.angle);
-    const j = {
-      id: this.nextId++, owner: a.id, x: a.x + ca * (a.stats.radius + 8), y: a.y + sa * (a.stats.radius + 8),
-      vx: ca * sp.speed, vy: sa * sp.speed, dmg: sp.dmg, life: 0.9,
-    };
-    this.projectiles.set(j.id, j);
+    const r0 = a.stats.radius + 8;
+    const j = this.addProjectile(a, 'acid', a.x + ca * r0, a.y + sa * r0, ca * sp.speed, sa * sp.speed, sp.dmg, 0.9);
     this.fx.push({ k: 'spit', x: j.x, y: j.y });
   }
 
+  // Снаряды летят мелкими шагами, чтобы быстрые пули не пролетали сквозь цели
   updateProjectiles(dt) {
     for (const j of this.projectiles.values()) {
       j.life -= dt;
-      j.x += j.vx * dt;
-      j.y += j.vy * dt;
-      if (j.life <= 0 || j.x < 0 || j.y < 0 || j.x > WORLD_W || j.y > WORLD_H) {
-        this.projectiles.delete(j.id);
+      const owner = this.getCreature(j.owner);
+      const steps = Math.max(1, Math.ceil((Math.hypot(j.vx, j.vy) * dt) / 14));
+      let hit = null;
+      for (let k = 0; k < steps && !hit; k++) {
+        j.x += (j.vx * dt) / steps;
+        j.y += (j.vy * dt) / steps;
+        hit = this.projectileHit(j, owner);
+      }
+      const expired = j.life <= 0 || j.x < 0 || j.y < 0 || j.x > WORLD_W || j.y > WORLD_H;
+      if (!hit && !expired) continue;
+      this.projectiles.delete(j.id);
+      if (j.kind === 'bomb') {
+        this.explode(j, owner);
         continue;
       }
-      const owner = this.getCreature(j.owner);
-      let done = false;
-      for (const t of this.creaturesNear(j.x, j.y, 60)) {
-        if (t.id === j.owner) continue;
-        if (owner && owner.type === 'npc' && t.type === 'npc') continue;
-        if (Math.hypot(t.x - j.x, t.y - j.y) > t.stats.radius + 7) continue;
-        this.damageCreature(t, j.dmg, owner, 'acid');
-        t.slowT = 1.5;
-        done = true;
-        break;
-      }
-      if (!done) {
-        for (const s of this.grid.query(j.x, j.y, 30)) {
-          if (s.cat === 'struct' && STRUCTURES[s.kind].solid && circleBox(j.x, j.y, 6, s.x, s.y)) {
-            this.damageStructure(s, j.dmg * STRUCT_DMG.acid[STRUCTURES[s.kind].mat], owner);
-            done = true;
-            break;
-          }
-          if (s.cat === 'res' && s.cr > 0 && Math.hypot(s.x - j.x, s.y - j.y) < s.cr + 6) {
-            done = true;
-            break;
-          }
+      if (!hit) continue;
+      if (hit.type) {
+        this.damageCreature(hit, j.dmg, owner, j.kind === 'acid' ? 'acid' : 'ranged');
+        if (j.kind === 'acid') hit.slowT = 1.5;
+        else {
+          const d = Math.hypot(j.vx, j.vy) || 1;
+          hit.kbx += (j.vx / d) * 60;
+          hit.kby += (j.vy / d) * 60;
         }
+      } else if (hit.cat === 'struct') {
+        const mult = PROJ_STRUCT[j.kind] || PROJ_STRUCT.stone;
+        this.damageStructure(hit, j.dmg * mult[STRUCTURES[hit.kind].mat], owner);
       }
-      if (done) {
-        this.projectiles.delete(j.id);
-        this.fx.push({ k: 'splash', x: j.x, y: j.y });
+      this.fx.push({ k: j.kind === 'acid' ? 'splash' : 'impact', x: j.x, y: j.y, m: j.kind });
+    }
+  }
+
+  // во что попал снаряд: существо, твёрдая постройка или ресурс
+  projectileHit(j, owner) {
+    const pr = PROJ_R[j.kind] || 5;
+    for (const t of this.creaturesNear(j.x, j.y, 70)) {
+      if (t.id === j.owner) continue;
+      if (owner && owner.type === 'npc' && t.type === 'npc') continue;
+      if (Math.hypot(t.x - j.x, t.y - j.y) <= t.stats.radius + pr) return t;
+    }
+    for (const s of this.grid.query(j.x, j.y, 30)) {
+      if (s.cat === 'struct' && STRUCTURES[s.kind].solid && circleBox(j.x, j.y, pr, s.x, s.y)) {
+        if (STRUCTURES[s.kind].solid === 'owner' && owner && owner.uid === s.owner) continue;
+        return s;
       }
+      if (s.cat === 'res' && s.cr > 0 && Math.hypot(s.x - j.x, s.y - j.y) < s.cr + pr) return s;
+    }
+    return null;
+  }
+
+  // взрыв бомбы: урон существам вокруг и сильный урон постройкам
+  explode(j, owner) {
+    const R = j.radius || 100;
+    this.fx.push({ k: 'boom', x: j.x, y: j.y });
+    for (const t of this.creaturesNear(j.x, j.y, R + 40)) {
+      const d = Math.hypot(t.x - j.x, t.y - j.y) - t.stats.radius;
+      if (d > R) continue;
+      const k = 1 - Math.max(0, d) / R;
+      this.damageCreature(t, j.dmg * (0.4 + 0.6 * k), owner, 'bomb');
+      const dd = Math.hypot(t.x - j.x, t.y - j.y) || 1;
+      t.kbx += ((t.x - j.x) / dd) * 420 * k;
+      t.kby += ((t.y - j.y) / dd) * 420 * k;
+    }
+    for (const s of this.grid.query(j.x, j.y, R + TILE)) {
+      if (s.cat !== 'struct') continue;
+      const cx = clamp(j.x, s.x - HS, s.x + HS);
+      const cy = clamp(j.y, s.y - HS, s.y + HS);
+      const d = Math.hypot(cx - j.x, cy - j.y);
+      if (d > R) continue;
+      const k = 1 - d / R;
+      this.damageStructure(s, j.structDmg * (0.35 + 0.65 * k) * BOMB_STRUCT[STRUCTURES[s.kind].mat], owner);
     }
   }
 
@@ -972,6 +1182,7 @@ export class Game {
       const x = tx * TILE + HS;
       const y = ty * TILE + HS;
       if (!initial && this.nearestPlayer(x, y, 700, false)) continue;
+      if (zoneAt(this.zones, x, y)) continue; // в радиационных зонах живут только мутанты
       const near = this.grid.query(x, y, 200);
       if (near.some((s) => s.cat === 'struct')) continue;
       if (near.some((s) => s.cat === 'res' && s.cr > 0 && Math.hypot(s.x - x, s.y - y) < s.cr + 32)) continue;
@@ -993,9 +1204,31 @@ export class Game {
     return n;
   }
 
+  spawnMutantInZone(z, initial = true) {
+    for (let i = 0; i < 30; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.sqrt(Math.random()) * z.r * 0.7;
+      const x = z.x + Math.cos(a) * d;
+      const y = z.y + Math.sin(a) * d;
+      if (isWater(this.tileAt(x, y))) continue;
+      if (!initial && this.nearestPlayer(x, y, 500, false)) continue;
+      const n = this.spawnNpc('mutant', true, { x, y });
+      if (n) n.zone = z.id;
+      return n;
+    }
+    return null;
+  }
+
   maintainNpcs(night) {
     const counts = { grazer: 0, stalker: 0, colossus: 0, mutant: 0 };
-    for (const n of this.npcs.values()) counts[n.kind]++;
+    const perZone = new Map();
+    for (const n of this.npcs.values()) {
+      counts[n.kind]++;
+      if (n.zone !== undefined) perZone.set(n.zone, (perZone.get(n.zone) || 0) + 1);
+    }
+    for (const z of this.zones) {
+      if ((perZone.get(z.id) || 0) < MUTANTS_PER_ZONE) this.spawnMutantInZone(z, false);
+    }
     for (const kind of Object.keys(NPC_TARGET)) {
       const target = NPC_TARGET[kind] + (kind === 'stalker' && night ? NIGHT_EXTRA_STALKERS : 0);
       if (counts[kind] < target) this.spawnNpc(kind);
@@ -1072,6 +1305,14 @@ export class Game {
         keep.push(r);
         continue;
       }
+      if (r.crate !== undefined) {
+        const z = this.zones[r.crate];
+        if (z && !this.spawnCrate(z)) {
+          r.at = this.time + 20;
+          keep.push(r);
+        }
+        continue;
+      }
       const def = RESOURCES[r.kind];
       const blocked = this.grid.query(r.x, r.y, TILE).some((s) => (s.cat === 'struct' && circleBox(r.x, r.y, Math.max(def.cr, def.r * 0.5), s.x, s.y)) || (s.cat === 'res' && Math.hypot(s.x - r.x, s.y - r.y) < (s.r + def.r) * 0.6))
         || this.creaturesNear(r.x, r.y, def.r + 40).length > 0;
@@ -1095,6 +1336,7 @@ export class Game {
       i: p.id, k: 'p', x: Math.round(p.x), y: Math.round(p.y), a: Math.round(p.angle * 100) / 100,
       h: Math.ceil(p.hp), mh: p.stats.maxHp, n: p.name, c: p.color, g: p.look,
       at: p.atkT > 0 ? 1 : 0, hf: p.hitT > 0 ? 1 : 0, ch: p.charging > 0 ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0,
+      w: p.weapon || undefined,
     };
   }
 
@@ -1107,12 +1349,16 @@ export class Game {
 
   serYou(p) {
     const nest = this.nests.get(p.uid);
+    // инвентарь — только ненулевые предметы, чтобы не гонять лишнее по сети
+    const inv = {};
+    for (const k of ITEM_KEYS) if (p.inv[k]) inv[k] = p.inv[k];
     return {
       id: p.id, hp: Math.ceil(p.hp), mh: p.stats.maxHp, f: round1(p.food), w: round1(p.water), sta: Math.round(p.stamina),
-      dna: p.dna, inv: p.inv, g: p.look, c: p.color,
+      dna: p.dna, inv, g: p.look, c: p.color,
       cd: { m: round1(p.cd.melee), s: round1(p.cd.spit), c: round1(p.cd.charge) },
       cb: p.combatT > 0 ? 1 : 0, dead: p.dead ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0, fire: p.nearFire ? 1 : 0,
       nest: nest ? [nest.x, nest.y] : null, k: p.kills,
+      wp: p.weapon, rad: round1(p.rad), rz: round1(p.radHere), bench: this.nearBench(p) ? 1 : 0,
     };
   }
 
@@ -1124,7 +1370,7 @@ export class Game {
     const dyn = [];
     for (const p of this.players.values()) if (!p.dead) dyn.push(this.serPlayer(p));
     for (const n of this.npcs.values()) dyn.push(this.serNpc(n));
-    for (const j of this.projectiles.values()) dyn.push({ i: j.id, k: 'j', x: Math.round(j.x), y: Math.round(j.y) });
+    for (const j of this.projectiles.values()) dyn.push({ i: j.id, k: 'j', t: j.kind, x: Math.round(j.x), y: Math.round(j.y), a: Math.round(j.a * 100) / 100 });
     const fx = this.fx;
     this.fx = [];
     const m = this.meteor;
@@ -1168,7 +1414,7 @@ export class Game {
       structures.push({ k: s.kind, x: s.x, y: s.y, hp: s.hp, o: s.owner, on: s.ownerName, oc: s.ownerColor, inv: s.inv });
     }
     const profiles = [...this.profiles.entries()].map(([token, prof]) => [token, prof]);
-    return { v: 1, seed: this.seed, time: this.time, structures, profiles };
+    return { v: 2, mapW: MAP_W, seed: this.seed, time: this.time, structures, profiles };
   }
 
   loadSaved(data) {

@@ -2,8 +2,8 @@
 
 export const TICK_RATE = 30;
 export const TILE = 40;
-export const MAP_W = 120;
-export const MAP_H = 120;
+export const MAP_W = 240;
+export const MAP_H = 240;
 export const WORLD_W = TILE * MAP_W;
 export const WORLD_H = TILE * MAP_H;
 
@@ -23,21 +23,95 @@ export function lightAt(phase) {
 }
 export const isNight = (phase) => lightAt(phase) < 0.5;
 
+// Всё, что можно носить: ресурсы, боеприпасы, расходники и оружие.
+// kind: res — ресурс, ammo — боеприпас, use — расходник, weapon — оружие
 export const ITEMS = {
-  wood: { name: 'Древесина', icon: '🪵' },
-  stone: { name: 'Камень', icon: '🪨' },
-  berries: { name: 'Ягоды', icon: '🫐' },
-  meat: { name: 'Мясо', icon: '🥩' },
-  crystal: { name: 'Мутаген', icon: '💎' },
+  wood: { name: 'Древесина', icon: '🪵', kind: 'res' },
+  stone: { name: 'Камень', icon: '🪨', kind: 'res' },
+  berries: { name: 'Ягоды', icon: '🫐', kind: 'res' },
+  meat: { name: 'Мясо', icon: '🥩', kind: 'res' },
+  bone: { name: 'Кости', icon: '🦴', kind: 'res' },
+  scrap: { name: 'Металлолом', icon: '⚙️', kind: 'res' },
+  sulfur: { name: 'Сера', icon: '🟡', kind: 'res' },
+  crystal: { name: 'Мутаген', icon: '💎', kind: 'res' },
+  arrows: { name: 'Стрелы', icon: '➶', kind: 'ammo' },
+  bullets: { name: 'Патроны', icon: '🔸', kind: 'ammo' },
+  antirad: { name: 'Антирад', icon: '💊', kind: 'use' },
+  club: { name: 'Дубина', icon: '🏏', kind: 'weapon' },
+  spear: { name: 'Копьё', icon: '🔱', kind: 'weapon' },
+  axe: { name: 'Каменный топор', icon: '🪓', kind: 'weapon' },
+  sling: { name: 'Праща', icon: '🪢', kind: 'weapon' },
+  blade: { name: 'Костяной клинок', icon: '🗡️', kind: 'weapon' },
+  pickaxe: { name: 'Кирка', icon: '⛏️', kind: 'weapon' },
+  bow: { name: 'Лук', icon: '🏹', kind: 'weapon' },
+  crossbow: { name: 'Арбалет', icon: '🎯', kind: 'weapon' },
+  pistol: { name: 'Самопал', icon: '🔫', kind: 'weapon' },
+  shotgun: { name: 'Дробовик', icon: '💥', kind: 'weapon' },
+  bomb: { name: 'Взрывпакет', icon: '🧨', kind: 'weapon' },
 };
 export const ITEM_KEYS = Object.keys(ITEMS);
+export const RES_KEYS = ITEM_KEYS.filter((k) => ITEMS[k].kind === 'res');
+
+// ---- Оружие ----
+// melee: добавка к урону тела, дальность и скорость удара; gather — множитель добычи
+// ranged: снаряды и боеприпас; throw — расходуется само оружие
+export const WEAPONS = {
+  club: { type: 'melee', tier: 1, dmg: 7, reach: 8, cd: 0.6, struct: 1.4, desc: 'Тяжёлый удар, хорошо ломает постройки' },
+  spear: { type: 'melee', tier: 1, dmg: 10, reach: 28, cd: 0.75, desc: 'Бьёт издалека' },
+  axe: { type: 'melee', tier: 1, dmg: 6, reach: 6, cd: 0.6, gather: { wood: 2.2 }, struct: 1.2, desc: 'Рубит деревья вдвое быстрее' },
+  sling: { type: 'ranged', tier: 1, ammo: 'stone', proj: 'stone', dmg: 12, speed: 560, life: 0.8, cd: 0.85, desc: 'Метает камни' },
+  blade: { type: 'melee', tier: 2, dmg: 15, reach: 10, cd: 0.42, desc: 'Быстрые сильные удары' },
+  pickaxe: { type: 'melee', tier: 2, dmg: 6, reach: 8, cd: 0.65, gather: { stone: 2.2, sulfur: 2.2, scrap: 1.6 }, struct: 1.5, desc: 'Добывает камень, серу и металл вдвое быстрее' },
+  bow: { type: 'ranged', tier: 2, ammo: 'arrows', proj: 'arrow', dmg: 24, speed: 720, life: 1.0, cd: 0.9, desc: 'Тихий и точный' },
+  crossbow: { type: 'ranged', tier: 2, ammo: 'arrows', proj: 'arrow', dmg: 42, speed: 900, life: 1.0, cd: 1.7, desc: 'Мощный, но долго перезаряжается' },
+  pistol: { type: 'ranged', tier: 3, ammo: 'bullets', proj: 'bullet', dmg: 30, speed: 1300, life: 0.75, cd: 0.4, spread: 0.04, desc: 'Быстрая стрельба' },
+  shotgun: { type: 'ranged', tier: 3, ammo: 'bullets', proj: 'bullet', dmg: 10, pellets: 7, speed: 1100, life: 0.4, cd: 1.15, spread: 0.3, desc: 'Сокрушителен вблизи' },
+  bomb: { type: 'throw', tier: 3, proj: 'bomb', dmg: 70, structDmg: 450, radius: 100, speed: 420, life: 1.3, cd: 1.0, desc: 'Бросок, взрыв рушит стены' },
+};
+export const WEAPON_ORDER = ['club', 'spear', 'axe', 'sling', 'blade', 'pickaxe', 'bow', 'crossbow', 'pistol', 'shotgun', 'bomb'];
+// урон снарядов по постройкам (доля урона по материалу)
+export const PROJ_STRUCT = {
+  acid: { wood: 0.6, stone: 0.3 },
+  stone: { wood: 0.15, stone: 0.05 },
+  arrow: { wood: 0.2, stone: 0.05 },
+  bullet: { wood: 0.15, stone: 0.05 },
+};
+export const BOMB_STRUCT = { wood: 1, stone: 0.7 };
+
+// ---- Крафт ----
+// bench: нужен верстак рядом
+export const RECIPES = {
+  club: { cost: { wood: 15 } },
+  spear: { cost: { wood: 25 } },
+  axe: { cost: { wood: 15, stone: 10 } },
+  sling: { cost: { wood: 10 } },
+  blade: { cost: { bone: 12, wood: 5 } },
+  pickaxe: { cost: { wood: 20, stone: 15, bone: 5 } },
+  bow: { cost: { wood: 30, bone: 6 } },
+  crossbow: { cost: { wood: 35, bone: 10, scrap: 8 } },
+  arrows: { cost: { wood: 4, stone: 2 }, out: 5 },
+  antirad: { cost: { berries: 4, bone: 2 }, out: 1 },
+  bullets: { cost: { scrap: 1, sulfur: 3 }, out: 4, bench: true },
+  pistol: { cost: { scrap: 25, wood: 10 }, bench: true },
+  shotgun: { cost: { scrap: 45, wood: 15 }, bench: true },
+  bomb: { cost: { sulfur: 20, scrap: 6, wood: 5 }, bench: true },
+};
+export const RECIPE_GROUPS = [
+  ['Ближний бой', ['club', 'spear', 'axe', 'blade', 'pickaxe']],
+  ['Дальний бой', ['sling', 'bow', 'crossbow']],
+  ['Боеприпасы и расходники', ['arrows', 'antirad', 'bullets']],
+  ['Огнестрел и взрывчатка', ['pistol', 'shotgun', 'bomb']],
+];
+export const BENCH_RANGE = 130;
 
 // r — радиус для ударов, cr — радиус столкновения (0 = проходимо)
 // Добыча за удар: доля от нанесённого урона (rate) или фиксированно (fixed)
 export const RESOURCES = {
   tree: { name: 'Дерево', r: 30, cr: 14, hp: 120, give: 'wood', rate: 0.25, respawn: 100 },
   rock: { name: 'Валун', r: 24, cr: 22, hp: 160, give: 'stone', rate: 0.15, respawn: 140 },
+  sulfur: { name: 'Сернистая руда', r: 24, cr: 22, hp: 160, give: 'sulfur', rate: 0.12, respawn: 160 },
   bush: { name: 'Ягодный куст', r: 18, cr: 0, hp: 40, give: 'berries', rate: 0.15, respawn: 70 },
+  scrap: { name: 'Груда металлолома', r: 22, cr: 18, hp: 140, give: 'scrap', rate: 0.12, respawn: 120 },
   crystal: { name: 'Кристалл мутагена', r: 16, cr: 12, hp: 45, give: 'crystal', fixed: 15, dna: 6, respawn: 0 },
 };
 
@@ -57,15 +131,36 @@ export const STRUCTURES = {
   campfire: { name: 'Костёр', cost: { wood: 15, stone: 5 }, hp: 200, solid: false, mat: 'stone', desc: 'Свет ночью и лечение рядом' },
   spikes: { name: 'Колья', cost: { wood: 25, stone: 5 }, hp: 250, solid: false, mat: 'wood', touchDmg: 12, desc: 'Ранят чужаков' },
   nest: { name: 'Гнездо', cost: { wood: 40, berries: 10 }, hp: 400, solid: false, mat: 'wood', desc: 'Точка возрождения (одно на игрока)' },
+  workbench: { name: 'Верстак', cost: { wood: 50, stone: 30, scrap: 15 }, hp: 500, solid: true, mat: 'wood', desc: 'Нужен для огнестрела, патронов и взрывчатки' },
 };
-export const STRUCT_ORDER = ['wall_wood', 'wall_stone', 'door', 'storage', 'campfire', 'spikes', 'nest'];
+export const STRUCT_ORDER = ['wall_wood', 'wall_stone', 'door', 'storage', 'campfire', 'spikes', 'nest', 'workbench'];
 export const STORAGE_CAP = 1500;
 // Множители урона по постройкам в зависимости от типа атаки и материала
 export const STRUCT_DMG = {
   melee: { wood: 0.5, stone: 0.25 },
-  acid: { wood: 0.6, stone: 0.3 },
   charge: { wood: 1.6, stone: 0.9 },
 };
+
+// ---- Радиация ----
+// В зонах облучение растёт (быстрее у центра), снаружи медленно спадает.
+// Выше regenBlock — не лечимся, выше dmgStart — теряем здоровье.
+export const RAD = {
+  ratePerLevel: 3.2, // ед/с на уровень зоны
+  decay: 1.2,
+  regenBlock: 25,
+  dmgStart: 50,
+  dmgPerPoint: 0.07, // урон/с за каждую единицу выше dmgStart
+  antirad: 45,
+  zones: 6, // сколько зон на острове
+  meteorZone: { lvl: 1, r: 230 }, // воронка упавшего метеорита фонит, пока там кристаллы
+};
+export const CRATE = { name: 'Ящик с добычей', perZone: 4, respawn: 200, rolls: 3 };
+// [предмет, мин, макс, вес]
+export const CRATE_LOOT = [
+  ['scrap', 4, 12, 10], ['sulfur', 5, 15, 6], ['bullets', 3, 8, 4], ['arrows', 4, 10, 5],
+  ['antirad', 1, 2, 5], ['bone', 3, 8, 4], ['crystal', 1, 2, 2],
+  ['crossbow', 1, 1, 1], ['pistol', 1, 1, 0.6], ['shotgun', 1, 1, 0.35], ['bomb', 1, 1, 0.5],
+];
 
 // ---- Эволюция ----
 export const MOUTHS = {
@@ -75,16 +170,17 @@ export const MOUTHS = {
 };
 export const PARTS = {
   legs: { name: 'Ноги', icon: '🦵', max: 3, desc: 'Скорость передвижения' },
-  claws: { name: 'Когти', icon: '🐾', max: 3, desc: 'Урон в ближнем бою и добыча ресурсов' },
+  claws: { name: 'Когти', icon: '🐾', max: 3, desc: 'Урон и добыча. Нужны, чтобы держать оружие' },
   armor: { name: 'Панцирь', icon: '🛡️', max: 3, desc: 'Здоровье и снижение урона, но медленнее' },
   spikes: { name: 'Шипы', icon: '🌵', max: 3, desc: 'Отражают часть урона тем, кто бьёт вплотную' },
   eyes: { name: 'Глаза', icon: '👁️', max: 3, desc: 'Дальность обзора (и ночного зрения)' },
   horns: { name: 'Рога', icon: '🦏', max: 3, desc: 'Таран [Пробел]: рывок с уроном, ломает постройки' },
-  acid: { name: 'Кислотная железа', icon: '🧪', max: 3, desc: 'Плевок кислотой [ПКМ], замедляет цель' },
+  acid: { name: 'Кислотная железа', icon: '🧪', max: 3, desc: 'Плевок кислотой [Q], замедляет цель' },
   fins: { name: 'Плавники', icon: '🐟', max: 2, desc: 'Быстрое плавание' },
   glow: { name: 'Биолюминесценция', icon: '✨', max: 1, desc: 'Светитесь в темноте (вас тоже видно!)' },
   stomach: { name: 'Желудок', icon: '🫙', max: 2, desc: 'Голод и жажда растут медленнее' },
   size: { name: 'Масса тела', icon: '🐘', max: 3, desc: 'Больше здоровья и урона, но крупнее и медленнее' },
+  radres: { name: 'Радиорезистентность', icon: '☢️', max: 3, desc: 'Радиация копится медленнее (−30% за уровень)' },
 };
 export const PART_KEYS = Object.keys(PARTS);
 export const LEVEL_COST = [0, 10, 25, 50]; // ДНК за каждый уровень части
@@ -93,15 +189,16 @@ export const COMPLEXITY_CAP = 12; // максимум суммарных уро�
 export const MOUTH_CHANGE_COST = 10;
 
 // ---- Дикие существа ----
-// genome: буква рта + уровни частей в порядке PART_KEYS
+// genome: буква рта + уровни частей в порядке PART_KEYS (недостающие = 0)
 export const NPCS = {
-  grazer: { name: 'Травник', genome: 'h20001000000', color: '#c8a46a', hp: 50, speed: 115, dmg: 0, behavior: 'passive', flee: 230, dna: 5, meat: 3, biomes: [T.GRASS, T.FOREST] },
-  stalker: { name: 'Клыкач', genome: 'c22102000001', color: '#8a3344', hp: 85, speed: 148, dmg: 9, behavior: 'aggressive', aggro: 230, nightAggro: 380, dna: 12, meat: 4, biomes: [T.FOREST, T.ROCK, T.GRASS] },
-  colossus: { name: 'Колосс', genome: 'o30300200003', color: '#5b7a3d', hp: 650, speed: 78, dmg: 28, behavior: 'territorial', aggro: 170, dna: 60, meat: 14, crystal: 3, attackCd: 1.3, biomes: [T.ROCK, T.FOREST] },
-  mutant: { name: 'Мутант', genome: 'c22011010100', color: '#9b4be0', hp: 120, speed: 160, dmg: 12, behavior: 'aggressive', aggro: 420, nightAggro: 420, dna: 22, meat: 2, crystal: 1, biomes: [] },
+  grazer: { name: 'Травник', genome: 'h20001000000', color: '#c8a46a', hp: 50, speed: 115, dmg: 0, behavior: 'passive', flee: 230, dna: 5, meat: 3, bone: 2, biomes: [T.GRASS, T.FOREST] },
+  stalker: { name: 'Клыкач', genome: 'c22102000001', color: '#8a3344', hp: 85, speed: 148, dmg: 9, behavior: 'aggressive', aggro: 230, nightAggro: 380, dna: 12, meat: 4, bone: 3, biomes: [T.FOREST, T.ROCK, T.GRASS] },
+  colossus: { name: 'Колосс', genome: 'o30300200003', color: '#5b7a3d', hp: 650, speed: 78, dmg: 28, behavior: 'territorial', aggro: 170, dna: 60, meat: 14, bone: 12, crystal: 3, attackCd: 1.3, biomes: [T.ROCK, T.FOREST] },
+  mutant: { name: 'Мутант', genome: 'c22011010100', color: '#9b4be0', hp: 120, speed: 160, dmg: 12, behavior: 'aggressive', aggro: 420, nightAggro: 420, dna: 22, meat: 2, bone: 3, crystal: 1, biomes: [] },
 };
-export const NPC_TARGET = { grazer: 45, stalker: 14, colossus: 2 };
-export const NIGHT_EXTRA_STALKERS = 12;
+export const NPC_TARGET = { grazer: 150, stalker: 45, colossus: 6 };
+export const NIGHT_EXTRA_STALKERS = 36;
+export const MUTANTS_PER_ZONE = 3;
 
 export const PLAYER = {
   startDna: 15,
@@ -124,4 +221,4 @@ export const PLAYER = {
 // Дальность прорисовки = обзор (глаза) * VIEW_MULT. Дальше сервер существ не присылает.
 export const VIEW_MULT = 1.6;
 
-export const PLAYER_COLORS =['#6fbf73', '#4fa3e0', '#e0a34f', '#d9534f', '#b574e0', '#e0d24f', '#4fe0c8', '#e07bb5'];
+export const PLAYER_COLORS = ['#6fbf73', '#4fa3e0', '#e0a34f', '#d9534f', '#b574e0', '#e0d24f', '#4fe0c8', '#e07bb5'];
