@@ -44,7 +44,8 @@ function cleanInv(raw) {
 }
 
 export class Game {
-  constructor(seed, saved) {
+  constructor(seed, saved, authStore) {
+    this.authStore = authStore;
     this.seed = seed;
     this.tiles = generateMap(seed);
     this.tilesHash = tilesHash(this.tiles); // карту клиент строит сам по зерну и сверяет
@@ -595,14 +596,20 @@ export class Game {
 
   onJoin(client, msg) {
     if (client.player) return;
+    const token = typeof msg.token === 'string' && /^[a-f0-9]{32}$/.test(msg.token) ? msg.token : null;
+    const account = token ? this.authStore.session(token) : null;
+    if (!account) {
+      this.send(client, { t: 'authError', text: 'Войдите в аккаунт или зарегистрируйтесь.' });
+      return;
+    }
+    if ([...this.players.values()].some((p) => p.token === token)) {
+      this.send(client, { t: 'authError', text: 'Этот аккаунт уже находится в игре.' });
+      return;
+    }
     const name = String(msg.name || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 16) || 'Безымянный';
     const color = /^#[0-9a-fA-F]{6}$/.test(msg.color) ? msg.color : '#6fbf73';
-    let token = typeof msg.token === 'string' && /^[a-f0-9]{32}$/.test(msg.token) ? msg.token : null;
-    // тот же токен уже в игре (вторая вкладка) — заводим новое существо
-    if (token && [...this.players.values()].some((p) => p.token === token)) token = null;
-    let prof = token ? this.profiles.get(token) : null;
+    let prof = this.profiles.get(token);
     if (!prof) {
-      token = crypto.randomBytes(16).toString('hex');
       prof = { uid: crypto.randomBytes(6).toString('hex'), genome: defaultGenome(), dna: PLAYER.startDna, inv: emptyInv(), alive: false, kills: 0 };
       this.profiles.set(token, prof);
     }
@@ -622,6 +629,16 @@ export class Game {
     });
     this.broadcast({ t: 'chat', sys: true, text: `${name} появился на острове` });
     this.broadcastPlayerList();
+  }
+
+  linkProfile(fromToken, toToken) {
+    if (typeof fromToken !== 'string' || !/^[a-f0-9]{32}$/.test(fromToken) || fromToken === toToken ||
+        this.authStore.hasToken(fromToken) || this.profiles.has(toToken)) return false;
+    const prof = this.profiles.get(fromToken);
+    if (!prof) return false;
+    this.profiles.delete(fromToken);
+    this.profiles.set(toToken, prof);
+    return true;
   }
 
   createPlayer(client, token, prof) {

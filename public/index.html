@@ -98,19 +98,38 @@
     <div class="join-left">
       <h1>МУТАГЕН</h1>
       <p class="tag">После ядерной войны. Выживай. Добывай. Мутируй.</p>
-      <label class="field">Имя выжившего
-        <input id="nameInput" maxlength="16" placeholder="Например, Вера" autocomplete="off">
-      </label>
-      <div class="look-grid">
-        <div class="field-label">Пол</div><div class="seg" id="lookSex"></div>
-        <div class="field-label">Кожа</div><div class="seg" id="lookSkin"></div>
-        <div class="field-label">Причёска</div><div class="seg" id="lookHair"></div>
-        <div class="field-label">Волосы</div><div class="swatches" id="lookHairColor"></div>
-        <div class="field-label" id="lookBeardLabel">Борода</div><div class="seg" id="lookBeard"></div>
-        <div class="field-label">Метка</div><div id="colors"></div>
-      </div>
-      <button id="playBtn" class="primary big">Играть</button>
-      <div id="joinErr"></div>
+      <section id="authPanel" class="auth-panel">
+        <div class="auth-tabs">
+          <button type="button" class="auth-tab on" data-auth-mode="login">Войти</button>
+          <button type="button" class="auth-tab" data-auth-mode="register">Регистрация</button>
+        </div>
+        <form id="authForm" class="auth-form">
+          <label class="field">Имя пользователя
+            <input id="authUsername" minlength="3" maxlength="20" autocomplete="username" required>
+          </label>
+          <label class="field">Пароль
+            <input id="authPassword" type="password" minlength="8" maxlength="128" autocomplete="current-password" required>
+          </label>
+          <button id="authSubmit" class="primary big" type="submit">Войти</button>
+          <div id="authErr" role="alert"></div>
+        </form>
+      </section>
+      <section id="characterSetup" class="character-setup hidden">
+        <div class="account-bar"><span>Аккаунт: <b id="accountName"></b></span><button id="logoutBtn" type="button">Выйти</button></div>
+        <label class="field">Имя выжившего
+          <input id="nameInput" maxlength="16" placeholder="Например, Вера" autocomplete="off">
+        </label>
+        <div class="look-grid">
+          <div class="field-label">Пол</div><div class="seg" id="lookSex"></div>
+          <div class="field-label">Кожа</div><div class="seg" id="lookSkin"></div>
+          <div class="field-label">Причёска</div><div class="seg" id="lookHair"></div>
+          <div class="field-label">Волосы</div><div class="swatches" id="lookHairColor"></div>
+          <div class="field-label" id="lookBeardLabel">Борода</div><div class="seg" id="lookBeard"></div>
+          <div class="field-label">Метка</div><div id="colors"></div>
+        </div>
+        <button id="playBtn" class="primary big">Играть</button>
+        <div id="joinErr" role="alert"></div>
+      </section>
       <a href="/preview.html" target="_blank" class="muted small">Посмотреть мир без входа →</a>
     </div>
     <div class="join-right">

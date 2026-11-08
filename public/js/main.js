@@ -52,6 +52,12 @@ const cursorEl = $('cursor');
 
 // ================= экран входа =================
 let color = store.get('mutagen.color') || PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)];
+let authMode = 'login';
+let activeAccount = null;
+let legacyToken = store.get('mutagen.token');
+const authUsername = $('authUsername');
+const authPassword = $('authPassword');
+const authSubmit = $('authSubmit');
 const nameInput = $('nameInput');
 nameInput.value = store.get('mutagen.name') || '';
 // внешность: пол.кожа.причёска.цвет волос.борода
@@ -114,13 +120,115 @@ for (const c of PLAYER_COLORS) {
 }
 renderLook();
 joinPreview.start();
-setTimeout(() => nameInput.focus(), 50);
+
+function setAuthMode(mode) {
+  authMode = mode;
+  for (const button of document.querySelectorAll('[data-auth-mode]')) {
+    button.classList.toggle('on', button.dataset.authMode === mode);
+  }
+  authSubmit.textContent = mode === 'register' ? 'Создать аккаунт' : 'Войти';
+  authPassword.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
+  $('authErr').textContent = '';
+}
+
+for (const button of document.querySelectorAll('[data-auth-mode]')) {
+  button.addEventListener('click', () => setAuthMode(button.dataset.authMode));
+}
+
+async function authRequest(path, body) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    const error = new Error(result.error || 'Не удалось войти.');
+    error.status = response.status;
+    throw error;
+  }
+  return result;
+}
+
+function setAuthenticated(account) {
+  activeAccount = account;
+  store.set('mutagen.token', account.token);
+  authUsername.value = account.username;
+  $('accountName').textContent = account.username;
+  $('authPanel').classList.add('hidden');
+  $('characterSetup').classList.remove('hidden');
+  nameInput.value = store.get('mutagen.name') || account.username;
+  $('joinErr').textContent = '';
+}
+
+function logout() {
+  activeAccount = null;
+  store.set('mutagen.token', '');
+  $('characterSetup').classList.add('hidden');
+  $('authPanel').classList.remove('hidden');
+  authPassword.value = '';
+  $('joinErr').textContent = '';
+  authUsername.focus();
+}
+
+$('logoutBtn').addEventListener('click', logout);
+
+$('authForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  authSubmit.disabled = true;
+  $('authErr').textContent = '';
+  try {
+    const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+    const credentials = {
+      username: authUsername.value,
+      password: authPassword.value,
+    };
+    if (authMode === 'register' && legacyToken) credentials.legacyToken = legacyToken;
+    const account = await authRequest(endpoint, credentials);
+    if (authMode === 'register') legacyToken = null;
+    authPassword.value = '';
+    setAuthenticated(account);
+  } catch (error) {
+    $('authErr').textContent = error.message;
+  } finally {
+    authSubmit.disabled = false;
+  }
+});
+
+async function restoreSession() {
+  const token = store.get('mutagen.token');
+  if (!token) {
+    setTimeout(() => authUsername.focus(), 50);
+    return;
+  }
+  authSubmit.disabled = true;
+  $('authErr').textContent = 'Проверяем сохранённый вход…';
+  try {
+    const account = await authRequest('/api/auth/session', { token });
+    setAuthenticated(account);
+  } catch (error) {
+    if (error.status === 401) {
+      store.set('mutagen.token', '');
+      $('authErr').textContent = 'Войдите в аккаунт.';
+    } else {
+      $('authErr').textContent = 'Не удалось проверить вход. Проверьте соединение.';
+    }
+  } finally {
+    authSubmit.disabled = false;
+  }
+}
+restoreSession();
 
 async function join() {
   const btn = $('playBtn');
   btn.disabled = true;
   $('joinErr').textContent = '';
-  const name = nameInput.value.trim() || 'Безымянный';
+  if (!activeAccount) {
+    $('joinErr').textContent = 'Сначала войдите в аккаунт.';
+    btn.disabled = false;
+    return;
+  }
+  const name = nameInput.value.trim() || activeAccount.username;
   store.set('mutagen.name', name);
   store.set('mutagen.color', color);
   store.set('mutagen.ap', lookStr());
@@ -131,7 +239,7 @@ async function join() {
     btn.disabled = false;
     return;
   }
-  net.send({ t: 'join', name, color, ap: lookStr(), token: store.get('mutagen.token') });
+  net.send({ t: 'join', name, color, ap: lookStr(), token: activeAccount.token });
 }
 $('playBtn').addEventListener('click', join);
 nameInput.addEventListener('keydown', (e) => {
@@ -255,8 +363,16 @@ net.on('contClose', () => {
   audio.play('uiClose', { volume: 0.28 });
 });
 net.on('close', () => {
-  $('disconnected').classList.remove('hidden');
-  input.enabled = false;
+  if (S.myId !== null) {
+    $('disconnected').classList.remove('hidden');
+    input.enabled = false;
+    input.releaseLock();
+  }
+});
+net.on('authError', (m) => {
+  $('joinErr').textContent = m.text || 'Не удалось войти в игру.';
+  $('playBtn').disabled = false;
+  net.disconnect();
 });
 
 const invSig = (y) => `${y.dna}|${Object.values(y.inv).join(',')}`;

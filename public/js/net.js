@@ -40,4 +40,10 @@ export class Net {
   send(o) {
     if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(o));
   }
+
+  disconnect() {
+    const ws = this.ws;
+    this.ws = null;
+    ws?.close();
+  }
 }
