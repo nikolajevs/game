@@ -1,6 +1,6 @@
 // Редактор мутаций: тратим мутаген (и кристаллы) на изменения тела, видим результат в 3D.
-import { PARTS, PART_KEYS, LEVEL_COST, LEVEL3_CRYSTALS, COMPLEXITY_CAP, VIEW_MULT } from '/shared/config.js';
-import { decodeGenome, encodeGenome, cloneGenome, evolveCost, complexity, computeStats } from '/shared/creature.js';
+import { PARTS, PART_KEYS, LEVEL_COST, LEVEL3_CRYSTALS, COMPLEXITY_CAP, VIEW_MULT, ABILITIES } from '/shared/config.js';
+import { decodeGenome, encodeGenome, cloneGenome, evolveCostWith, complexity, computeStats } from '/shared/creature.js';
 import { CreaturePreview } from './creature-preview.js';
 
 const $ = (id) => document.getElementById(id);
@@ -96,7 +96,8 @@ export class Editor {
         else if (i <= was) cls = 'lost';
         pips += `<div class="pip ${cls}"></div>`;
       }
-      const next = lv < def.max ? `${LEVEL_COST[lv + 1]}☣${lv + 1 >= 3 ? ` +${LEVEL3_CRYSTALS}💎` : ''}` : 'макс.';
+      const gen = (this.you.ab || []).includes('genetics');
+      const next = lv < def.max ? `${gen ? Math.ceil(LEVEL_COST[lv + 1] * ABILITIES.genetics.priceMul) : LEVEL_COST[lv + 1]}☣${lv + 1 >= 3 && !gen ? ` +${LEVEL3_CRYSTALS}💎` : ''}` : 'макс.';
       row.innerHTML = `<div class="pi">${def.icon}</div><div><div class="pn">${def.name}</div><div class="pd">${def.desc}</div></div><div class="pips">${pips}</div>`;
       const minus = document.createElement('button');
       minus.textContent = '−';
@@ -134,12 +135,15 @@ export class Editor {
   }
 
   renderFooter() {
+    const you = this.you;
+    // «Генная инженерия» (путь разума): предел выше, мутации дешевле, 3-й уровень без кристаллов
+    const genetics = (you.ab || []).includes('genetics');
+    const cap = COMPLEXITY_CAP + (genetics ? ABILITIES.genetics.cap : 0);
     const cx = complexity(this.draft);
     const cxEl = $('edComplexity');
-    cxEl.innerHTML = `сложность <b>${cx}/${COMPLEXITY_CAP}</b>`;
-    cxEl.classList.toggle('over', cx > COMPLEXITY_CAP);
-    const c = evolveCost(this.base, this.draft);
-    const you = this.you;
+    cxEl.innerHTML = `сложность <b>${cx}/${cap}</b>${genetics ? ' 🧬' : ''}`;
+    cxEl.classList.toggle('over', cx > cap);
+    const c = evolveCostWith(this.base, this.draft, genetics);
     const changed = encodeGenome(this.base) !== encodeGenome(this.draft);
     const parts = [];
     const poorDna = c.net > you.dna;
@@ -150,7 +154,7 @@ export class Editor {
     parts.push(`<span class="muted">· у вас ${you.dna} ☣, ${you.inv.crystal} 💎</span>`);
     let reason = '';
     if (you.cb) reason = 'В бою мутировать нельзя';
-    else if (cx > COMPLEXITY_CAP) reason = 'Тело не выдержит столько мутаций';
+    else if (cx > cap) reason = 'Тело не выдержит столько мутаций';
     else if (poorDna) reason = 'Не хватает мутагена — побудьте в радиации';
     else if (poorCr) reason = 'Нужны кристаллы мутагена (метеориты, колоссы, ящики в зонах)';
     $('edCost').innerHTML = parts.join(' ') + (reason && changed ? `<div class="bad small">${reason}</div>` : '');

@@ -22,15 +22,20 @@
       <div class="bar" id="barWater"><span class="ico">💧</span><div class="track"><div class="fill"></div></div><span class="num"></span></div>
       <div class="bar" id="barSta"><span class="ico">⚡</span><div class="track"><div class="fill"></div></div><span class="num"></span></div>
       <div class="bar hidden" id="barRad" title="Радиация"><span class="ico">☢</span><div class="track"><div class="fill"></div></div><span class="num"></span></div>
+      <div class="bar hidden" id="barMana" title="Мана"><span class="ico">✦</span><div class="track"><div class="fill"></div></div><span class="num"></span></div>
     </div>
     <div id="dnaPanel" class="panel">
       <div class="dna" title="Мутаген копится в радиации, есть в кристаллах и ящиках">☣ <b id="dnaVal">0</b> <span>мутаген</span></div>
       <button id="btnEvolve">Мутации <kbd>G</kbd></button>
     </div>
+    <div id="pathPanel" class="panel" title="Пути развития">
+      <div class="pts"><span title="Знания (путь разума)">📘 <b id="knowVal">0</b></span> <span title="Сила духа (путь духа)">✨ <b id="spiritVal">0</b></span></div>
+      <button id="btnPath">Путь <kbd>P</kbd></button>
+    </div>
     <div id="inv" class="panel"></div>
   </div>
   <div id="topRight">
-    <div id="minimapWrap" class="panel"><canvas id="minimap" width="220" height="220"></canvas></div>
+    <div id="minimapWrap" class="panel" title="Карта острова — N"><canvas id="minimap" width="220" height="220"></canvas></div>
     <div id="clock" class="panel"></div>
   </div>
   <div id="bottomCenter">
@@ -53,13 +58,29 @@
     <div><kbd>Q</kbd> или щелчок <kbd>ПКМ</kbd> кислота, <kbd>Пробел</kbd> таран (мутации)</div>
     <div>Потянуть с <kbd>ЛКМ</kbd>/<kbd>ПКМ</kbd> или <kbd>← →</kbd> — камера, <kbd>Колесо</kbd> — отдалить</div>
     <div><kbd>E</kbd> пить / открыть, <kbd>F</kbd> есть, <kbd>R</kbd> антирад</div>
-    <div><kbd>C</kbd> крафт, <kbd>1–9</kbd> оружие из пояса</div>
-    <div><kbd>B</kbd> стройка (там <kbd>1–8</kbd> — постройки), <kbd>X</kbd> снести своё</div>
-    <div><kbd>G</kbd> мутации, <kbd>Tab</kbd> игроки, <kbd>Enter</kbd> чат</div>
+    <div><kbd>C</kbd> крафт, <kbd>1–9</kbd> оружие и заклинания из пояса</div>
+    <div><kbd>B</kbd> стройка (там <kbd>1–9</kbd>, <kbd>0</kbd> — постройки), <kbd>X</kbd> снести своё</div>
+    <div><kbd>G</kbd> мутации, <kbd>P</kbd> путь развития, <kbd>N</kbd> карта</div>
+    <div><kbd>Tab</kbd> игроки, <kbd>Enter</kbd> чат</div>
     <div><kbd>M</kbd> звук вкл./выкл.</div>
   </div>
 </div>
 <div id="radFx"></div>
+
+<div id="paths" class="screen hidden">
+  <div class="paths-box panel">
+    <div class="cont-head"><span>🧠🔮 Пути развития <span class="muted small">(P — закрыть)</span></span><button id="pathsClose" title="Закрыть (P)">✕</button></div>
+    <div id="pathsBody"></div>
+  </div>
+</div>
+
+<div id="bigmap" class="screen hidden">
+  <div class="bigmap-box panel">
+    <div class="cont-head"><span>🗺 Карта острова <span class="muted small">(N или щелчок — закрыть)</span></span></div>
+    <canvas id="bigmapCanvas" width="640" height="640"></canvas>
+    <div class="muted small">☢ руины · ⛏ рудники · 🦴 логова · <span style="color:#ffd23f">●</span> гнездо · <span style="color:#c77dff">◎</span> метеорит</div>
+  </div>
+</div>
 
 <div id="craft" class="panel hidden">
   <div class="cont-head"><span>🔨 Крафт <span class="muted small">(C — закрыть)</span></span><button id="craftClose" title="Закрыть (C)">✕</button></div>

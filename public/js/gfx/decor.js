@@ -1,7 +1,7 @@
 // Декор без влияния на игру: пучки травы, цветы, папоротники, галька.
 // Разбит на участки, чтобы рисовать только то, что рядом с камерой.
 import * as THREE from 'three';
-import { TILE, MAP_W, MAP_H, T } from '/shared/config.js';
+import { TILE, MAP_W, MAP_H, T, WORLD_W } from '/shared/config.js';
 import { zoneAt } from '/shared/worldgen.js';
 import { G, M, mergeParts, hash2 } from './util.js';
 
@@ -34,73 +34,112 @@ function fernGeom() {
   return mergeParts(parts);
 }
 
+// Участки строятся, когда попадают в поле зрения, и выгружаются далеко за его краем:
+// на огромном острове держать в памяти траву всего мира нельзя.
 export class Decor {
   constructor(terrain, tiles, seed) {
+    this.terrain = terrain;
+    this.tiles = tiles;
+    this.seed = seed;
     this.group = new THREE.Group();
-    this.meshes = [];
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9 });
-    const pebbleMat = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 1 });
-    const geoms = { tuft: tuftGeom(), flower: flowerGeom(), fern: fernGeom(), pebble: G.dodeca };
-    const petals = ['#ffffff', '#ff8fb1', '#ffd23f', '#a98bff'];
-    const chunks = new Map(); // "cx,cz" -> { tuft: [], ... }
-    const push = (type, x, z, s, k) => {
-      const key = `${Math.floor(x / CHUNK)},${Math.floor(z / CHUNK)}`;
-      if (!chunks.has(key)) chunks.set(key, { tuft: [], flower: [], fern: [], pebble: [] });
-      chunks.get(key)[type].push([x, z, s, k]);
-    };
-    for (let ty = 2; ty < MAP_H - 2; ty++) {
-      for (let tx = 2; tx < MAP_W - 2; tx++) {
+    this.chunks = new Map(); // участок -> его сетки
+    this.mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9 });
+    this.pebbleMat = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 1 });
+    this.geoms = { tuft: tuftGeom(), flower: flowerGeom(), fern: fernGeom(), pebble: G.dodeca };
+    this.warm = true;
+  }
+
+  buildChunk(cx, cz) {
+    const { terrain, tiles, seed } = this;
+    const lists = { tuft: [], flower: [], fern: [], pebble: [] };
+    const push = (type, x, z, sc, k) => lists[type].push([x, z, sc, k]);
+    const per = CHUNK / TILE;
+    const tx0 = Math.max(2, cx * per);
+    const ty0 = Math.max(2, cz * per);
+    const tx1 = Math.min(MAP_W - 2, (cx + 1) * per);
+    const ty1 = Math.min(MAP_H - 2, (cz + 1) * per);
+    for (let ty = ty0; ty < ty1; ty++) {
+      for (let tx = tx0; tx < tx1; tx++) {
         const t = tiles[ty * MAP_W + tx];
+        if (t === T.DEEP) continue;
         for (let k = 0; k < 4; k++) {
           const r = hash2(tx, ty, seed + k * 31);
           const x = tx * TILE + hash2(tx, ty, seed + k * 31 + 1) * TILE;
           const z = ty * TILE + hash2(tx, ty, seed + k * 31 + 2) * TILE;
-          const s = 0.7 + hash2(tx, ty, seed + k * 31 + 3) * 0.7;
+          const sc = 0.7 + hash2(tx, ty, seed + k * 31 + 3) * 0.7;
           if (terrain.heightAt(x, z) < 0.5) continue; // под водой не растёт
           if (terrain.zones.length && zoneAt(terrain.zones, x, z)) {
-            if (r < 0.25) push('pebble', x, z, s * 2.6, k); // в зонах только обломки
+            if (r < 0.25) push('pebble', x, z, sc * 2.6, k); // в особых местах только обломки
             continue;
           }
           if (t === T.GRASS) {
-            if (r < 0.55) push('tuft', x, z, s);
-            else if (r < 0.62) push('flower', x, z, s, k);
+            if (r < 0.55) push('tuft', x, z, sc);
+            else if (r < 0.62) push('flower', x, z, sc, k);
           } else if (t === T.FOREST) {
-            if (r < 0.3) push('fern', x, z, s);
-            else if (r < 0.55) push('tuft', x, z, s * 0.8);
-          } else if ((t === T.SAND || t === T.ROCK) && r < 0.18) push('pebble', x, z, s * 2.4, k);
+            if (r < 0.3) push('fern', x, z, sc);
+            else if (r < 0.55) push('tuft', x, z, sc * 0.8);
+          } else if ((t === T.SAND || t === T.ROCK) && r < 0.18) push('pebble', x, z, sc * 2.4, k);
         }
       }
     }
+    const petals = ['#ffffff', '#ff8fb1', '#ffd23f', '#a98bff'];
     const c = new THREE.Color();
-    for (const [key, lists] of chunks) {
-      const [cx, cz] = key.split(',').map(Number);
-      for (const type of Object.keys(lists)) {
-        const items = lists[type];
-        if (!items.length) continue;
-        const mesh = new THREE.InstancedMesh(geoms[type], type === 'pebble' ? pebbleMat : mat, items.length);
-        items.forEach(([x, z, s, k], i) => {
-          mesh.setMatrixAt(i, M(x, terrain.heightAt(x, z) - 0.5, z, 0, (x * 13.7 + z) % 6.28, 0, s));
-          if (type === 'flower') mesh.setColorAt(i, c.set(petals[k % petals.length]));
-          if (type === 'pebble') {
-            const g = 0.45 + ((x * 7 + z * 3) % 10) / 50;
-            mesh.setColorAt(i, c.setRGB(g, g, g * 0.96));
-          }
-        });
-        mesh.receiveShadow = true;
-        mesh.computeBoundingSphere();
-        mesh.userData.center = new THREE.Vector2((cx + 0.5) * CHUNK, (cz + 0.5) * CHUNK);
-        this.group.add(mesh);
-        this.meshes.push(mesh);
-      }
+    const meshes = [];
+    for (const type of Object.keys(lists)) {
+      const items = lists[type];
+      if (!items.length) continue;
+      const mesh = new THREE.InstancedMesh(this.geoms[type], type === 'pebble' ? this.pebbleMat : this.mat, items.length);
+      items.forEach(([x, z, sc, k], i) => {
+        mesh.setMatrixAt(i, M(x, terrain.heightAt(x, z) - 0.5, z, 0, (x * 13.7 + z) % 6.28, 0, sc));
+        if (type === 'flower') mesh.setColorAt(i, c.set(petals[k % petals.length]));
+        if (type === 'pebble') {
+          const g = 0.45 + ((x * 7 + z * 3) % 10) / 50;
+          mesh.setColorAt(i, c.setRGB(g, g, g * 0.96));
+        }
+      });
+      mesh.receiveShadow = true;
+      mesh.computeBoundingSphere();
+      this.group.add(mesh);
+      meshes.push(mesh);
     }
+    return meshes;
   }
 
-  // показываем только участки в пределах видимости
+  // строим ближние участки (понемногу за кадр), прячем и выгружаем дальние
   update(target, far) {
     const lim = far + CHUNK * 0.75;
-    for (const m of this.meshes) {
-      const c = m.userData.center;
-      m.visible = Math.hypot(c.x - target.x, c.y - target.z) < lim;
+    const n = Math.ceil(WORLD_W / CHUNK);
+    const cx0 = Math.max(0, Math.floor((target.x - lim) / CHUNK));
+    const cx1 = Math.min(n - 1, Math.floor((target.x + lim) / CHUNK));
+    const cz0 = Math.max(0, Math.floor((target.z - lim) / CHUNK));
+    const cz1 = Math.min(n - 1, Math.floor((target.z + lim) / CHUNK));
+    const need = [];
+    for (let cz = cz0; cz <= cz1; cz++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const d = Math.hypot((cx + 0.5) * CHUNK - target.x, (cz + 0.5) * CHUNK - target.z);
+        const key = cx * 4096 + cz;
+        if (d <= lim && !this.chunks.has(key)) need.push([d, cx, cz, key]);
+      }
+    }
+    need.sort((a, b) => a[0] - b[0]);
+    const budget = this.warm ? need.length : 3;
+    for (let i = 0; i < Math.min(budget, need.length); i++) {
+      const [, cx, cz, key] = need[i];
+      this.chunks.set(key, this.buildChunk(cx, cz));
+    }
+    this.warm = false;
+    for (const [key, meshes] of this.chunks) {
+      const cx = Math.floor(key / 4096);
+      const cz = key % 4096;
+      const d = Math.hypot((cx + 0.5) * CHUNK - target.x, (cz + 0.5) * CHUNK - target.z);
+      for (const m of meshes) m.visible = d < lim;
+      if (d > lim + CHUNK * 3) {
+        for (const m of meshes) {
+          this.group.remove(m);
+          m.dispose();
+        }
+        this.chunks.delete(key);
+      }
     }
   }
 }

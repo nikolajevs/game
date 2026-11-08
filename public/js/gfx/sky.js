@@ -68,7 +68,7 @@ export class Sky {
   }
 
   // phase: 0..1 время суток; center: точка, вокруг которой строятся тени; view: дальность видимости
-  update(phase, center, view) {
+  update(phase, center, view, camDist = 260) {
     const L = lightAt(phase);
     this.light = L;
     const k = (L - 0.12) / 0.88; // 0 ночь .. 1 день
@@ -124,11 +124,13 @@ export class Sky {
     }
     col.needsUpdate = true;
 
-    // туман = дальность обзора; ночью видно гораздо хуже
+    // туман = дальность обзора; ночью видно гораздо хуже.
+    // Отсчёт — от персонажа, а не от камеры: при отдалении камеры видна та же округа, только сверху
     const far = view * (0.55 + 0.45 * k);
+    const extra = Math.max(0, camDist - 260);
     this.scene.fog.color.copy(this.hor);
-    this.scene.fog.far = far;
-    this.scene.fog.near = far * 0.45;
-    return { light: L, k, dusk };
+    this.scene.fog.far = far + extra;
+    this.scene.fog.near = far * 0.45 + extra;
+    return { light: L, k, dusk, far };
   }
 }

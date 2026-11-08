@@ -3,22 +3,26 @@ import crypto from 'node:crypto';
 import {
   TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, TERRAIN_SPEED, isWater, DAY_LENGTH, isNight,
   ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, NPCS, NPC_TARGET,
-  NIGHT_EXTRA_STALKERS, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
-  RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES,
+  NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
+  RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
+  ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET,
 } from '../shared/config.js';
 import {
-  computeStats, decodeGenome, encodeGenome, evolveCost, sanitizeGenome, defaultGenome, complexity, cloneGenome,
+  computeStats, decodeGenome, encodeGenome, evolveCostWith, sanitizeGenome, defaultGenome, complexity, cloneGenome,
 } from '../shared/creature.js';
-import { generateMap, generateResources, generateZones, zoneStrength, zoneAt, Grid } from './world.js';
+import { generateMap, generateResources, generateZones, zoneStrength, zoneAt, tilesHash, Grid } from './world.js';
 import { updateNpc } from './ai.js';
 
 // снаряды: радиус попадания
-const PROJ_R = { acid: 7, stone: 5, arrow: 4, bullet: 3, bomb: 8 };
+const PROJ_R = { acid: 7, stone: 5, arrow: 4, bullet: 3, bomb: 8, laser: 3, force: 11, fireball: 9, drain: 8, hex: 8 };
 
 const HS = TILE / 2;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const emptyInv = () => Object.fromEntries(ITEM_KEYS.map((k) => [k, 0]));
 const round1 = (v) => Math.round(v * 10) / 10;
+// участок ресурсов, в котором лежит точка (клиент считает так же)
+const resChunkKey = (x, y) => Math.floor(x / RES_CHUNK) * 4096 + Math.floor(y / RES_CHUNK);
+const NPC_CELL = 400; // ячейка сетки зверей для поиска соседей
 // внешность игрока: пол.кожа.причёска.цвет волос.борода
 const AP_RE = /^[mf]\.[01]\.[0-2]\.[0-4]\.[01]$/;
 const idleInput = () => ({ mx: 0, my: 0, sprint: false, attack: false, spit: false });
@@ -43,7 +47,11 @@ export class Game {
   constructor(seed, saved) {
     this.seed = seed;
     this.tiles = generateMap(seed);
-    this.tilesB64 = Buffer.from(this.tiles).toString('base64');
+    this.tilesHash = tilesHash(this.tiles); // карту клиент строит сам по зерну и сверяет
+    this.tilesB64 = null; // запасной вариант — отправить карту целиком
+    this.resChunks = new Map(); // участок -> ресурсы в нём
+    this.npcGrid = new Map(); // ячейка -> звери (пересобирается каждый такт)
+    this.turrets = new Set(); // автотурели игроков
     this.grid = new Grid(80);
     this.statics = new Map();
     this.nests = new Map(); // uid -> постройка-гнездо
@@ -92,12 +100,13 @@ export class Game {
   }
 
   // ---------- ящики с добычей в радиационных зонах ----------
-  rollLoot() {
+  rollLoot(z = null) {
     const inv = emptyInv();
-    const total = CRATE_LOOT.reduce((a, l) => a + l[3], 0);
+    const table = [...CRATE_LOOT, ...(SITE_LOOT[z?.kind] || [])];
+    const total = table.reduce((a, l) => a + l[3], 0);
     for (let i = 0; i < CRATE.rolls; i++) {
       let r = Math.random() * total;
-      for (const [item, min, max, w] of CRATE_LOOT) {
+      for (const [item, min, max, w] of table) {
         r -= w;
         if (r <= 0) {
           inv[item] += min + Math.floor(Math.random() * (max - min + 1));
@@ -118,7 +127,7 @@ export class Game {
       if (this.grid.query(x, y, 40).some((s) => Math.hypot(s.x - x, s.y - y) < (s.r || 20) + 18)) continue;
       const [mn, mx] = CRATE.mutagen;
       const dna = (mn + Math.floor(Math.random() * (mx - mn + 1))) * (z.lvl || 1);
-      const s = { id: this.nextId++, cat: 'crate', kind: 'crate', x, y, r: 18, inv: this.rollLoot(), dna, zone: z.id };
+      const s = { id: this.nextId++, cat: 'crate', kind: 'crate', x, y, r: 18, inv: this.rollLoot(z), dna, zone: z.id };
       this.statics.set(s.id, s);
       this.grid.insert(s);
       this.sAdd.set(s.id, s);
@@ -142,10 +151,50 @@ export class Game {
   addResource(kind, x, y, v = Math.random()) {
     const def = RESOURCES[kind];
     const s = { id: this.nextId++, cat: 'res', kind, x, y, r: def.r, cr: def.cr, hp: def.hp, maxHp: def.hp, v: Math.round(v * 1000) / 1000 };
+    s.chunk = resChunkKey(x, y);
     this.statics.set(s.id, s);
     this.grid.insert(s);
+    let set = this.resChunks.get(s.chunk);
+    if (!set) this.resChunks.set(s.chunk, (set = new Set()));
+    set.add(s);
     this.sAdd.set(s.id, s);
     return s;
+  }
+
+  // Какие участки ресурсов должны быть у игрока: ближние догружаем, дальние забываем.
+  // Возвращает новые ресурсы (для приветствия) или сам отправляет их сообщением 'res'.
+  syncResChunks(p, initial = false) {
+    const cx = Math.floor(p.x / RES_CHUNK);
+    const cy = Math.floor(p.y / RES_CHUNK);
+    if (!initial && cx === p.rcx && cy === p.rcy) return null;
+    p.rcx = cx;
+    p.rcy = cy;
+    const half = RES_CHUNK / 2;
+    const add = [];
+    const drop = [];
+    const span = Math.ceil(RES_LOAD_R / RES_CHUNK) + 1;
+    for (let j = cy - span; j <= cy + span; j++) {
+      for (let i = cx - span; i <= cx + span; i++) {
+        if (i < 0 || j < 0) continue;
+        const key = i * 4096 + j;
+        if (p.resLoaded.has(key)) continue;
+        if (Math.hypot((i * RES_CHUNK + half) - p.x, (j * RES_CHUNK + half) - p.y) > RES_LOAD_R + half) continue;
+        p.resLoaded.add(key);
+        const set = this.resChunks.get(key);
+        if (set) for (const s of set) add.push(this.serStatic(s));
+      }
+    }
+    for (const key of p.resLoaded) {
+      const i = Math.floor(key / 4096);
+      const j = key % 4096;
+      if (Math.hypot((i * RES_CHUNK + half) - p.x, (j * RES_CHUNK + half) - p.y) > RES_DROP_R + half) {
+        p.resLoaded.delete(key);
+        drop.push(key);
+      }
+    }
+    if (initial) return add;
+    if (add.length || drop.length) this.send(p.client, { t: 'res', add, drop });
+    return null;
   }
 
   addStructure(kind, x, y, owner, ownerName, ownerColor, hp, inv) {
@@ -159,6 +208,10 @@ export class Game {
     this.grid.insert(s);
     this.sAdd.set(s.id, s);
     if (kind === 'nest') this.nests.set(owner, s);
+    if (kind === 'turret') {
+      s.cd = 0;
+      this.turrets.add(s);
+    }
     return s;
   }
 
@@ -181,6 +234,8 @@ export class Game {
     if (!this.statics.has(s.id)) return;
     this.statics.delete(s.id);
     this.grid.remove(s);
+    if (s.cat === 'res') this.resChunks.get(s.chunk)?.delete(s);
+    if (s.kind === 'turret') this.turrets.delete(s);
     this.sAdd.delete(s.id);
     this.sDel.add(s.id);
     if (s.kind === 'nest' && this.nests.get(s.owner) === s) this.nests.delete(s.owner);
@@ -237,6 +292,10 @@ export class Game {
   handle(client, msg) {
     if (!msg || typeof msg.t !== 'string') return;
     if (msg.t === 'join') return this.onJoin(client, msg);
+    if (msg.t === 'tiles') {
+      if (!this.tilesB64) this.tilesB64 = Buffer.from(this.tiles).toString('base64');
+      return this.send(client, { t: 'tiles', tiles: this.tilesB64 });
+    }
     const p = client.player;
     if (!p) return;
     switch (msg.t) {
@@ -254,6 +313,11 @@ export class Game {
       case 'equip': return this.onEquip(p, msg);
       case 'craft': return this.onCraft(p, msg);
       case 'use': return this.onUse(p, msg);
+      case 'learn': return this.onLearn(p, msg);
+      case 'resetPath': return this.onResetPath(p);
+      case 'research': return this.onResearch(p, msg);
+      case 'absorb': return this.onAbsorb(p);
+      case 'cast': return this.onCast(p, msg);
       default: return undefined;
     }
   }
@@ -266,8 +330,236 @@ export class Game {
       p.weapon = null;
       return;
     }
+    const ab = ABILITIES[item];
+    if (ab) {
+      if (ab.kind === 'spell' && p.abil.has(item)) p.weapon = item; // заклинание «в руке», ЛКМ — применить
+      return;
+    }
     if (!WEAPONS[item] || !(p.inv[item] > 0)) return;
     p.weapon = item;
+  }
+
+  nearLab(p) {
+    for (const s of this.grid.query(p.x, p.y, LAB_RANGE + TILE)) {
+      if (s.kind === 'lab' && Math.hypot(s.x - p.x, s.y - p.y) <= LAB_RANGE) return true;
+    }
+    return false;
+  }
+
+  // сколько очков вложено в путь
+  spentOn(p, path) {
+    let n = 0;
+    for (const id of p.abil) if (ABILITIES[id].path === path) n += ABILITIES[id].cost;
+    return n;
+  }
+
+  // ================= пути развития =================
+  onLearn(p, m) {
+    if (p.dead) return;
+    const ab = ABILITIES[m.id];
+    if (!ab || p.abil.has(m.id)) return;
+    const path = PATHS[ab.path];
+    if (p.path && p.path !== ab.path) return this.toast(p, `Этот путь закрыт: вы выбрали ${PATHS[p.path].name.toLowerCase()}`);
+    if (this.spentOn(p, ab.path) < TIER_NEED[ab.tier]) return this.toast(p, `Сначала вложите ${TIER_NEED[ab.tier]} очков в нижние ступени`);
+    if (p[path.pt] < ab.cost) return this.toast(p, `Не хватает: ${path.ptName.toLowerCase()} (${p[path.pt]}/${ab.cost})`);
+    if (!p.path) {
+      p.path = ab.path;
+      this.send(p.client, { t: 'toast', big: true, text: `${path.icon} Вы ступили на ${path.name.toLowerCase()}. Это навсегда.` });
+      this.broadcast({ t: 'chat', sys: true, text: `${p.name} выбирает ${path.name.toLowerCase()}` });
+    }
+    p[path.pt] -= ab.cost;
+    p.abil.add(m.id);
+    this.applyGenome(p);
+    if (ab.path === 'spirit') p.mana = Math.min(p.maxMana, p.mana + 30);
+    this.fx.push({ k: 'learn', x: p.x, y: p.y, c: path.color });
+    this.toast(p, `${ab.icon} Изучено: ${ab.name}`);
+  }
+
+  onResetPath(p) {
+    if (p.dead || !p.path) return;
+    const name = PATHS[p.path].name;
+    p.path = null;
+    p.abil.clear();
+    if (ABILITIES[p.weapon]) p.weapon = null;
+    this.applyGenome(p);
+    p.mana = 0;
+    this.send(p.client, { t: 'toast', big: true, text: `${name} оставлен: умения и вложенные очки потеряны` });
+  }
+
+  onResearch(p, m) {
+    if (p.dead) return;
+    if (!this.nearLab(p)) return this.toast(p, 'Нужна лаборатория рядом (постройка B)');
+    if (p.path === 'spirit') return this.toast(p, 'Путь духа закрыл для вас науку');
+    if (m.kind === 'data') {
+      const n = p.inv.data || 0;
+      if (!n) return this.toast(p, 'Нет носителей данных — ищите их в ящиках руин и рудников');
+      p.inv.data = 0;
+      p.know += n * KNOW_GAIN.data;
+      p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${n * KNOW_GAIN.data} 📘 знаний` });
+    } else if (m.kind === 'experiment') {
+      const ex = KNOW_GAIN.experiment;
+      for (const k in ex.cost) if ((p.inv[k] || 0) < ex.cost[k]) return this.toast(p, 'Не хватает ресурсов для опыта');
+      for (const k in ex.cost) p.inv[k] -= ex.cost[k];
+      p.know += ex.gain;
+      p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${ex.gain} 📘 знаний` });
+    }
+  }
+
+  onAbsorb(p) {
+    if (p.dead) return;
+    if (p.path === 'mind') return this.toast(p, 'Путь разума закрыл для вас силу духа');
+    const n = p.inv.artifact || 0;
+    if (!n) return this.toast(p, 'Нет артефактов — их находят в тайниках логов колоссов');
+    p.inv.artifact = 0;
+    p.spirit += n * SPIRIT_GAIN.artifact;
+    p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${n * SPIRIT_GAIN.artifact} ✨ силы духа` });
+    this.fx.push({ k: 'learn', x: p.x, y: p.y, c: PATHS.spirit.color });
+  }
+
+  // мгновенные умения: щит духа и ЭМИ-импульс
+  onCast(p, m) {
+    const ab = ABILITIES[m.id];
+    if (p.dead || !ab || ab.kind !== 'instant' || !p.abil.has(m.id) || p.stunT > 0) return;
+    if ((p.abcd[m.id] || 0) > 0) return;
+    if (ab.mana && p.mana < ab.mana) return this.toast(p, 'Не хватает маны');
+    if (ab.mana) p.mana -= ab.mana;
+    p.abcd[m.id] = ab.cd;
+    p.atkT = 0.25;
+    if (m.id === 'shield') {
+      p.shieldHp = ab.absorb;
+      p.shieldT = ab.time;
+      this.fx.push({ k: 'shield', x: p.x, y: p.y });
+    } else if (m.id === 'emp') {
+      this.fx.push({ k: 'emp', x: p.x, y: p.y, r: ab.r });
+      for (const c of this.creaturesNear(p.x, p.y, ab.r + 40)) {
+        if (c === p || c.dead || Math.hypot(c.x - p.x, c.y - p.y) > ab.r + c.stats.radius) continue;
+        if (this.damageCreature(c, ab.dmg, p, 'emp') > 0) c.stunT = ab.stun;
+      }
+    }
+  }
+
+  // заклинание «в руке»: ЛКМ — применить в сторону курсора
+  castSpell(p, id) {
+    const ab = ABILITIES[id];
+    if (p.stunT > 0) return;
+    if ((p.abcd[id] || 0) > 0) {
+      p.cd.melee = 0.1;
+      return;
+    }
+    if (p.mana < ab.mana) {
+      p.cd.melee = 0.3;
+      if (p.warnT <= 0) {
+        p.warnT = 2;
+        this.toast(p, 'Не хватает маны');
+      }
+      return;
+    }
+    p.mana -= ab.mana;
+    p.abcd[id] = ab.cd;
+    p.cd.melee = Math.min(ab.cd, 0.45);
+    p.atkT = 0.25;
+    if (id === 'blink') {
+      if (!this.blink(p, ab)) {
+        p.mana += ab.mana;
+        p.abcd[id] = 0.3;
+      }
+      return;
+    }
+    const ca = Math.cos(p.angle);
+    const sa = Math.sin(p.angle);
+    const r0 = p.stats.radius + 10;
+    this.addProjectile(p, ab.proj, p.x + ca * r0, p.y + sa * r0, ca * ab.speed, sa * ab.speed, ab.dmg, ab.life, ab);
+    this.fx.push({ k: 'cast', x: p.x + ca * r0, y: p.y + sa * r0, m: id });
+  }
+
+  // телепорт к курсору: сквозь чужие стены не пускает — встаёт перед ними
+  blink(p, ab) {
+    const dist = Math.min(ab.range, Math.max(40, p.aimD || ab.range));
+    const ca = Math.cos(p.angle);
+    const sa = Math.sin(p.angle);
+    const r = p.stats.radius;
+    const free = (x, y) => {
+      for (const s of this.grid.query(x, y, TILE + r)) {
+        if (s.cat === 'struct' && this.blocks(s, p) && circleBox(x, y, r, s.x, s.y)) return false;
+        if (s.cat === 'res' && s.cr > 0 && Math.hypot(s.x - x, s.y - y) < s.cr + r) return false;
+      }
+      return x > 30 && y > 30 && x < WORLD_W - 30 && y < WORLD_H - 30;
+    };
+    let bx = null;
+    let by = null;
+    for (let k = 15; k <= dist; k += 15) {
+      const x = p.x + ca * k;
+      const y = p.y + sa * k;
+      // постройка на пути — дальше нельзя
+      if (this.grid.query(x, y, TILE).some((s) => s.cat === 'struct' && this.blocks(s, p) && circleBox(x, y, 6, s.x, s.y))) break;
+      if (free(x, y)) {
+        bx = x;
+        by = y;
+      }
+    }
+    if (bx === null) {
+      this.toast(p, 'Некуда перенестись');
+      return false;
+    }
+    this.fx.push({ k: 'blink', x: p.x, y: p.y });
+    p.x = bx;
+    p.y = by;
+    p.kbx = 0;
+    p.kby = 0;
+    this.fx.push({ k: 'blink', x: bx, y: by, to: 1 });
+    return true;
+  }
+
+  // щит, оглушение, проклятие — общие для игроков и зверей
+  statusTick(e, dt) {
+    if (e.shieldT > 0) {
+      e.shieldT -= dt;
+      if (e.shieldT <= 0) e.shieldHp = 0;
+    }
+    if (e.stunT > 0) e.stunT = Math.max(0, e.stunT - dt);
+    if (e.hexT > 0) {
+      e.hexT -= dt;
+      e.slowT = Math.max(e.slowT, 0.2);
+      e.hexTick = (e.hexTick || 0) + dt;
+      if (e.hexTick >= 1) {
+        e.hexTick -= 1;
+        this.damageCreature(e, e.hexDps || 6, this.getCreature(e.hexSrc), 'hex');
+      }
+    }
+  }
+
+  // автотурели: стреляют по враждебным зверям и чужим игрокам
+  updateTurrets(dt) {
+    for (const s of this.turrets) {
+      s.cd -= dt;
+      if (s.cd > 0) continue;
+      let best = null;
+      let bd = TURRET.range;
+      for (const c of this.creaturesNear(s.x, s.y, TURRET.range)) {
+        if (c.dead) continue;
+        if (c.type === 'npc' && NPCS[c.kind].behavior === 'passive') continue;
+        if (c.type === 'player' && (c.uid === s.owner || c.spawnProtect > 0)) continue;
+        const d = Math.hypot(c.x - s.x, c.y - s.y);
+        if (d < bd) {
+          bd = d;
+          best = c;
+        }
+      }
+      if (!best) {
+        s.cd = 0.3;
+        continue;
+      }
+      s.cd = TURRET.cd;
+      let owner = null;
+      for (const p of this.players.values()) if (p.uid === s.owner) owner = p;
+      const a = Math.atan2(best.y - s.y, best.x - s.x);
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      const x = s.x + ca * 34;
+      const y = s.y + sa * 34;
+      this.addProjectile(owner || { id: -s.id }, 'bullet', x, y, ca * TURRET.speed, sa * TURRET.speed, TURRET.dmg, TURRET.range / TURRET.speed + 0.05);
+      this.fx.push({ k: 'shot', x, y, m: 'bullet' });
+    }
   }
 
   nearBench(p) {
@@ -282,6 +574,8 @@ export class Game {
     const rec = RECIPES[m.item];
     if (!rec) return;
     if (rec.bench && !this.nearBench(p)) return this.toast(p, 'Нужен верстак рядом');
+    if (rec.ability && !p.abil.has(rec.ability)) return this.toast(p, `Нужно умение «${ABILITIES[rec.ability].name}» (путь разума)`);
+    if (rec.lab && !this.nearLab(p)) return this.toast(p, 'Нужна лаборатория рядом');
     for (const k in rec.cost) if ((p.inv[k] || 0) < rec.cost[k]) return this.toast(p, 'Не хватает ресурсов');
     for (const k in rec.cost) p.inv[k] -= rec.cost[k];
     const out = rec.out || 1;
@@ -319,9 +613,12 @@ export class Game {
     if (!prof.ap) prof.ap = 'm.0.1.0.0';
     const p = this.createPlayer(client, token, prof);
     client.player = p;
+    // постройки, ящики и останки — все сразу (их немного), ресурсы — только ближние участки
+    const statics = [];
+    for (const s of this.statics.values()) if (s.cat !== 'res') statics.push(this.serStatic(s));
+    statics.push(...this.syncResChunks(p, true));
     this.send(client, {
-      t: 'welcome', id: p.id, uid: prof.uid, token, seed: this.seed, tiles: this.tilesB64, zones: this.zones,
-      statics: [...this.statics.values()].map((s) => this.serStatic(s)),
+      t: 'welcome', id: p.id, uid: prof.uid, token, seed: this.seed, th: this.tilesHash, zones: this.zones, statics,
     });
     this.broadcast({ t: 'chat', sys: true, text: `${name} появился на острове` });
     this.broadcastPlayerList();
@@ -338,9 +635,16 @@ export class Game {
       combatT: 0, atkT: 0, hitT: 0, slowT: 0, spikeT: 0, drinkT: 0, eatT: 0, lastChat: -10,
       charging: 0, chargeDir: 0, chargeHit: null,
       spawnProtect: PLAYER.spawnProtect, dead: false, openCont: null, nearFire: false,
+      resLoaded: new Set(), rcx: null, rcy: null,
+      // путь развития: очки, умения, мана и состояния
+      path: PATHS[prof.path] ? prof.path : null, know: Math.max(0, prof.know | 0), spirit: Math.max(0, prof.spirit | 0),
+      abil: new Set((prof.abil || []).filter((id) => ABILITIES[id] && ABILITIES[id].path === prof.path)),
+      mana: 0, maxMana: MANA.base, abcd: {}, aimD: 300,
+      shieldHp: 0, shieldT: 0, hexT: 0, hexSrc: null, stunT: 0, altars: new Map(), medT: 0, meditating: false, medWarnT: 0,
       kills: prof.kills || 0, pfx: [], weapon: null, rad: clamp(Number(prof.rad) || 0, 0, 100), radHere: 0, warnT: 0,
     };
     this.applyGenome(p);
+    p.mana = p.maxMana;
     if (prof.alive && Number.isFinite(prof.x)) {
       p.x = clamp(prof.x, 30, WORLD_W - 30);
       p.y = clamp(prof.y, 30, WORLD_H - 30);
@@ -363,6 +667,17 @@ export class Game {
     p.genome.mouth = 'omni'; // человек всеяден
     p.stats = computeStats(p.genome);
     p.look = encodeGenome(p.genome);
+    // умения пути: экзоскелет и запас маны
+    if (p.abil?.has('exo')) {
+      p.stats.speed *= ABILITIES.exo.speed;
+      p.stats.defense = Math.min(0.8, p.stats.defense + ABILITIES.exo.def);
+    }
+    if (p.abil) {
+      let spells = 0;
+      for (const id of p.abil) if (ABILITIES[id].path === 'spirit') spells++;
+      p.maxMana = MANA.base + spells * MANA.perAbility;
+      p.mana = Math.min(p.mana || 0, p.maxMana);
+    }
     if (oldMax) p.hp = clamp((p.hp / oldMax) * p.stats.maxHp, 1, p.stats.maxHp);
   }
 
@@ -379,6 +694,10 @@ export class Game {
     prof.water = p.water;
     prof.kills = p.kills;
     prof.rad = p.rad;
+    prof.path = p.path;
+    prof.know = p.know;
+    prof.spirit = p.spirit;
+    prof.abil = [...p.abil];
   }
 
   // ================= действия игрока =================
@@ -396,6 +715,7 @@ export class Game {
     p.input.attack = !!m.a;
     p.input.spit = !!m.b;
     if (Number.isFinite(m.ang) && p.charging <= 0) p.angle = m.ang;
+    if (Number.isFinite(m.ad)) p.aimD = clamp(m.ad, 0, 2000);
   }
 
   tryCharge(p, m) {
@@ -411,6 +731,7 @@ export class Game {
     if (p.dead) return;
     const def = STRUCTURES[m.kind];
     if (!def) return;
+    if (def.ability && !p.abil.has(def.ability)) return this.toast(p, `Нужно умение «${ABILITIES[def.ability].name}» (путь разума)`);
     const tx = Math.floor(Number(m.x) / TILE);
     const ty = Math.floor(Number(m.y) / TILE);
     if (!Number.isFinite(tx) || !Number.isFinite(ty) || tx < 1 || ty < 1 || tx >= MAP_W - 1 || ty >= MAP_H - 1) return;
@@ -458,8 +779,9 @@ export class Game {
     if (p.combatT > 0) return this.toast(p, 'Нельзя эволюционировать в бою');
     const g = sanitizeGenome(m.genome);
     g.mouth = 'omni';
-    if (complexity(g) > COMPLEXITY_CAP) return this.toast(p, 'Тело не выдержит столько мутаций');
-    const c = evolveCost(p.genome, g);
+    const genetics = p.abil.has('genetics');
+    if (complexity(g) > COMPLEXITY_CAP + (genetics ? ABILITIES.genetics.cap : 0)) return this.toast(p, 'Тело не выдержит столько мутаций');
+    const c = evolveCostWith(p.genome, g, genetics);
     if (c.net > p.dna) return this.toast(p, 'Не хватает мутагена');
     if (c.crystals > p.inv.crystal) return this.toast(p, 'Не хватает кристаллов мутагена');
     p.dna -= c.net;
@@ -573,6 +895,7 @@ export class Game {
     p.cd.melee = 0;
     p.cd.spit = 0;
     p.cd.charge = 0;
+    p.mana = p.maxMana;
   }
 
   onChat(p, m) {
@@ -587,12 +910,20 @@ export class Game {
     this.time += dt;
     const phase = this.phase();
     const night = isNight(phase);
-    for (const p of this.players.values()) this.updatePlayer(p, dt);
+    for (const p of this.players.values()) {
+      this.updatePlayer(p, dt);
+      this.syncResChunks(p);
+    }
+    this.rebuildNpcGrid();
     for (const n of this.npcs.values()) {
+      if (!n.awake) continue; // вдали от всех игроков зверь «спит»
+      this.statusTick(n, dt);
+      if (!this.npcs.has(n.id)) continue;
       updateNpc(this, n, dt, night);
       if (this.npcs.has(n.id)) this.envEffects(n, dt);
     }
     this.separate();
+    this.updateTurrets(dt);
     this.updateProjectiles(dt);
     if ((this.timers.npc -= dt) <= 0) {
       this.timers.npc = 2;
@@ -625,7 +956,13 @@ export class Game {
     p.eatT = Math.max(0, p.eatT - dt);
     p.warnT = Math.max(0, p.warnT - dt);
     p.spawnProtect = Math.max(0, p.spawnProtect - dt);
-    if (p.weapon && !(p.inv[p.weapon] > 0)) p.weapon = null; // оружие выложили или потратили
+    if (p.weapon && !ABILITIES[p.weapon] && !(p.inv[p.weapon] > 0)) p.weapon = null; // оружие выложили или потратили
+    for (const id in p.abcd) if (p.abcd[id] > 0) p.abcd[id] = Math.max(0, p.abcd[id] - dt);
+    p.medWarnT = Math.max(0, p.medWarnT - dt);
+    this.statusTick(p, dt);
+    if (p.dead) return;
+    this.meditate(p, dt);
+    if (p.path === 'spirit') p.mana = Math.min(p.maxMana, p.mana + (MANA.regen + (p.meditating ? MANA.altarRegen : 0)) * dt);
 
     const moving = p.input.mx !== 0 || p.input.my !== 0;
     const sprinting = p.input.sprint && moving && p.stamina > 1 && p.charging <= 0;
@@ -651,14 +988,23 @@ export class Game {
     p.water = Math.max(0, p.water - PLAYER.thirstRate * st.metabolism * dt);
     p.nearFire = this.nearKind(p.x, p.y, 'campfire', 140);
     if (p.food <= 0 || p.water <= 0) this.damageCreature(p, PLAYER.starveDmg * dt, null, 'starve');
-    else if (p.food > 35 && p.water > 35 && p.rad < RAD.regenBlock && p.hp < st.maxHp) {
-      p.hp = Math.min(st.maxHp, p.hp + (PLAYER.regen + (p.nearFire ? PLAYER.fireRegen : 0)) * dt);
+    else {
+      // наниты: втрое быстрее и даже при облучении до 50
+      const nan = p.abil.has('nanites') ? ABILITIES.nanites : null;
+      if (p.food > 35 && p.water > 35 && p.rad < (nan ? nan.radRegen : RAD.regenBlock) && p.hp < st.maxHp) {
+        p.hp = Math.min(st.maxHp, p.hp + (PLAYER.regen * (nan ? nan.regenMul : 1) + (p.nearFire ? PLAYER.fireRegen : 0)) * dt);
+      }
     }
     if (p.dead) return;
 
     let speed = st.speed;
     let mx = p.input.mx;
     let my = p.input.my;
+    const stunned = p.stunT > 0;
+    if (stunned) {
+      mx = 0;
+      my = 0;
+    }
     if (sprinting) {
       speed *= PLAYER.sprintMul;
       p.stamina = Math.max(0, p.stamina - PLAYER.staminaUse * dt);
@@ -678,8 +1024,8 @@ export class Game {
     this.envEffects(p, dt);
     if (p.dead) return;
 
-    if (p.input.attack && p.cd.melee <= 0 && p.charging <= 0) this.attack(p);
-    if (p.input.spit && st.spit && p.cd.spit <= 0) {
+    if (p.input.attack && p.cd.melee <= 0 && p.charging <= 0 && !stunned) this.attack(p);
+    if (p.input.spit && st.spit && p.cd.spit <= 0 && !stunned) {
       p.cd.spit = st.spit.cd;
       this.spit(p);
     }
@@ -690,6 +1036,43 @@ export class Game {
         this.send(p.client, { t: 'contClose' });
       }
     }
+  }
+
+  // Медитация: стоять неподвижно в круге древнего алтаря. Каждый алтарь даёт ограниченный запас
+  // силы духа, который восстанавливается со временем.
+  meditate(p, dt) {
+    const z = zoneAt(this.zones, p.x, p.y);
+    const still = !p.input.mx && !p.input.my && !p.input.attack;
+    p.meditating = !!(z && z.kind === 'altar' && still && Math.hypot(p.x - z.x, p.y - z.y) < z.r * 0.75);
+    if (!p.meditating) {
+      p.medT = 0;
+      return;
+    }
+    p.medT += dt;
+    if (p.medT < SPIRIT_GAIN.every) return;
+    p.medT -= SPIRIT_GAIN.every;
+    if (p.path === 'mind') {
+      if (p.medWarnT <= 0) {
+        p.medWarnT = 30;
+        this.toast(p, 'Путь разума закрыл для вас силу духа');
+      }
+      return;
+    }
+    const max = SPIRIT_GAIN.altarCharge;
+    const a = p.altars.get(z.id) || { charge: max, t: this.time };
+    a.charge = Math.min(max, a.charge + ((this.time - a.t) * max) / SPIRIT_GAIN.altarRefill);
+    a.t = this.time;
+    p.altars.set(z.id, a);
+    if (a.charge < 1) {
+      if (p.medWarnT <= 0) {
+        p.medWarnT = 20;
+        this.toast(p, 'Алтарь истощён — его сила вернётся через несколько минут');
+      }
+      return;
+    }
+    a.charge -= 1;
+    p.spirit += 1;
+    p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: '+1 ✨' });
   }
 
   // колья ранят чужаков
@@ -770,30 +1153,80 @@ export class Game {
   }
 
   // мягкое расталкивание существ
+  // Сетка зверей для поиска соседей + кто из них бодрствует (рядом есть живой игрок)
+  rebuildNpcGrid() {
+    this.npcGrid.clear();
+    const alive = [];
+    for (const p of this.players.values()) if (!p.dead) alive.push(p);
+    const w2 = NPC_WAKE_R * NPC_WAKE_R;
+    for (const n of this.npcs.values()) {
+      const key = Math.floor(n.x / NPC_CELL) * 4096 + Math.floor(n.y / NPC_CELL);
+      let arr = this.npcGrid.get(key);
+      if (!arr) this.npcGrid.set(key, (arr = []));
+      arr.push(n);
+      n.awake = alive.some((p) => (p.x - n.x) ** 2 + (p.y - n.y) ** 2 < w2);
+    }
+  }
+
+  // звери в радиусе r (по сетке; ячейки берём с запасом на движение за такт)
+  npcsNear(x, y, r) {
+    const out = [];
+    const r2 = r * r;
+    const x0 = Math.floor((x - r - 20) / NPC_CELL);
+    const x1 = Math.floor((x + r + 20) / NPC_CELL);
+    const y0 = Math.floor((y - r - 20) / NPC_CELL);
+    const y1 = Math.floor((y + r + 20) / NPC_CELL);
+    for (let i = x0; i <= x1; i++) {
+      for (let j = y0; j <= y1; j++) {
+        const arr = this.npcGrid.get(i * 4096 + j);
+        if (!arr) continue;
+        for (const n of arr) if (this.npcs.has(n.id) && (n.x - x) ** 2 + (n.y - y) ** 2 <= r2) out.push(n);
+      }
+    }
+    return out;
+  }
+
   separate() {
-    const arr = [];
-    for (const p of this.players.values()) if (!p.dead) arr.push(p);
-    for (const n of this.npcs.values()) arr.push(n);
-    for (let i = 0; i < arr.length; i++) {
-      const a = arr[i];
-      for (let j = i + 1; j < arr.length; j++) {
-        const b = arr[j];
-        const rr = a.stats.radius + b.stats.radius;
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        if (Math.abs(dx) > rr || Math.abs(dy) > rr) continue;
-        const d2 = dx * dx + dy * dy;
-        if (d2 >= rr * rr) continue;
-        const d = Math.sqrt(d2) || 0.01;
-        const push = (rr - d) * 0.5;
-        const ux = dx / d;
-        const uy = dy / d;
-        const wa = b.stats.radius / rr;
-        const wb = a.stats.radius / rr;
-        a.x -= ux * push * wa;
-        a.y -= uy * push * wa;
-        b.x += ux * push * wb;
-        b.y += uy * push * wb;
+    // только те, кто рядом с игроками: спящие звери стоят на месте
+    const cells = new Map();
+    const add = (c) => {
+      const key = Math.floor(c.x / 100) * 4096 + Math.floor(c.y / 100);
+      let arr = cells.get(key);
+      if (!arr) cells.set(key, (arr = []));
+      arr.push(c);
+    };
+    for (const p of this.players.values()) if (!p.dead) add(p);
+    for (const n of this.npcs.values()) if (n.awake) add(n);
+    for (const [key, list] of cells) {
+      const ci = Math.floor(key / 4096);
+      const cj = key % 4096;
+      // соседние ячейки: своя и «вперёд», чтобы каждая пара проверялась один раз
+      const arr = [...list];
+      for (const [di, dj] of [[1, -1], [1, 0], [1, 1], [0, 1]]) {
+        const other = cells.get((ci + di) * 4096 + cj + dj);
+        if (other) arr.push(...other);
+      }
+      for (let i = 0; i < list.length; i++) {
+        const a = list[i];
+        for (let j = i + 1; j < arr.length; j++) {
+          const b = arr[j];
+          const rr = a.stats.radius + b.stats.radius;
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          if (Math.abs(dx) > rr || Math.abs(dy) > rr) continue;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= rr * rr) continue;
+          const d = Math.sqrt(d2) || 0.01;
+          const push = (rr - d) * 0.5;
+          const ux = dx / d;
+          const uy = dy / d;
+          const wa = b.stats.radius / rr;
+          const wb = a.stats.radius / rr;
+          a.x -= ux * push * wa;
+          a.y -= uy * push * wa;
+          b.x += ux * push * wb;
+          b.y += uy * push * wb;
+        }
       }
     }
   }
@@ -805,9 +1238,7 @@ export class Game {
     for (const p of this.players.values()) {
       if (!p.dead && (p.x - x) ** 2 + (p.y - y) ** 2 <= r2) out.push(p);
     }
-    for (const n of this.npcs.values()) {
-      if ((n.x - x) ** 2 + (n.y - y) ** 2 <= r2) out.push(n);
-    }
+    out.push(...this.npcsNear(x, y, r));
     return out;
   }
 
@@ -850,6 +1281,7 @@ export class Game {
   // Атака игрока: удар голыми лапами/оружием ближнего боя, выстрел или бросок
   attack(p) {
     const st = p.stats;
+    if (ABILITIES[p.weapon]) return this.castSpell(p, p.weapon);
     const w = p.weapon ? WEAPONS[p.weapon] : null;
     if (!w || w.type === 'melee') {
       p.cd.melee = w ? w.cd : st.attackCd;
@@ -887,9 +1319,15 @@ export class Game {
 
   addProjectile(owner, kind, x, y, vx, vy, dmg, life, w = null) {
     const j = { id: this.nextId++, owner: owner.id, kind, x, y, vx, vy, dmg, life, a: Math.atan2(vy, vx) };
-    if (kind === 'bomb') {
+    if (w?.radius) {
       j.radius = w.radius;
       j.structDmg = w.structDmg;
+    }
+    if (w?.kb) j.kb = w.kb;
+    if (kind === 'hex') {
+      j.hexTime = w.time;
+      j.hexDps = w.dps;
+      j.hexVuln = w.vuln;
     }
     this.projectiles.set(j.id, j);
     return j;
@@ -977,6 +1415,18 @@ export class Game {
     const silent = kind === 'starve' || kind === 'rad'; // урон «изнутри»: без цифр и защиты
     if (t.type === 'player' && t.spawnProtect > 0 && !silent) return 0;
     if (!silent) amount *= 1 - t.stats.defense;
+    if (!silent && t.hexT > 0) amount *= t.hexVuln || 1.25;
+    // щит духа поглощает урон первым
+    if (!silent && t.shieldT > 0 && t.shieldHp > 0) {
+      const a = Math.min(t.shieldHp, amount);
+      t.shieldHp -= a;
+      amount -= a;
+      if (t.shieldHp <= 0) t.shieldT = 0;
+      if (amount <= 0.01) {
+        this.fx.push({ k: 'absorb', x: t.x, y: t.y });
+        return 0;
+      }
+    }
     t.hp -= amount;
     if (!silent) {
       t.hitT = 0.15;
@@ -1007,7 +1457,10 @@ export class Game {
         src.inv.meat += def.meat;
         src.inv.bone += def.bone || 0;
         if (def.crystal) src.inv.crystal += def.crystal;
-        src.pfx.push({ k: 'gain', x: t.x, y: t.y, text: `${def.dna ? `+${def.dna} ☣  ` : ''}+${def.meat} 🥩  +${def.bone || 0} 🦴${def.crystal ? `  +${def.crystal} 💎` : ''}` });
+        // победа над мутантом или колоссом укрепляет дух (если путь разума не выбран)
+        const sp = src.path !== 'mind' ? (t.kind === 'mutant' ? SPIRIT_GAIN.mutant : t.kind === 'colossus' ? SPIRIT_GAIN.colossus : 0) : 0;
+        src.spirit += sp;
+        src.pfx.push({ k: 'gain', x: t.x, y: t.y, text: `${def.dna ? `+${def.dna} ☣  ` : ''}+${def.meat} 🥩  +${def.bone || 0} 🦴${def.crystal ? `  +${def.crystal} 💎` : ''}${sp ? `  +${sp} ✨` : ''}` });
       }
       return;
     }
@@ -1015,6 +1468,10 @@ export class Game {
     t.dead = true;
     t.hp = 0;
     t.charging = 0;
+    t.shieldT = 0;
+    t.shieldHp = 0;
+    t.hexT = 0;
+    t.stunT = 0;
     t.openCont = null;
     t.input = idleInput();
     t.weapon = null;
@@ -1075,18 +1532,29 @@ export class Game {
       const expired = j.life <= 0 || j.x < 0 || j.y < 0 || j.x > WORLD_W || j.y > WORLD_H;
       if (!hit && !expired) continue;
       this.projectiles.delete(j.id);
-      if (j.kind === 'bomb') {
+      if (j.radius) {
         this.explode(j, owner);
         continue;
       }
       if (!hit) continue;
       if (hit.type) {
-        this.damageCreature(hit, j.dmg, owner, j.kind === 'acid' ? 'acid' : 'ranged');
+        const dealt = this.damageCreature(hit, j.dmg, owner, j.kind === 'acid' ? 'acid' : 'ranged');
         if (j.kind === 'acid') hit.slowT = 1.5;
         else {
           const d = Math.hypot(j.vx, j.vy) || 1;
-          hit.kbx += (j.vx / d) * 60;
-          hit.kby += (j.vy / d) * 60;
+          hit.kbx += (j.vx / d) * (j.kb || 60);
+          hit.kby += (j.vy / d) * (j.kb || 60);
+        }
+        if (j.kind === 'drain' && owner && !owner.dead && dealt > 0) {
+          owner.hp = Math.min(owner.stats.maxHp, owner.hp + dealt);
+          this.fx.push({ k: 'drain', x: hit.x, y: hit.y, x2: owner.x, y2: owner.y });
+        }
+        if (j.kind === 'hex' && !hit.dead) {
+          hit.hexT = j.hexTime;
+          hit.hexDps = j.hexDps;
+          hit.hexVuln = j.hexVuln;
+          hit.hexSrc = j.owner;
+          hit.hexTick = 0;
         }
       } else if (hit.cat === 'struct') {
         const mult = PROJ_STRUCT[j.kind] || PROJ_STRUCT.stone;
@@ -1117,7 +1585,7 @@ export class Game {
   // взрыв бомбы: урон существам вокруг и сильный урон постройкам
   explode(j, owner) {
     const R = j.radius || 100;
-    this.fx.push({ k: 'boom', x: j.x, y: j.y });
+    this.fx.push({ k: 'boom', x: j.x, y: j.y, m: j.kind });
     for (const t of this.creaturesNear(j.x, j.y, R + 40)) {
       const d = Math.hypot(t.x - j.x, t.y - j.y) - t.stats.radius;
       if (d > R) continue;
@@ -1177,8 +1645,8 @@ export class Game {
       if (bad) continue;
       if (i < 200) {
         let hostile = false;
-        for (const n of this.npcs.values()) {
-          if (NPCS[n.kind].behavior !== 'passive' && Math.hypot(n.x - x, n.y - y) < 380) {
+        for (const n of this.npcsNear(x, y, 380)) {
+          if (NPCS[n.kind].behavior !== 'passive') {
             hostile = true;
             break;
           }
@@ -1246,39 +1714,74 @@ export class Game {
   maintainNpcs(night) {
     const counts = { grazer: 0, stalker: 0, colossus: 0, mutant: 0 };
     const guards = new Map(); // "место:вид" -> сколько живо
+    const hunters = []; // ночные клыкачи, вышедшие к игрокам
     for (const n of this.npcs.values()) {
       if (n.zone !== undefined) {
         const key = `${n.zone}:${n.kind}`;
         guards.set(key, (guards.get(key) || 0) + 1);
-      } else counts[n.kind]++;
+      } else if (n.hunter) hunters.push(n);
+      else if (!n.meteor) counts[n.kind]++;
     }
     for (const z of this.zones) {
       for (const [kind, want] of Object.entries(SITES[z.kind].guards)) {
         if ((guards.get(`${z.id}:${kind}`) || 0) < want) this.spawnGuard(z, kind, false);
       }
     }
+    // звери вне особых мест: недостачу добираем понемногу
     for (const kind of Object.keys(NPC_TARGET)) {
-      const target = NPC_TARGET[kind] + (kind === 'stalker' && night ? NIGHT_EXTRA_STALKERS : 0);
-      if (counts[kind] < target) this.spawnNpc(kind);
-      if (counts[kind] < target - 4) this.spawnNpc(kind);
+      const deficit = NPC_TARGET[kind] - counts[kind];
+      for (let i = 0; i < Math.min(10, Math.ceil(deficit / 10)); i++) this.spawnNpc(kind);
     }
-    // днём лишние ночные хищники уходят (если их никто не видит)
-    if (!night && counts.stalker > NPC_TARGET.stalker) {
-      for (const n of this.npcs.values()) {
-        if (n.kind === 'stalker' && n.zone === undefined && !n.target && !this.nearestPlayer(n.x, n.y, 900, false)) {
-          this.npcs.delete(n.id);
-          break;
-        }
+    if (night) {
+      // ночью клыкачи выходят на охоту вокруг каждого игрока
+      for (const p of this.players.values()) {
+        if (p.dead) continue;
+        const near = hunters.filter((n) => Math.hypot(n.x - p.x, n.y - p.y) < 2200).length;
+        if (near < NIGHT_STALKERS_PER_PLAYER) this.spawnHunter(p);
+      }
+    } else {
+      // днём охотники уходят, если их никто не видит
+      for (const n of hunters) {
+        if (!n.target && !this.nearestPlayer(n.x, n.y, 900, false)) this.npcs.delete(n.id);
       }
     }
   }
 
+  // ночной клыкач появляется в 900–1500 единицах от игрока, вне воды и особых мест
+  spawnHunter(p) {
+    for (let i = 0; i < 20; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = 900 + Math.random() * 600;
+      const x = p.x + Math.cos(a) * d;
+      const y = p.y + Math.sin(a) * d;
+      const t = this.tileAt(x, y);
+      if (t !== T.FOREST && t !== T.ROCK && t !== T.GRASS) continue;
+      if (zoneAt(this.zones, x, y)) continue;
+      if (this.grid.query(x, y, 200).some((s) => s.cat === 'struct')) continue;
+      const n = this.spawnNpc('stalker', true, { x, y });
+      if (n) n.hunter = true;
+      return n;
+    }
+    return null;
+  }
+
+
   updateMeteor() {
     const m = this.meteor;
     if (m.state === 'idle' && this.time >= m.next) {
+      // на огромном острове метеорит падает в 1,5–4,5 тыс. единиц от случайного игрока
+      const alive = [...this.players.values()].filter((p) => !p.dead);
       for (let i = 0; i < 200; i++) {
-        const tx = 8 + Math.floor(Math.random() * (MAP_W - 16));
-        const ty = 8 + Math.floor(Math.random() * (MAP_H - 16));
+        let tx = 8 + Math.floor(Math.random() * (MAP_W - 16));
+        let ty = 8 + Math.floor(Math.random() * (MAP_H - 16));
+        if (alive.length && i < 150) {
+          const p = alive[Math.floor(Math.random() * alive.length)];
+          const a = Math.random() * Math.PI * 2;
+          const d = 1500 + Math.random() * 3000;
+          tx = Math.floor((p.x + Math.cos(a) * d) / TILE);
+          ty = Math.floor((p.y + Math.sin(a) * d) / TILE);
+          if (tx < 8 || ty < 8 || tx >= MAP_W - 8 || ty >= MAP_H - 8) continue;
+        }
         const t = this.tiles[ty * MAP_W + tx];
         if (t !== T.GRASS && t !== T.FOREST && t !== T.SAND) continue;
         m.x = tx * TILE + HS;
@@ -1313,13 +1816,17 @@ export class Game {
         const a = Math.random() * Math.PI * 2;
         const x = m.x + Math.cos(a) * 240;
         const y = m.y + Math.sin(a) * 240;
-        if (!isWater(this.tileAt(x, y))) this.spawnNpc('mutant', true, { x, y });
+        if (isWater(this.tileAt(x, y))) continue;
+        const n = this.spawnNpc('mutant', true, { x, y });
+        if (n) n.meteor = true;
       }
     } else if (m.state === 'landed') {
       let left = 0;
       for (const s of this.grid.query(m.x, m.y, 260)) if (s.kind === 'crystal') left++;
       if (left === 0 || this.time > m.until) {
         for (const s of this.grid.query(m.x, m.y, 260)) if (s.kind === 'crystal') this.removeStatic(s);
+        // мутанты метеорита уходят вместе с ним (если не дерутся)
+        for (const n of this.npcs.values()) if (n.meteor && !n.target) this.npcs.delete(n.id);
         m.state = 'idle';
         m.next = this.time + 200 + Math.random() * 140;
       }
@@ -1365,6 +1872,8 @@ export class Game {
       h: Math.ceil(p.hp), mh: p.stats.maxHp, n: p.name, c: p.color, g: p.look, ap: p.ap, dd: p.dead ? 1 : undefined,
       at: p.atkT > 0 ? 1 : 0, hf: p.hitT > 0 ? 1 : 0, ch: p.charging > 0 ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0,
       w: p.weapon || undefined,
+      sh: p.shieldT > 0 ? 1 : undefined, hx: p.hexT > 0 ? 1 : undefined, st: p.stunT > 0 ? 1 : undefined,
+      pa: p.path || undefined,
     };
   }
 
@@ -1372,6 +1881,7 @@ export class Game {
     return {
       i: n.id, k: 'n', t: n.kind, x: Math.round(n.x), y: Math.round(n.y), a: Math.round(n.angle * 100) / 100,
       h: Math.ceil(n.hp), mh: n.stats.maxHp, c: n.color, g: n.look, at: n.atkT > 0 ? 1 : 0, hf: n.hitT > 0 ? 1 : 0, wu: n.windupT > 0 ? 1 : 0,
+      hx: n.hexT > 0 ? 1 : undefined, st: n.stunT > 0 ? 1 : undefined,
     };
   }
 
@@ -1387,17 +1897,25 @@ export class Game {
       cb: p.combatT > 0 ? 1 : 0, dead: p.dead ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0, fire: p.nearFire ? 1 : 0,
       nest: nest ? [nest.x, nest.y] : null, k: p.kills,
       wp: p.weapon, rad: round1(p.rad), rz: round1(p.radHere), bench: this.nearBench(p) ? 1 : 0,
+      pa: p.path, kn: p.know, spi: p.spirit, ab: [...p.abil], mn: Math.round(p.mana), mm: p.maxMana,
+      acd: Object.fromEntries(Object.entries(p.abcd).filter(([, v]) => v > 0).map(([k, v]) => [k, round1(v)])),
+      lab: this.nearLab(p) ? 1 : 0, med: p.meditating ? 1 : 0, sh: p.shieldT > 0 ? Math.ceil(p.shieldHp) : 0,
     };
   }
 
   sendSnapshots(phase) {
-    const sa = [...this.sAdd.values()].map((s) => this.serStatic(s));
+    const sa = [];
+    const saChunk = [];
+    for (const s of this.sAdd.values()) {
+      sa.push(this.serStatic(s));
+      saChunk.push(s.cat === 'res' ? s.chunk : null);
+    }
     const sd = [...this.sDel];
     this.sAdd.clear();
     this.sDel.clear();
     const dyn = [];
     for (const p of this.players.values()) dyn.push(this.serPlayer(p)); // погибшие тоже — лежат до возрождения
-    for (const n of this.npcs.values()) dyn.push(this.serNpc(n));
+    const npcSer = new Map(); // звери сериализуются один раз за такт и только если кому-то видны
     for (const j of this.projectiles.values()) dyn.push({ i: j.id, k: 'j', t: j.kind, x: Math.round(j.x), y: Math.round(j.y), a: Math.round(j.a * 100) / 100 });
     const fx = this.fx;
     this.fx = [];
@@ -1413,6 +1931,11 @@ export class Game {
       const vr2 = vr * vr;
       const e = [];
       for (const d of dyn) if ((d.x - p.x) ** 2 + (d.y - p.y) ** 2 <= vr2) e.push(d);
+      for (const n of this.npcsNear(p.x, p.y, vr)) {
+        let d = npcSer.get(n.id);
+        if (!d) npcSer.set(n.id, (d = this.serNpc(n)));
+        e.push(d);
+      }
       const fr2 = (vr + 200) ** 2;
       const myFx = fx.filter((f) => f.g || (f.x - p.x) ** 2 + (f.y - p.y) ** 2 < fr2);
       if (p.pfx.length) {
@@ -1420,7 +1943,9 @@ export class Game {
         p.pfx = [];
       }
       const msg = { t: 's', st, ph, you: this.serYou(p), e, m: meteor };
-      if (sa.length) msg.sa = sa;
+      // изменения ресурсов — только тем, у кого загружен их участок
+      const mySa = sa.filter((x, i) => saChunk[i] === null || p.resLoaded.has(saChunk[i]));
+      if (mySa.length) msg.sa = mySa;
       if (sd.length) msg.sd = sd;
       if (myFx.length) msg.fx = myFx;
       c.ws.send(JSON.stringify(msg));

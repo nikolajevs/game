@@ -31,17 +31,20 @@ const tiles = generateMap(SEED);
 const tileAt = (tx, ty) => (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H ? T.DEEP : tiles[ty * MAP_W + tx]);
 const terrain = new Terrain(tiles, SEED);
 scene.add(terrain.group);
-scene.add(new Decor(terrain, tiles, SEED).group);
+const decor = new Decor(terrain, tiles, SEED);
+scene.add(decor.group);
 const sky = new Sky(scene);
 const statics = new StaticsView(scene, terrain);
 statics.myUid = 'me';
 
 // ---------- выбор места для базы: луг рядом с лесом, скалами и водой ----------
 function findBaseSpot() {
-  let best = { tx: 60, ty: 60 };
+  // остров огромный — ищем только в средней части и с шагом
+  const c0 = Math.floor(MAP_W / 2);
+  let best = { tx: c0, ty: c0 };
   let bestScore = -Infinity;
-  for (let ty = 12; ty < MAP_H - 20; ty += 1) {
-    for (let tx = 12; tx < MAP_W - 20; tx += 1) {
+  for (let ty = Math.max(12, c0 - 150); ty < Math.min(MAP_H - 20, c0 + 150); ty += 3) {
+    for (let tx = Math.max(12, c0 - 150); tx < Math.min(MAP_W - 20, c0 + 150); tx += 3) {
       let ok = true;
       for (let dy = 0; dy <= 8 && ok; dy++) {
         for (let dx = -2; dx <= 8 && ok; dx++) {
@@ -102,6 +105,7 @@ const clearZones = [
   [crater.x - 140, crater.y - 140, crater.x + 140, crater.y + 140],
 ];
 for (const r of generateResources(tiles, SEED)) {
+  if (Math.hypot(r.x - W(3), r.y - H(3)) > 3500) continue; // только окрестности базы
   if (clearZones.some(([x0, y0, x1, y1]) => r.x > x0 && r.x < x1 && r.y > y0 && r.y < y1)) continue;
   const hp = RESOURCES[r.kind].hp;
   add({ k: r.kind, x: r.x, y: r.y, h: hp, m: hp, v: r.v });
@@ -502,15 +506,17 @@ function frame(now) {
     view = myStats.vision * VIEW_MULT;
   } else {
     cam.orbit += dt * 0.05;
-    target.set(MAP_W * TILE * 0.5, 0, MAP_H * TILE * 0.5);
-    camera.position.set(target.x + Math.cos(cam.orbit) * 2900, 2300, target.z + Math.sin(cam.orbit) * 2900);
+    // облёт окрестностей базы: весь огромный остров разом не строим
+    target.set(W(3), 0, H(3));
+    camera.position.set(target.x + Math.cos(cam.orbit) * 2200, 1500, target.z + Math.sin(cam.orbit) * 2200);
     camera.lookAt(target);
-    view = 9000;
+    view = 3800;
   }
   const shadowCenter = cam.mode === 'third' ? target : tmpV.set(W(3), 0, H(3));
   const env = sky.update(phase, shadowCenter, view);
   const night = 1 - env.k;
-  terrain.update(elapsed);
+  terrain.update(elapsed, target, view);
+  decor.update(target, Math.min(view, 2400));
   statics.update(dt, camera.position, night);
   for (const a of actors) a.c.update(dt, { speed: a.speedNow, warning: a.windupT > 0, night });
 

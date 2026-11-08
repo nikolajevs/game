@@ -1,12 +1,15 @@
 // Интерфейс поверх 3D: полоски, инвентарь, пояс с оружием, крафт, мини-карта, чат, хранилище.
 import {
   ITEMS, ITEM_KEYS, RES_KEYS, STRUCTURES, STRUCT_ORDER, MAP_W, MAP_H, TILE, lightAt,
-  WEAPONS, WEAPON_ORDER, RECIPES, RECIPE_GROUPS, RAD, SITES,
+  WEAPONS, WEAPON_ORDER, RECIPES, RECIPE_GROUPS, RAD, SITES, ABILITIES, ABILITY_ORDER,
 } from '/shared/config.js';
+
+const MINI_SPAN = 4800; // сколько единиц мира видно на мини-карте
 
 const $ = (id) => document.getElementById(id);
 const TILE_RGB = [[27, 79, 99], [60, 138, 134], [227, 208, 154], [120, 177, 83], [63, 128, 64], [143, 142, 134]];
 const RECIPE_DESC = {
+  cell: 'Боеприпас лазерной винтовки',
   arrows: 'Для лука и арбалета',
   bullets: 'Для самопала и дробовика',
   antirad: `Снимает ${RAD.antirad} ед. радиации (R)`,
@@ -24,8 +27,10 @@ export class Hud {
     this.send = send;
     this.root = $('hud');
     this.bars = {
-      hp: $('barHp'), food: $('barFood'), water: $('barWater'), sta: $('barSta'), rad: $('barRad'),
+      hp: $('barHp'), food: $('barFood'), water: $('barWater'), sta: $('barSta'), rad: $('barRad'), mana: $('barMana'),
     };
+    this.knowVal = $('knowVal');
+    this.spiritVal = $('spiritVal');
     this.invEl = $('inv');
     this.invChips = {};
     for (const k of RES_KEYS) {
@@ -50,6 +55,9 @@ export class Hud {
     this.playerListEl = $('playerList');
     this.minimap = $('minimap');
     this.mctx = this.minimap.getContext('2d');
+    this.bigOpen = false;
+    this.minimap.addEventListener('click', () => this.toggleBigMap());
+    $('bigmap').addEventListener('click', () => this.toggleBigMap(false));
     this.buildBar = $('buildBar');
     this.contEl = $('container');
     this.craftEl = $('craft');
@@ -64,7 +72,7 @@ export class Hud {
       const el = document.createElement('div');
       el.className = 'bslot';
       el.title = d.desc;
-      el.innerHTML = `<kbd>${i + 1}</kbd><div class="bn">${d.name}</div><div class="bc">${costText(d.cost)}</div>`;
+      el.innerHTML = `<kbd>${(i + 1) % 10}</kbd><div class="bn">${d.name}</div><div class="bc">${costText(d.cost)}</div>`;
       el.addEventListener('mousedown', (e) => {
         e.stopPropagation();
         this.onPickBuild?.(k);
@@ -100,6 +108,7 @@ export class Hud {
       ruins: ['rgba(190, 230, 60, 0.35)', 'rgba(230, 210, 40, 0.9)'],
       mine: ['rgba(200, 150, 80, 0.35)', 'rgba(230, 170, 70, 0.9)'],
       lair: ['rgba(150, 70, 50, 0.35)', 'rgba(200, 90, 60, 0.9)'],
+      altar: ['rgba(160, 90, 220, 0.35)', 'rgba(199, 125, 255, 0.95)'],
     };
     for (const z of this.zones) {
       const [fill, stroke] = SITE_COLORS[z.kind] || SITE_COLORS.ruins;
@@ -132,6 +141,14 @@ export class Hud {
     const showRad = you.rad > 0.5 || you.rz > 0;
     this.bars.rad.classList.toggle('hidden', !showRad);
     if (showRad) this.setBar(this.bars.rad, you.rad, 100, 'rad');
+    const showMana = you.pa === 'spirit';
+    this.bars.mana.classList.toggle('hidden', !showMana);
+    if (showMana) this.setBar(this.bars.mana, you.mn, you.mm, 'mana');
+    if (this.cache.pts !== `${you.kn}|${you.spi}`) {
+      this.cache.pts = `${you.kn}|${you.spi}`;
+      this.knowVal.textContent = you.kn || 0;
+      this.spiritVal.textContent = you.spi || 0;
+    }
     // зелёная дымка по краям экрана в зоне радиации
     const radOp = Math.min(0.85, you.rz * 0.22 + (you.rad / 100) * 0.35);
     if (this.cache.radOp !== radOp.toFixed(2)) {
@@ -158,6 +175,9 @@ export class Hud {
     if (you.sp) status = '🛡 Защита после появления';
     else if (you.cb) status = '⚔ В бою — мутировать нельзя';
     else if (you.fire) status = '🔥 У костра: здоровье восстанавливается быстрее';
+    else if (you.lab) status = '🔬 Лаборатория рядом: изучайте данные и ставьте опыты в окне пути (P), крафтите технологии (C)';
+    if (you.med) status = '🕯 Медитация у алтаря: сила духа копится, мана восстанавливается быстрее';
+    if (you.sh > 0) status = `🛡 Щит духа: ${you.sh}`;
     if (you.rz > 0) status = `☢ ${this.siteName || 'Радиационная зона'} (радиация ${Math.ceil(you.rz)}) — облучение растёт, копится мутаген`;
     if (you.rad >= RAD.dmgStart) status = '☢ Лучевая болезнь! Уйдите из зоны и примите антирад [R]';
     if (you.f <= 0 || you.w <= 0) status = '⚠ Вы голодаете — поешьте [F] или попейте у воды [E]';
@@ -172,15 +192,38 @@ export class Hud {
     return WEAPON_ORDER.filter((k) => you.inv[k] > 0);
   }
 
+  // заклинания и мгновенные умения пути — тоже в поясе, после оружия
+  ownedSkills(you) {
+    const has = new Set(you.ab || []);
+    return ABILITY_ORDER.filter((id) => has.has(id) && (ABILITIES[id].kind === 'spell' || ABILITIES[id].kind === 'instant'));
+  }
+
   updateBelt(you, stats) {
-    const list = this.ownedWeapons(you);
-    const sig = `${list.map((k) => `${k}${you.inv[k]}`).join(',')}|${you.wp}|${you.inv.arrows}|${you.inv.bullets}|${you.inv.stone}|${stats.canHold}`;
+    const list = [...this.ownedWeapons(you), ...this.ownedSkills(you)];
+    const cds = list.map((k) => (you.acd?.[k] ? Math.ceil(you.acd[k] * 4) : 0)).join(',');
+    const sig = `${list.map((k) => `${k}${you.inv[k]}`).join(',')}|${you.wp}|${you.inv.arrows}|${you.inv.bullets}|${you.inv.stone}|${you.inv.cell}|${stats.canHold}|${cds}|${Math.floor((you.mn || 0) / 5)}`;
     if (this.cache.belt === sig) return;
     this.cache.belt = sig;
     this.belt = list;
     this.beltEl.classList.toggle('hidden', !list.length);
     this.beltEl.innerHTML = '';
     list.forEach((k, i) => {
+      const ab = ABILITIES[k];
+      if (ab) {
+        // умение пути: заклинание (выбрать) или мгновенное (применить сразу)
+        const el = document.createElement('div');
+        const lowMana = ab.mana && (you.mn || 0) < ab.mana;
+        el.className = `wslot ${ab.path === 'spirit' ? 'spell' : 'tech'}${you.wp === k ? ' on' : ''}${lowMana ? ' off' : ''}`;
+        el.title = `${ab.name}: ${ab.desc}`;
+        const cd = you.acd?.[k] || 0;
+        el.innerHTML = `<kbd>${i + 1}</kbd><div class="wi">${ab.icon}</div><div class="wn">${ab.short || ab.name}</div><div class="wa">${ab.mana ? `${ab.mana}✦` : ab.kind === 'instant' ? 'сразу' : ''}</div>${cd > 0 ? `<div class="wcd" style="height:${Math.min(100, (cd / ab.cd) * 100)}%"></div>` : ''}`;
+        el.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          this.onSkill?.(k);
+        });
+        this.beltEl.appendChild(el);
+        return;
+      }
       const w = WEAPONS[k];
       const el = document.createElement('div');
       el.className = `wslot${you.wp === k ? ' on' : ''}${stats.canHold ? '' : ' off'}`;
@@ -198,9 +241,10 @@ export class Hud {
   }
 
   updateAbilities(you, stats) {
-    const w = you.wp ? WEAPONS[you.wp] : null;
-    const atkIcon = you.wp ? ITEMS[you.wp].icon : '🐾';
-    const atkName = you.wp ? ITEMS[you.wp].name.split(' ').pop() : 'Удар';
+    const spell = you.wp ? ABILITIES[you.wp] : null;
+    const w = you.wp && !spell ? WEAPONS[you.wp] : null;
+    const atkIcon = spell ? spell.icon : you.wp ? ITEMS[you.wp].icon : '🐾';
+    const atkName = spell ? spell.short || spell.name : you.wp ? ITEMS[you.wp].name.split(' ').pop() : 'Удар';
     const list = [
       { key: 'ЛКМ', ic: atkIcon, nm: atkName, cd: you.cd.m, max: w ? w.cd : stats.attackCd, on: true },
       { key: 'Q', ic: '🧪', nm: 'Кислота', cd: you.cd.s, max: stats.spit ? stats.spit.cd : 1, on: !!stats.spit },
@@ -219,8 +263,10 @@ export class Hud {
   updateBuildBar(you, kind) {
     this.buildBar.classList.toggle('hidden', !kind);
     if (!kind) return;
+    const has = new Set(you.ab || []);
     for (const { k, el } of this.buildSlots) {
       el.classList.toggle('on', k === kind);
+      el.classList.toggle('locked', !!STRUCTURES[k].ability && !has.has(STRUCTURES[k].ability));
       const cost = STRUCTURES[k].cost;
       el.classList.toggle('poor', Object.entries(cost).some(([r, v]) => (you.inv[r] || 0) < v));
     }
@@ -235,7 +281,7 @@ export class Hud {
   }
 
   renderCraft(you) {
-    const sig = `${ITEM_KEYS.map((k) => you.inv[k] || 0).join(',')}|${you.bench}`;
+    const sig = `${ITEM_KEYS.map((k) => you.inv[k] || 0).join(',')}|${you.bench}|${you.lab}|${(you.ab || []).join(',')}`;
     if (this.cache.craft === sig) return;
     this.cache.craft = sig;
     const body = $('craftBody');
@@ -249,6 +295,8 @@ export class Hud {
         const rec = RECIPES[k];
         const poor = Object.entries(rec.cost).some(([r, v]) => (you.inv[r] || 0) < v);
         const needBench = rec.bench && !you.bench;
+        const needLab = rec.lab && !you.lab;
+        const needAb = rec.ability && !(you.ab || []).includes(rec.ability);
         const row = document.createElement('div');
         row.className = 'crow2';
         const w = WEAPONS[k];
@@ -256,12 +304,12 @@ export class Hud {
         const stat = w ? (w.type === 'melee' ? `+${w.dmg} урона` : w.type === 'throw' ? `${w.dmg} урона, взрыв` : `${w.dmg}${w.pellets ? `×${w.pellets}` : ''} урона`) : '';
         const have = you.inv[k] ? ` <span class="muted">(есть ${you.inv[k]})</span>` : '';
         row.innerHTML = `<div class="ci">${ITEMS[k].icon}</div>
-          <div class="cn"><b>${ITEMS[k].name}${rec.out > 1 ? ` ×${rec.out}` : ''}</b>${have}<div class="cd">${desc}${stat ? ` · ${stat}` : ''}${rec.bench ? ' · <span class="bench">нужен верстак</span>' : ''}</div></div>
+          <div class="cn"><b>${ITEMS[k].name}${rec.out > 1 ? ` ×${rec.out}` : ''}</b>${have}<div class="cd">${desc}${stat ? ` · ${stat}` : ''}${rec.bench ? ' · <span class="bench">нужен верстак</span>' : ''}${rec.lab ? ' · <span class="bench">нужна лаборатория</span>' : ''}${needAb ? ` · <span class="bench">умение «${ABILITIES[rec.ability].name}»</span>` : ''}</div></div>
           <div class="cc">${costText(rec.cost, you.inv)}</div>`;
         const b = document.createElement('button');
         b.textContent = 'Создать';
-        b.disabled = poor || needBench;
-        b.title = needBench ? 'Подойдите к верстаку' : poor ? 'Не хватает ресурсов' : '';
+        b.disabled = poor || needBench || needLab || needAb;
+        b.title = needAb ? 'Нужно умение пути разума' : needBench ? 'Подойдите к верстаку' : needLab ? 'Подойдите к лаборатории' : poor ? 'Не хватает ресурсов' : '';
         b.addEventListener('click', () => this.send({ t: 'craft', item: k }));
         row.appendChild(b);
         body.appendChild(row);
@@ -284,42 +332,74 @@ export class Hud {
     }
   }
 
+  // Мини-карта: окрестности игрока (MINI_SPAN единиц), за краем — стрелки к гнезду и метеориту
   drawMinimap(me, face, nest, meteor, myStructures, t) {
-    const g = this.mctx;
+    this.lastMap = { me, face, nest, meteor, myStructures };
+    if (!me) return;
     const W = this.minimap.width;
-    const s = W / (MAP_W * TILE);
+    const span = MINI_SPAN;
+    const x0 = me.x - span / 2;
+    const y0 = me.y - span / 2;
+    this.drawMap(this.mctx, W, x0, y0, span, { me, face, nest, meteor, myStructures, t, edge: true });
+    if (this.bigOpen) this.drawBigMap(t);
+  }
+
+  // Общая отрисовка карты: область [x0, x0 + span] × [y0, y0 + span] мира в квадрат W×W
+  drawMap(g, W, x0, y0, span, { me, face, nest, meteor, myStructures, t, edge = false, iconSize = 10 }) {
+    const s = W / span;
+    const px = (x) => (x - x0) * s;
+    const py = (y) => (y - y0) * s;
+    g.fillStyle = '#1b4f63';
+    g.fillRect(0, 0, W, W);
     g.imageSmoothingEnabled = false;
-    if (this.mapBase) g.drawImage(this.mapBase, 0, 0, W, W);
+    if (this.mapBase) g.drawImage(this.mapBase, x0 / TILE, y0 / TILE, span / TILE, span / TILE, 0, 0, W, W);
     g.fillStyle = '#ffffff';
-    for (const st of myStructures) g.fillRect(st.x * s - 1, st.y * s - 1, 2.5, 2.5);
-    g.font = '10px sans-serif';
+    for (const st of myStructures || []) g.fillRect(px(st.x) - 1, py(st.y) - 1, 2.5, 2.5);
+    g.font = `${iconSize}px sans-serif`;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     for (const z of this.zones) {
+      const zx = px(z.x);
+      const zy = py(z.y);
+      if (zx < -10 || zy < -10 || zx > W + 10 || zy > W + 10) continue;
       g.fillStyle = '#1d1d1f';
-      g.fillText(SITES[z.kind]?.icon || '☢', z.x * s, z.y * s);
+      g.fillText(SITES[z.kind]?.icon || '☢', zx, zy);
     }
+    // точка на краю карты по направлению к цели, если сама цель за краем
+    const clampEdge = (x, y) => {
+      const cx = W / 2;
+      const dx = x - cx;
+      const dy = y - cx;
+      const m = Math.max(Math.abs(dx), Math.abs(dy));
+      const lim = cx - 8;
+      if (m <= lim) return [x, y, false];
+      return [cx + (dx / m) * lim, cx + (dy / m) * lim, true];
+    };
     if (nest) {
+      let [nx, ny, out] = [px(nest[0]), py(nest[1]), false];
+      if (edge) [nx, ny, out] = clampEdge(nx, ny);
       g.fillStyle = '#ffd23f';
       g.beginPath();
-      g.arc(nest[0] * s, nest[1] * s, 3.5, 0, Math.PI * 2);
+      g.arc(nx, ny, out ? 3 : 3.5, 0, Math.PI * 2);
       g.fill();
       g.strokeStyle = '#000';
       g.lineWidth = 1;
       g.stroke();
     }
     if (meteor) {
+      let [mx, my, out] = [px(meteor.x), py(meteor.y), false];
+      if (edge) [mx, my, out] = clampEdge(mx, my);
       g.strokeStyle = '#c77dff';
       g.lineWidth = 2;
       g.beginPath();
-      g.arc(meteor.x * s, meteor.y * s, 5 + Math.sin(t * 5) * 2, 0, Math.PI * 2);
+      g.arc(mx, my, (out ? 3 : 5) + Math.sin(t * 5) * 2, 0, Math.PI * 2);
       g.stroke();
       g.fillStyle = '#c77dff';
-      g.fillRect(meteor.x * s - 1.5, meteor.y * s - 1.5, 3, 3);
+      g.fillRect(mx - 1.5, my - 1.5, 3, 3);
     }
     if (me) {
       g.save();
-      g.translate(me.x * s, me.y * s);
+      g.translate(px(me.x), py(me.y));
       g.rotate(face);
       g.fillStyle = '#9cf0a4';
       g.strokeStyle = '#0b1016';
@@ -335,6 +415,25 @@ export class Hud {
       g.restore();
     }
   }
+
+  // Большая карта всего острова (N или щелчок по мини-карте)
+  toggleBigMap(force) {
+    this.bigOpen = force ?? !this.bigOpen;
+    $('bigmap').classList.toggle('hidden', !this.bigOpen);
+    if (this.bigOpen) this.drawBigMap(performance.now() / 1000);
+  }
+
+  drawBigMap(t) {
+    const c = $('bigmapCanvas');
+    const size = Math.floor(Math.min(window.innerWidth * 0.9, window.innerHeight * 0.82, 900));
+    if (c.width !== size) {
+      c.width = size;
+      c.height = size;
+    }
+    const m = this.lastMap || {};
+    this.drawMap(c.getContext('2d'), size, 0, 0, MAP_W * TILE, { ...m, t, iconSize: 11 });
+  }
+
 
   setHint(html) {
     if (this.cache.hint === html) return;

@@ -67,6 +67,14 @@ export function evolveCost(from, to) {
   return { dna, crystals, refund, net: dna - refund };
 }
 
+// С «Генной инженерией» (путь разума) мутации дешевле, а 3-й уровень не требует кристаллов
+export function evolveCostWith(from, to, genetics) {
+  const c = evolveCost(from, to);
+  if (!genetics) return c;
+  const dna = Math.ceil(c.dna * 0.7);
+  return { dna, crystals: 0, refund: c.refund, net: dna - c.refund };
+}
+
 export function computeStats(g) {
   const L = (k) => g.parts[k] || 0;
   const size = L('size');

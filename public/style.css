@@ -93,6 +93,45 @@ canvas#game { cursor: none; }
 #barSta .fill { background: linear-gradient(90deg, #b5a52c, #e0d24f); }
 #barRad .fill { background: linear-gradient(90deg, #7bbf2a, #c6f03a); }
 #barRad .ico { color: #c6f03a; }
+#barMana .fill { background: linear-gradient(90deg, #6b3fd6, #c77dff); }
+#barMana .ico { color: #c77dff; }
+#pathPanel { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 6px 12px; gap: 8px; }
+#pathPanel .pts { font-size: 14px; display: flex; gap: 10px; }
+#pathPanel .pts b { font-variant-numeric: tabular-nums; }
+/* окно путей развития */
+.paths-box { padding: 14px 16px; width: min(1080px, calc(100vw - 24px)); max-height: calc(100vh - 32px); overflow-y: auto; }
+.paths-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 6px 0 10px; flex-wrap: wrap; }
+.paths-chosen { font-size: 14px; }
+.paths-chosen b { color: var(--pc, #fff); }
+.paths-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 820px) { .paths-cols { grid-template-columns: 1fr; } }
+.path-col { border: 1px solid color-mix(in srgb, var(--pc) 45%, transparent); border-radius: 12px; padding: 10px 12px; background: color-mix(in srgb, var(--pc) 7%, transparent); }
+.path-col.closed { opacity: 0.45; filter: grayscale(0.6); }
+.path-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.path-name { font-size: 17px; font-weight: 700; color: var(--pc); }
+.path-pts { font-size: 14px; }
+.path-desc { font-size: 12.5px; margin: 4px 0 2px; color: #d8e6da; }
+.path-how { font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
+.path-acts { display: flex; flex-direction: column; gap: 5px; margin: 6px 0 8px; }
+.path-acts button { text-align: left; font-size: 12.5px; padding: 5px 9px; }
+.tier { margin-top: 8px; }
+.tier-name { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--pc); margin-bottom: 4px; }
+.tier-row { display: flex; flex-direction: column; gap: 5px; }
+.ab-card { display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 9px; background: rgba(255,255,255,0.035); border: 1px solid transparent; }
+.ab-card.has { border-color: color-mix(in srgb, var(--pc) 60%, transparent); background: color-mix(in srgb, var(--pc) 13%, transparent); }
+.ab-ic { font-size: 22px; text-align: center; }
+.ab-name { font-weight: 600; font-size: 13.5px; }
+.ab-desc { font-size: 11.5px; color: #c9d8cb; line-height: 1.3; }
+.ab-kind { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+.ab-btn button { font-size: 12px; padding: 5px 9px; white-space: nowrap; }
+.ab-done { color: var(--pc); font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.ab-lock { color: var(--muted); font-size: 12px; white-space: nowrap; }
+button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
+.wslot.spell { border-color: rgba(199, 125, 255, 0.35); }
+.wslot.spell.on { border-color: #c77dff; background: rgba(199, 125, 255, 0.2); }
+.wslot.tech { border-color: rgba(94, 200, 255, 0.35); }
+.wslot .wcd { position: absolute; left: 0; bottom: 0; width: 100%; background: rgba(0, 0, 0, 0.6); border-radius: 0 0 8px 8px; pointer-events: none; }
+.bslot.locked { opacity: 0.35; }
 .bar.low .track { box-shadow: 0 0 0 1px #ff5d5d; animation: pulse 0.8s infinite alternate; }
 @keyframes pulse { from { opacity: 1; } to { opacity: 0.55; } }
 
@@ -109,7 +148,10 @@ canvas#game { cursor: none; }
 .chip.zero { opacity: 0.38; }
 
 #topRight { position: fixed; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
-#minimapWrap { padding: 5px; }
+#minimapWrap { padding: 5px; cursor: pointer; }
+#bigmap { background: rgba(5, 10, 14, 0.55); z-index: 30; }
+.bigmap-box { padding: 12px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+#bigmapCanvas { border-radius: 8px; image-rendering: pixelated; max-width: 90vw; max-height: 82vh; }
 #minimap { display: block; width: 200px; height: 200px; border-radius: 8px; }
 #clock { padding: 5px 12px; font-size: 13px; }
 

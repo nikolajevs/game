@@ -100,7 +100,7 @@ export function updateNpc(g, n, dt, night) {
           n.atkT = 0.22;
           g.melee(n, n.stats.meleeDmg);
         }
-      } else if (d <= reach && n.cd.melee <= 0) {
+      } else if (d <= reach && n.cd.melee <= 0 && !(n.stunT > 0)) {
         n.windupT = n.kind === 'colossus' ? 0.56 : 0.3;
         mx = 0;
         my = 0;
@@ -125,6 +125,12 @@ export function updateNpc(g, n, dt, night) {
   }
 
   if (n.slowT > 0) speed *= 0.6;
+  // оглушён (ЭМИ): стоит на месте и не бьёт, но отлетает от толчков
+  if (n.stunT > 0) {
+    n.windupT = 0;
+    mx = 0;
+    my = 0;
+  }
 
   // сухопутные существа не заходят в воду
   if ((mx || my) && !n.stats.swim) {

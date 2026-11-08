@@ -2,13 +2,11 @@
 // Ресурсов много, поэтому они рисуются через InstancedMesh (пулы).
 import * as THREE from 'three';
 import { TILE, STRUCTURES } from '/shared/config.js';
-import { G, M, between, mergeParts, rng, shade, taper, glowTexture } from './util.js';
+import { G, M, between, mergeParts, rng, shade, taper } from './util.js';
+import { Fire } from './fire.js';
 
 const _m = new THREE.Matrix4();
 const _c = new THREE.Color();
-const leafUp = new THREE.Vector3(0, 1, 0);
-const leafQuaternion = new THREE.Quaternion();
-const leafScale = new THREE.Vector3();
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const STATIC_CHUNK = 600;
 // ресурсы рисуются пулами по участкам карты; постройки — отдельными мешами
@@ -101,28 +99,6 @@ class Pool {
 }
 
 const flatMat = (opts = {}) => new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.85, ...opts });
-
-function makeLeafGeometry() {
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute([
-    0, 0, 0,
-    -0.48, 0.46, 0,
-    0, 1, 0,
-    0.48, 0.46, 0,
-    0, 0.5, 0.12,
-  ], 3));
-  geo.setIndex([0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4]);
-  geo.computeVertexNormals();
-  geo.computeBoundingSphere();
-  return geo;
-}
-
-function leafMatrix(position, direction, width, length, twist) {
-  leafQuaternion.setFromUnitVectors(leafUp, direction.normalize());
-  leafQuaternion.multiply(new THREE.Quaternion().setFromAxisAngle(leafUp, twist));
-  leafScale.set(width, length, width * 0.12);
-  return new THREE.Matrix4().compose(position, leafQuaternion, leafScale);
-}
 
 // ---------- геометрия построек (склеенная, с цветами вершин) ----------
 function buildStructureGeoms() {
@@ -269,6 +245,40 @@ function buildStructureGeoms() {
     parts.push({ geom: G.box, matrix: M(17, 23, -7, 0, 0, 0, 4, 5, 6), color: '#5e5e64' });
     out.workbench = mergeParts(parts);
   }
+
+  // лаборатория: бетонный блок с экранами, колбами и антенной
+  {
+    const parts = [];
+    parts.push({ geom: G.box, matrix: M(0, 13, 0, 0, 0, 0, 38, 26, 30), color: '#9a968c' });
+    parts.push({ geom: G.box, matrix: M(0, 27, 0, 0, 0, 0, 40, 3, 32), color: '#6e6e68' });
+    parts.push({ geom: G.box, matrix: M(-8, 15, 15.4, 0, 0, 0, 14, 9, 1), color: '#1d2b33' });
+    parts.push({ geom: G.box, matrix: M(-8, 15, 15.9, 0, 0, 0, 12, 7, 0.4), color: '#5ec8ff' });
+    parts.push({ geom: G.box, matrix: M(10, 10, 15.4, 0, 0, 0, 8, 20, 1), color: '#4a4a50' });
+    for (const [x, c] of [[-14, '#7dff4a'], [-10, '#c77dff'], [-6, '#ffd166']]) {
+      parts.push({ geom: G.cyl, matrix: M(x, 31.5, -8, 0, 0, 0, 1.6, 6, 1.6), color: c });
+    }
+    parts.push({ geom: G.cyl6, matrix: M(12, 40, -6, 0, 0, 0, 0.8, 24, 0.8), color: '#5e5e64' });
+    parts.push({ geom: G.sphere, matrix: M(12, 52, -6, 0, 0, 0, 2.2), color: '#d9534f' });
+    parts.push({ geom: G.cyl, matrix: M(4, 30, 6, 0.5, 0, 0, 7, 1.2, 7), color: '#c0c0c8' });
+    out.lab = mergeParts(parts);
+  }
+
+  // автотурель: тренога, вращающаяся голова со стволом и сенсором
+  {
+    const parts = [];
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2;
+      parts.push({ geom: G.box, matrix: M(Math.cos(a) * 8, 8, Math.sin(a) * 8, Math.sin(a) * 0.45, -a, -Math.cos(a) * 0.45, 2.4, 18, 2.4), color: '#4a4a50' });
+    }
+    parts.push({ geom: G.cyl, matrix: M(0, 2, 0, 0, 0, 0, 13, 4, 13), color: '#5e5e64' });
+    parts.push({ geom: G.cyl, matrix: M(0, 18, 0, 0, 0, 0, 5, 6, 5), color: '#3d3d40' });
+    parts.push({ geom: G.box, matrix: M(0, 25, 0, 0, 0, 0, 16, 9, 12), color: '#6b7380' });
+    parts.push({ geom: G.cyl6, matrix: M(14, 25, -2.5, 0, 0, Math.PI / 2, 1.3, 18, 1.3), color: '#2b2b2e' });
+    parts.push({ geom: G.cyl6, matrix: M(14, 25, 2.5, 0, 0, Math.PI / 2, 1.3, 18, 1.3), color: '#2b2b2e' });
+    parts.push({ geom: G.box, matrix: M(4, 30.5, 0, 0, 0, 0, 5, 2, 5), color: '#d9534f' });
+    parts.push({ geom: G.box, matrix: M(8.2, 26, 0, 0, 0, 0, 0.6, 3, 4), color: '#5ec8ff' });
+    out.turret = mergeParts(parts);
+  }
   return out;
 }
 
@@ -294,7 +304,6 @@ export class StaticsView {
       pine: [G.cone, leaf, 64, true],
       blob: [G.ico, leaf, 96, true],
       rock: [G.dodeca, flatMat({ roughness: 0.95 }), 32, true],
-      bush: [makeLeafGeometry(), leaf, 128, false],
       berry: [G.ico, flatMat({ roughness: 0.4 }), 32, false],
       crystal: [G.octa, new THREE.MeshStandardMaterial({
         color: 0xffffff, emissive: '#7a2bd6', emissiveIntensity: 0.9, roughness: 0.2, metalness: 0.3, flatShading: true,
@@ -306,8 +315,6 @@ export class StaticsView {
 
     this.sGeo = buildStructureGeoms();
     this.sMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.85 });
-    this.flameMat = new THREE.MeshBasicMaterial({ color: '#ff8a2a', transparent: true, opacity: 0.9 });
-    this.flameMat2 = new THREE.MeshBasicMaterial({ color: '#ffe066', transparent: true, opacity: 0.95 });
     this.eggMats = new Map();
     this.mineMat = new THREE.MeshStandardMaterial({ color: '#53d769', emissive: '#1f7a2e', emissiveIntensity: 0.6 });
     this.otherMat = new THREE.MeshStandardMaterial({ color: '#d9534f', emissive: '#7a1f1f', emissiveIntensity: 0.4 });
@@ -320,7 +327,6 @@ export class StaticsView {
       this.lights.push(l);
       scene.add(l);
     }
-    this.glowMat = new THREE.SpriteMaterial({ map: glowTexture(), color: '#ff9a3c', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
     this.myUid = null;
   }
 
@@ -383,6 +389,7 @@ export class StaticsView {
     if (o.mesh) {
       this.group.remove(o.mesh);
     }
+    o.extra?.fire?.dispose();
     this.objs.delete(id);
   }
 
@@ -517,67 +524,78 @@ export class StaticsView {
     }
   }
 
+  // Ягодный куст: плотная круглая шапка из нескольких «облачков» листвы (как кроны деревьев),
+  // короткие веточки у земли и грозди ягод прямо на поверхности листвы.
   addBush(o) {
     const s = o.s;
     const pools = o.pools;
-    const r = rng(s.v || 0.7);
     const gy = this.ground(s.x, s.y);
-    if (!o.parts.length) {
-      const g = new THREE.Color().setHSL(0.29 + r() * 0.055, 0.52 + r() * 0.12, 0.28 + r() * 0.08);
-      const bark = new THREE.Color('#604228').offsetHSL(0, 0, (r() - 0.5) * 0.1);
-      let leafId = 0;
-      const addBranch = (id, start, end, radius) => {
-        const key = `${s.i}:stem${id}`;
-        pools.branch.set(key, between(start, end, radius), bark);
-        o.parts.push([pools.branch, key]);
-      };
-      const addLeaf = (position, direction, length, colorOffset = 0) => {
-        const key = `${s.i}:leaf${leafId++}`;
-        const matrix = leafMatrix(position, direction, length * (0.28 + r() * 0.06), length, r() * Math.PI * 2);
-        const color = g.clone().offsetHSL((r() - 0.5) * 0.035, (r() - 0.5) * 0.08, colorOffset + (r() - 0.5) * 0.12);
-        pools.bush.set(key, matrix, color);
-        o.parts.push([pools.bush, key]);
-      };
-      const base = new THREE.Vector3(s.x, gy + 1, s.y);
-      const upward = new THREE.Vector3(0, 1, 0);
-      for (let i = 0; i < 4; i++) {
-        const a = (i / 4) * Math.PI * 2 + (r() - 0.5) * 0.45;
-        const radial = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
-        const tangent = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
-        const mainTip = base.clone().addScaledVector(radial, 8 + r() * 4).addScaledVector(upward, 13 + r() * 5);
-        addBranch(`main${i}`, base, mainTip, 0.75 + r() * 0.2);
-
-        const mid = base.clone().lerp(mainTip, 0.58);
-        const twigTip = mid.clone().addScaledVector(radial, 4 + r() * 2).addScaledVector(tangent, (r() < 0.5 ? -1 : 1) * (2 + r() * 2)).addScaledVector(upward, 3 + r() * 2);
-        addBranch(`twig${i}`, mid, twigTip, 0.42 + r() * 0.12);
-
-        const broad = radial.clone().addScaledVector(upward, 0.65).normalize();
-        addLeaf(mid.clone().addScaledVector(radial, 1), broad.clone().addScaledVector(tangent, 0.45).normalize(), 4.5);
-        addLeaf(mid.clone().addScaledVector(radial, 1), broad.clone().addScaledVector(tangent, -0.45).normalize(), 4.2, -0.04);
-        addLeaf(twigTip.clone(), radial.clone().addScaledVector(upward, 0.8).addScaledVector(tangent, 0.45).normalize(), 5.2, 0.04);
-        addLeaf(twigTip.clone(), radial.clone().addScaledVector(upward, 0.8).addScaledVector(tangent, -0.45).normalize(), 4.8);
-        addLeaf(twigTip.clone(), upward.clone().addScaledVector(radial, 0.35).normalize(), 4.4, 0.06);
-        addLeaf(mainTip.clone(), broad.clone().addScaledVector(tangent, 0.35).normalize(), 4.8, 0.03);
-        addLeaf(mainTip.clone(), broad.clone().addScaledVector(tangent, -0.35).normalize(), 4.5, -0.03);
+    if (!o.shape) {
+      const r = rng(s.v || 0.7);
+      const size = 0.85 + r() * 0.35;
+      const blobs = [{ x: 0, y: 9.5 * size, z: 0, rx: 10.5 * size, ry: 8 * size, rz: 10.5 * size, ry0: r() * 6 }];
+      const n = 5 + Math.floor(r() * 2);
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + (r() - 0.5) * 0.6;
+        const d = (7 + r() * 2.5) * size;
+        const rad = (5.5 + r() * 2.5) * size;
+        blobs.push({ x: Math.cos(a) * d, y: rad * 0.8 + r() * 2, z: Math.sin(a) * d, rx: rad, ry: rad * 0.85, rz: rad, ry0: r() * 6 });
       }
+      // ягоды гроздьями: точка на верхней/боковой стороне облачка и 2–3 ягоды рядом
+      const berries = [];
+      const red = r() < 0.5;
+      for (let g = 0; berries.length < 12; g++) {
+        const b = blobs[g % blobs.length];
+        const a = r() * Math.PI * 2;
+        const el = 0.1 + r() * 0.9;
+        const dir = new THREE.Vector3(Math.cos(el) * Math.cos(a), Math.sin(el), Math.cos(el) * Math.sin(a));
+        const c = new THREE.Vector3(b.x + dir.x * b.rx * 0.97, b.y + dir.y * b.ry * 0.97, b.z + dir.z * b.rz * 0.97);
+        const count = 2 + Math.floor(r() * 2);
+        for (let k = 0; k < count && berries.length < 12; k++) {
+          berries.push({
+            x: c.x + (r() - 0.5) * 2.6, y: c.y + (r() - 0.5) * 2, z: c.z + (r() - 0.5) * 2.6, sz: 1.5 + r() * 0.5,
+            color: new THREE.Color(red ? '#c8324b' : '#3b5bd9').offsetHSL((r() - 0.5) * 0.03, 0, (r() - 0.5) * 0.12),
+          });
+        }
+      }
+      const leaf = new THREE.Color().setHSL(0.27 + r() * 0.06, 0.45 + r() * 0.12, 0.25 + r() * 0.06);
+      o.shape = { blobs, berries, leaf, r };
+    }
+    const { blobs, berries, leaf, r } = o.shape;
+    if (!o.parts.length) {
+      o.base = [];
+      const push = (pool, key, m, color) => {
+        pool.set(key, m, color);
+        o.parts.push([pool, key]);
+        o.base.push([pool, key, m.clone(), color]);
+      };
+      // веточки у земли
+      const bark = new THREE.Color('#5a3d22');
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2 + r();
+        const from = new THREE.Vector3(s.x, gy, s.y);
+        const to = new THREE.Vector3(s.x + Math.cos(a) * 5, gy + 7, s.y + Math.sin(a) * 5);
+        push(pools.branch, `${s.i}:stem${i}`, between(from, to, 0.7), bark);
+      }
+      // облачка листвы: нижние темнее, верхнее светлее
+      blobs.forEach((b, i) => {
+        const color = leaf.clone().offsetHSL((r() - 0.5) * 0.03, 0, (i === 0 ? 0.04 : -0.02) + (r() - 0.5) * 0.06);
+        push(pools.blob, `${s.i}:leaf${i}`, M(s.x + b.x, gy + b.y, s.y + b.z, 0, b.ry0, 0, b.rx, b.ry, b.rz), color);
+      });
     }
     // ягоды: чем меньше «здоровья», тем меньше ягод
-    const total = 8;
-    const left = Math.ceil(total * (s.h / (s.m || 1)));
-    const br = rng((s.v || 0.7) + 0.1);
-    for (let i = 0; i < total; i++) {
+    const left = Math.ceil(berries.length * (s.h / (s.m || 1)));
+    berries.forEach((b, i) => {
       const key = `${s.i}:berry${i}`;
-      const a = br() * Math.PI * 2;
-      const e = br() * 1.2;
-      const m = M(s.x + Math.cos(a) * Math.cos(e) * 14, gy + 8 + Math.sin(e) * 10, s.y + Math.sin(a) * Math.cos(e) * 14, 0, 0, 0, 2.4);
       if (i < left) {
-        pools.berry.set(key, m, _c.set(i % 3 ? '#3b5bd9' : '#c8324b').clone());
+        pools.berry.set(key, M(s.x + b.x, gy + b.y, s.y + b.z, 0, 0, 0, b.sz), b.color);
         if (!o.parts.some((p) => p[1] === key)) o.parts.push([pools.berry, key]);
       } else {
         pools.berry.remove(key);
       }
-    }
+    });
   }
+
 
   addCrystal(o) {
     const s = o.s;
@@ -627,17 +645,9 @@ export class StaticsView {
       }
     }
     if (s.k === 'campfire') {
-      const f1 = new THREE.Mesh(G.cone, this.flameMat);
-      f1.scale.set(7, 20, 7);
-      f1.position.y = 12;
-      const f2 = new THREE.Mesh(G.cone, this.flameMat2);
-      f2.scale.set(4, 13, 4);
-      f2.position.y = 9;
-      const glow = new THREE.Sprite(this.glowMat);
-      glow.scale.setScalar(70);
-      glow.position.y = 14;
-      grp.add(f1, f2, glow);
-      o.extra = { f1, f2, glow };
+      const fire = new Fire(1, (s.i * 0.618) % 1);
+      grp.add(fire.group);
+      o.extra = { fire };
       o.light = 'fire';
     }
     if (s.k === 'remains' || s.k === 'crate') grp.rotation.y = (s.i * 1.7) % (Math.PI * 2);
@@ -715,11 +725,9 @@ export class StaticsView {
       if (o.shake <= 0) this.shaking.delete(o);
     }
     for (const o of this.lightObjects) {
-      if (o.extra) {
-        const fl = 1 + Math.sin(t * 13 + o.s.i) * 0.12 + Math.sin(t * 23 + o.s.i * 2) * 0.08;
-        o.extra.f1.scale.set(7 * fl, 20 * fl, 7 * fl);
-        o.extra.f2.scale.set(4 / fl, 13 * fl, 4 / fl);
-        o.extra.glow.material.opacity = 0.35 + night * 0.65;
+      // огонь оживляем только поблизости — дальние костры всё равно скрыты дымкой
+      if (o.extra?.fire && (o.s.x - camPos.x) ** 2 + (o.s.y - camPos.z) ** 2 < 1800 * 1800) {
+        o.extra.fire.update(dt, t, camPos, night);
       }
       if (o.light) {
         const dx = o.s.x - camPos.x;
@@ -741,7 +749,7 @@ export class StaticsView {
       l.position.set(o.s.x, this.ground(o.s.x, o.s.y) + (fire ? 22 : 18), o.s.y);
       l.color.set(fire ? '#ff9a3c' : '#a35cff');
       l.distance = fire ? 280 : 160;
-      const flick = fire ? 1 + Math.sin(t * 17 + o.s.i) * 0.12 : 1;
+      const flick = fire ? o.extra?.fire?.light ?? 1 : 1;
       l.intensity = (fire ? 0.6 + night * 3.2 : 0.4 + night * 1.6) * flick;
     }
     for (const pools of this.poolSets.values()) for (const p of Object.values(pools)) p.flush();

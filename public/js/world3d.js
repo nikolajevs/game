@@ -1,6 +1,6 @@
 // 3D-сцена игры: рельеф, объекты, существа с сервера, эффекты, камера.
 import * as THREE from 'three';
-import { MAP_H, MAP_W, NPCS, PLAYER, T, TILE } from '/shared/config.js';
+import { MAP_H, MAP_W, NPCS, PLAYER, T, TILE, RESOURCES, RES_CHUNK, ABILITIES } from '/shared/config.js';
 import { Terrain } from './gfx/terrain.js';
 import { Sky } from './gfx/sky.js';
 import { StaticsView } from './gfx/statics3d.js';
@@ -9,10 +9,16 @@ import { Human3D } from './gfx/human3d.js';
 import { Effects } from './gfx/effects.js';
 import { Decor } from './gfx/decor.js';
 import { ZonesView } from './gfx/zones3d.js';
-import { G, M, mergeParts } from './gfx/util.js';
+import { G, M, mergeParts, glowTexture } from './gfx/util.js';
 
 // след за снарядом: [цвет, вероятность частицы за кадр, размер]
-const PROJ_TRAIL = { acid: ['#8dff5a', 0.5, 1.6], bomb: ['#ff8a2a', 0.8, 1.8], bullet: ['#ffe9a8', 0.6, 1.1] };
+const PROJ_TRAIL = {
+  acid: ['#8dff5a', 0.5, 1.6], bomb: ['#ff8a2a', 0.8, 1.8], bullet: ['#ffe9a8', 0.6, 1.1],
+  laser: ['#bff8ff', 0.7, 1.2], force: ['#cfeaff', 0.8, 2.2], fireball: ['#ffb347', 1, 2.6], drain: ['#8a0f3a', 0.9, 2.2], hex: ['#a14bff', 0.9, 2.2],
+};
+// свечение вокруг снарядов-заклинаний: [цвет, размер]
+const PROJ_GLOW = { laser: ['#7ff7ff', 26], force: ['#9fd8ff', 40], fireball: ['#ff8a2a', 56], drain: ['#d01845', 36], hex: ['#9dff5a', 36] };
+const glowMats = {};
 // модели снарядов (смотрят вдоль +X)
 const PROJ_GEO = {
   acid: mergeParts([{ geom: G.sphere, matrix: M(0, 0, 0, 0, 0, 0, 6), color: '#8dff5a' }]),
@@ -27,7 +33,14 @@ const PROJ_GEO = {
     { geom: G.sphere, matrix: M(0, 0, 0, 0, 0, 0, 5), color: '#2b2b2e' },
     { geom: G.box, matrix: M(0, 0, 0, 0, 0, 0, 10.4, 2, 2), color: '#c9a227' },
   ]),
+  laser: mergeParts([{ geom: G.cyl6, matrix: M(0, 0, 0, 0, 0, -Math.PI / 2, 1.1, 46, 1.1), color: '#e8ffff' }]),
+  force: mergeParts([{ geom: G.ico, matrix: M(0, 0, 0, 0, 0, 0, 7, 7, 7), color: '#dff3ff' }]),
+  fireball: mergeParts([{ geom: G.sphere, matrix: M(0, 0, 0, 0, 0, 0, 7), color: '#ffd27a' }]),
+  drain: mergeParts([{ geom: G.sphere, matrix: M(0, 0, 0, 0, 0, 0, 6), color: '#5a0820' }]),
+  hex: mergeParts([{ geom: G.dodeca, matrix: M(0, 0, 0, 0, 0, 0, 6), color: '#b6ff7a' }]),
 };
+const MAGIC = new Set(['laser', 'force', 'fireball', 'drain', 'hex']);
+const IMPACT_COLORS = { laser: '#bff8ff', force: '#cfeaff', drain: '#c4163c', hex: '#a14bff', bullet: '#ffd166' };
 
 const HIT_COLORS = {
   tree: ['#6b4423', '#4f8a3a'], rock: ['#8a8a85', '#6e6e68'], bush: ['#3f7d3a', '#c8324b'],
@@ -67,6 +80,9 @@ export class WorldView {
     this.rayDir = new THREE.Vector3(1, 0, 0);
     this.projMat = new THREE.MeshStandardMaterial({ color: '#8dff5a', emissive: '#3fd400', emissiveIntensity: 1, roughness: 0.3 });
     this.bubbleMat = new THREE.MeshBasicMaterial({ color: '#9cf0a4', transparent: true, opacity: 0.16, depthWrite: false });
+    this.shieldMat = new THREE.MeshBasicMaterial({ color: '#ffd98a', transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending });
+    this.rings = []; // расходящиеся кольца (ЭМИ, телепорт)
+    this.myMed = false; // своя медитация у алтаря
   }
 
   init(tiles, seed, myUid, zones = []) {
@@ -114,8 +130,16 @@ export class WorldView {
       this.bulletMat = new THREE.MeshBasicMaterial({ vertexColors: true });
     }
     const geo = PROJ_GEO[kind] || PROJ_GEO.acid;
-    const mat = kind === 'acid' ? this.projMat : kind === 'bullet' ? this.bulletMat : this.projStdMat;
-    return new THREE.Mesh(geo, mat);
+    const mat = kind === 'acid' ? this.projMat : kind === 'bullet' || MAGIC.has(kind) ? this.bulletMat : this.projStdMat;
+    const mesh = new THREE.Mesh(geo, mat);
+    const glow = PROJ_GLOW[kind];
+    if (glow) {
+      if (!glowMats[kind]) glowMats[kind] = new THREE.SpriteMaterial({ map: glowTexture(), color: glow[0], transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+      const sp = new THREE.Sprite(glowMats[kind]);
+      sp.scale.setScalar(glow[1]);
+      mesh.add(sp);
+    }
+    return mesh;
   }
 
   // высота, на которой стоит существо (в глубокой воде — плывёт)
@@ -130,6 +154,16 @@ export class WorldView {
       const sorted = [...sa].sort((a, b) => (a.k === 'door') - (b.k === 'door'));
       for (const s of sorted) this.statics.upsert(s);
     }
+  }
+
+  // забыть ресурсы дальних участков (сервер пришлёт их снова, когда подойдём)
+  dropResChunks(keys) {
+    const drop = new Set(keys);
+    const ids = [];
+    for (const [id, o] of this.statics.objs) {
+      if (RESOURCES[o.s.k] && drop.has(Math.floor(o.s.x / RES_CHUNK) * 4096 + Math.floor(o.s.y / RES_CHUNK))) ids.push(id);
+    }
+    for (const id of ids) this.statics.remove(id);
   }
 
   // ---------- существа ----------
@@ -267,6 +301,26 @@ export class WorldView {
         v.creature.group.add(v.bubble);
       }
       if (v.bubble) v.bubble.visible = !!e.sp;
+      // щит духа — золотистая сфера
+      if (e.sh && !v.shield) {
+        v.shield = new THREE.Mesh(G.sphere, this.shieldMat);
+        v.shield.scale.setScalar(v.creature.labelHeight ? 30 : v.creature.R * 2.6);
+        v.shield.position.y = v.creature.tpl.hb;
+        v.creature.group.add(v.shield);
+      }
+      if (v.shield) {
+        v.shield.visible = !!e.sh;
+        this.shieldMat.opacity = 0.16 + Math.sin(this.time * 6) * 0.06;
+      }
+      // проклятие — зелёно-фиолетовая дымка, оглушение — искры над головой, медитация — восходящие огоньки
+      v.fxT = (v.fxT || 0) - dt;
+      if (v.fxT <= 0 && (e.hx || e.st || (isMe && this.myMed))) {
+        v.fxT = 0.12;
+        const top = gy + (v.creature.labelHeight || v.creature.tpl.hb * 2);
+        if (e.hx) this.effects.burst(x + (Math.random() - 0.5) * 20, gy + 10 + Math.random() * 30, y + (Math.random() - 0.5) * 20, Math.random() < 0.5 ? '#a14bff' : '#7dff4a', 2, { speed: 15, size: 2, life: 0.7, gravity: -30 });
+        if (e.st) this.effects.burst(x, top + 4, y, '#bff8ff', 2, { speed: 40, size: 1.8, life: 0.3, gravity: 0 });
+        if (isMe && this.myMed) this.effects.burst(x + (Math.random() - 0.5) * 50, gy + 2, y + (Math.random() - 0.5) * 50, '#c77dff', 1, { speed: 8, size: 2.2, life: 1.4, gravity: -40, up: 2 });
+      }
       v.e = e;
       v.x = x;
       v.y = y;
@@ -354,10 +408,62 @@ export class WorldView {
           }
           break;
         case 'impact':
-          snd('softHit', f, { volume: 0.32, range: 520, rate: f.m === 'bullet' ? 1.3 : 1 });
-          fx.burst(f.x, gy + 16, f.y, f.m === 'bullet' ? '#ffd166' : '#b5a585', 5, { speed: 70, size: 1.8, life: 0.35 });
+          snd('softHit', f, { volume: 0.32, range: 520, rate: f.m === 'bullet' || f.m === 'laser' ? 1.3 : 1 });
+          fx.burst(f.x, gy + 16, f.y, IMPACT_COLORS[f.m] || '#b5a585', MAGIC.has(f.m) ? 14 : 5, { speed: MAGIC.has(f.m) ? 110 : 70, size: MAGIC.has(f.m) ? 2.6 : 1.8, life: 0.45 });
+          if (f.m === 'force') this.ring(f.x, f.y, '#cfeaff', 70, 0.35);
           break;
+        case 'cast':
+          snd('swing', f, { volume: 0.3, range: 600, rate: 1.35 });
+          fx.burst(f.x, gy + 26, f.y, PROJ_GLOW[ABILITIES[f.m]?.proj]?.[0] || '#c77dff', 8, { speed: 60, size: 2.2, life: 0.35, gravity: 0 });
+          break;
+        case 'blink':
+          snd('evolve', f, { volume: 0.4, range: 800, rate: f.to ? 1.6 : 1.3 });
+          fx.burst(f.x, gy + 22, f.y, '#c77dff', 28, { speed: 130, size: 3, life: 0.6, up: 1.2, gravity: 0 });
+          fx.burst(f.x, gy + 22, f.y, '#ffffff', 10, { speed: 80, size: 2, life: 0.4, gravity: 0 });
+          this.ring(f.x, f.y, '#c77dff', 60, 0.4);
+          break;
+        case 'emp':
+          snd('crystalHit', f, { volume: 0.7, range: 1000, rate: 1.5 });
+          snd('heavyHit', f, { volume: 0.5, range: 900, rate: 1.2 });
+          this.ring(f.x, f.y, '#5ec8ff', f.r || 230, 0.55);
+          fx.burst(f.x, gy + 20, f.y, '#bff8ff', 40, { speed: 260, size: 2.4, life: 0.5, gravity: 0, up: 0.1 });
+          if (Math.hypot(f.x - myX, f.y - myY) < 400) this.shake = Math.max(this.shake, 3);
+          break;
+        case 'shield':
+          snd('crystalHit', f, { volume: 0.55, range: 700, rate: 1.3 });
+          fx.burst(f.x, gy + 24, f.y, '#ffd98a', 24, { speed: 90, size: 2.6, life: 0.7, gravity: 0, up: 1 });
+          break;
+        case 'absorb':
+          snd('crystalHit', f, { volume: 0.3, range: 500, rate: 1.8 });
+          fx.burst(f.x, gy + 24, f.y, '#ffe9a8', 10, { speed: 80, size: 2, life: 0.35, gravity: 0 });
+          break;
+        case 'learn':
+          snd('evolve', f, { volume: 0.5, range: 700, rate: 1.15 });
+          fx.burst(f.x, gy + 10, f.y, f.c || '#c77dff', 36, { speed: 70, up: 1.8, gravity: 30, life: 1.4 });
+          fx.burst(f.x, gy + 10, f.y, '#ffffff', 12, { speed: 50, up: 2, gravity: 20, life: 1.1 });
+          break;
+        case 'drain': {
+          // тёмная струя от жертвы к колдуну
+          for (let i = 0; i <= 8; i++) {
+            const k = i / 8;
+            const x = f.x + (f.x2 - f.x) * k;
+            const y = f.y + (f.y2 - f.y) * k;
+            fx.burst(x, this.ground(x, y) + 22, y, i % 2 ? '#8a0f3a' : '#d01845', 3, { speed: 25, size: 2.4, life: 0.5, gravity: 0 });
+          }
+          snd('softHit', f, { volume: 0.4, range: 600, rate: 0.7 });
+          break;
+        }
         case 'boom': {
+          if (f.m === 'fireball') {
+            // огненный шар: вспышка пламени без воронки
+            snd('heavyHit', f, { volume: 0.7, range: 1000, rate: 0.9 });
+            fx.burst(f.x, gy + 14, f.y, '#ff8a2a', 34, { speed: 170, size: 4.5, life: 0.7, up: 1 });
+            fx.burst(f.x, gy + 14, f.y, '#ffe066', 18, { speed: 120, size: 3.5, life: 0.45 });
+            fx.burst(f.x, gy + 14, f.y, '#4a3a30', 14, { speed: 60, size: 6, life: 1.2, gravity: -40 });
+            this.ring(f.x, f.y, '#ff9a3c', 75, 0.35);
+            if (Math.hypot(f.x - myX, f.y - myY) < 250) this.shake = Math.max(this.shake, 3);
+            break;
+          }
           snd('heavyHit', f, { volume: 0.9, range: 1300, rate: 0.62 });
           snd('woodBreak', f, { volume: 0.6, range: 900, rate: 0.7 });
           fx.burst(f.x, gy + 10, f.y, '#ff8a2a', 45, { speed: 220, size: 5, life: 0.9 });
@@ -379,6 +485,18 @@ export class WorldView {
           break;
       }
     }
+  }
+
+  // расходящееся по земле кольцо: ЭМИ, телепорт, взрыв огненного шара
+  ring(x, y, color, radius, life) {
+    const mesh = new THREE.Mesh(
+      new THREE.RingGeometry(0.85, 1, 48),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(x, Math.max(this.ground(x, y), 0) + 3, y);
+    this.scene.add(mesh);
+    this.rings.push({ mesh, t: 0, life, radius });
   }
 
   // ---------- метеорит ----------
@@ -543,11 +661,12 @@ export class WorldView {
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
     }
-    const env = this.sky.update(phase, this.camTarget, view);
+    const env = this.sky.update(phase, this.camTarget, view, this.camera.position.distanceTo(this.camTarget));
     this.night = 1 - env.k;
-    this.decor.update(this.camTarget, this.scene.fog.far);
-    this.terrain.update(this.time, this.camTarget, this.scene.fog.far);
-    this.zonesView.update(dt, this.camTarget, this.scene.fog.far);
+    // сколько видно вокруг персонажа (не зависит от отдаления камеры)
+    this.decor.update(this.camTarget, env.far);
+    this.terrain.update(this.time, this.camTarget, env.far);
+    this.zonesView.update(dt, this.camTarget, env.far);
     this.statics.update(dt, this.camera.position, this.night, this.camTarget);
     this.updateMeteor(dt);
     for (const dcl of this.decals) {
@@ -556,6 +675,18 @@ export class WorldView {
       if (dcl.life <= 0) this.scene.remove(dcl.mesh);
     }
     this.decals = this.decals.filter((d) => d.life > 0);
+    for (const r of this.rings) {
+      r.t += dt;
+      const k = Math.min(1, r.t / r.life);
+      r.mesh.scale.setScalar(8 + (r.radius - 8) * (1 - (1 - k) * (1 - k)));
+      r.mesh.material.opacity = 0.9 * (1 - k);
+      if (k >= 1) {
+        this.scene.remove(r.mesh);
+        r.mesh.geometry.dispose();
+        r.mesh.material.dispose();
+      }
+    }
+    this.rings = this.rings.filter((r) => r.t < r.life);
     this.effects.update(dt, this.camera, w, h);
     this.renderer.render(this.scene, this.camera);
     this.updateLabels(w, h);

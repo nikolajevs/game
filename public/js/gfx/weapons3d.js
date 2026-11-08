@@ -79,6 +79,15 @@ export function weaponGeometry(kind) {
       rod(p, 4, 24, 1.1, METAL, 0.6, -0.9);
       p.push({ geom: G.box, matrix: M(12, -1.4, 0, 0, 0, 0, 10, 1.6, 2.2), color: WOOD });
       break;
+    case 'laser':
+      // корпус, светящиеся катушки и излучатель
+      p.push({ geom: G.box, matrix: M(-5, -0.5, 0, 0, 0, 0.1, 10, 3.4, 2.4), color: '#3a4048' });
+      p.push({ geom: G.box, matrix: M(-1, -3.2, 0, 0, 0, 0.3, 2.2, 5, 1.8), color: BLACK });
+      rod(p, 2, 22, 1.5, '#5e6670', 0.4, 0);
+      for (const x of [6, 10, 14]) p.push({ geom: G.cyl, matrix: M(x, 0.4, 0, 0, 0, Math.PI / 2, 2.3, 1.2, 2.3), color: '#5ec8ff' });
+      p.push({ geom: G.cyl, matrix: M(22.5, 0.4, 0, 0, 0, Math.PI / 2, 1.8, 1.4, 1.8), color: '#bff8ff' });
+      p.push({ geom: G.box, matrix: M(-1, 2.6, 0, 0, 0, 0, 5, 1.2, 1.2), color: '#5ec8ff' });
+      break;
     case 'bomb':
       p.push({ geom: G.sphere, matrix: M(5, 0, 0, 0, 0, 0, 4.5), color: BLACK });
       p.push({ geom: G.box, matrix: M(5, 0, 0, 0, 0, 0, 9.4, 2, 2), color: '#c9a227' });

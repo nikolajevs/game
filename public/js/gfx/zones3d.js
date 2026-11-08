@@ -7,7 +7,8 @@ const CONCRETE = ['#9a968c', '#85827a', '#a8a397', '#77746d'];
 const ROCKS = ['#6f6a62', '#7d776d', '#5e5a54'];
 const WOOD = ['#6b4a2b', '#7a5532', '#5a3d22'];
 const BONE = ['#e8dcc0', '#d8ccb0', '#cfc2a2'];
-const MOTES = { ruins: 220, mine: 70, lair: 0 };
+const MOTES = { ruins: 220, mine: 70, lair: 0, altar: 90 };
+const MOSSY = ['#7d8a78', '#6f7a6a', '#8a9488'];
 const _up = new THREE.Vector3(0, 1, 0);
 
 // цилиндр-отрезок от a до b
@@ -25,14 +26,25 @@ export class ZonesView {
     this.terrain = terrain;
     this.zones = zones;
     this.items = [];
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9 });
-    const moteMat = new THREE.PointsMaterial({
+    this.mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9 });
+    this.moteMat = new THREE.PointsMaterial({
       color: '#a8ff5a', size: 3.2, sizeAttenuation: true, transparent: true, opacity: 0.8,
       blending: THREE.AdditiveBlending, depthWrite: false, map: glowTexture(),
     });
     this.glowMat = new THREE.SpriteMaterial({ map: glowTexture(), color: '#8dff5a', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.55 });
+    this.altarMoteMat = new THREE.PointsMaterial({
+      color: '#c77dff', size: 3.6, sizeAttenuation: true, transparent: true, opacity: 0.85,
+      blending: THREE.AdditiveBlending, depthWrite: false, map: glowTexture(),
+    });
+    this.runeMat = new THREE.SpriteMaterial({ map: glowTexture(), color: '#c77dff', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.85 });
     this.lampMat = new THREE.SpriteMaterial({ map: glowTexture(), color: '#ffb347', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.8 });
-    for (const z of zones) {
+    this.built = new Map(); // id места -> его сетки (строятся, только когда место рядом)
+    this.warm = true;
+  }
+
+  build(z) {
+    const { terrain, mat, moteMat } = this;
+    {
       const r = rng(((z.x * 0.0137 + z.y * 0.0071) % 1 + 1) % 1);
       const parts = [];
       const sprites = [];
@@ -41,6 +53,7 @@ export class ZonesView {
       const ctx = { z, r, parts, sprites, gy, at };
       if (z.kind === 'mine') this.buildMine(ctx);
       else if (z.kind === 'lair') this.buildLair(ctx);
+      else if (z.kind === 'altar') this.buildAltar(ctx);
       else this.buildRuins(ctx);
 
       const mesh = new THREE.Mesh(mergeParts(parts), mat);
@@ -65,11 +78,21 @@ export class ZonesView {
         }
         const pg = new THREE.BufferGeometry();
         pg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        points = new THREE.Points(pg, moteMat);
+        points = new THREE.Points(pg, z.kind === 'altar' ? this.altarMoteMat : moteMat);
         points.frustumCulled = false;
         this.group.add(points);
       }
-      this.items.push({ z, mesh, points, base, sprites });
+      return { z, mesh, points, base, sprites };
+    }
+  }
+
+  dispose(it) {
+    this.group.remove(it.mesh);
+    it.mesh.geometry.dispose();
+    for (const s of it.sprites) this.group.remove(s);
+    if (it.points) {
+      this.group.remove(it.points);
+      it.points.geometry.dispose();
     }
   }
 
@@ -247,6 +270,53 @@ export class ZonesView {
     this.radSigns(parts, r, z, at, gy, 4);
   }
 
+  // ---------- древний алтарь ----------
+  // Круг замшелых монолитов с горящими рунами, плита алтаря и парящий кристалл над ней.
+  buildAltar({ z, r, parts, sprites, gy, at }) {
+    const cy = gy(z.x, z.y);
+    // ступенчатое основание и плита
+    parts.push({ geom: G.cyl, matrix: M(z.x, cy + 1.5, z.y, 0, r() * 3, 0, 26, 3, 26), color: MOSSY[1] });
+    parts.push({ geom: G.cyl, matrix: M(z.x, cy + 4.5, z.y, 0, r() * 3, 0, 18, 3, 18), color: MOSSY[0] });
+    parts.push({ geom: G.box, matrix: M(z.x, cy + 10, z.y, 0, r() * 3, 0, 20, 8, 12), color: MOSSY[2] });
+    // парящий кристалл
+    parts.push({ geom: G.octa, matrix: M(z.x, cy + 30, z.y, 0, r() * 3, 0, 4.5, 8, 4.5), color: '#d8a8ff' });
+    const core = new THREE.Sprite(this.runeMat);
+    core.scale.setScalar(70);
+    core.position.set(z.x, cy + 30, z.y);
+    sprites.push(core);
+    // монолиты по кругу, у каждого — светящаяся руна
+    const n = 7;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + r() * 0.2;
+      const [x, y] = at(z.r * 0.62, a);
+      const g0 = gy(x, y);
+      const h = 34 + r() * 18;
+      const tilt = (r() - 0.5) * 0.12;
+      parts.push({ geom: G.box, matrix: M(x, g0 + h / 2 - 2, y, tilt, -a, tilt, 7, h, 11), color: MOSSY[i % 3] });
+      if (i % 2 === 0) parts.push({ geom: G.box, matrix: M(x, g0 + h + 1, y, 0, -a, 0, 9, 4, 13), color: MOSSY[(i + 1) % 3] });
+      const rune = new THREE.Sprite(this.runeMat);
+      rune.scale.setScalar(16);
+      rune.position.set(x - Math.cos(a) * 6, g0 + h * 0.6, y - Math.sin(a) * 6);
+      sprites.push(rune);
+    }
+    // упавшие камни и свечи у основания
+    for (let i = 0; i < 6; i++) {
+      const [x, y] = at(z.r * (0.25 + r() * 0.3), r() * Math.PI * 2);
+      const s = 3 + r() * 3;
+      parts.push({ geom: G.dodeca, matrix: M(x, gy(x, y) + s * 0.4, y, r() * 3, r() * 3, r() * 3, s * 1.4, s, s), color: MOSSY[i % 3] });
+    }
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + 0.3;
+      const x = z.x + Math.cos(a) * 15;
+      const y = z.y + Math.sin(a) * 15;
+      parts.push({ geom: G.cyl6, matrix: M(x, cy + 8, y, 0, 0, 0, 0.9, 4, 0.9), color: '#e8dcc0' });
+      const flame = new THREE.Sprite(this.lampMat);
+      flame.scale.setScalar(9);
+      flame.position.set(x, cy + 11.5, y);
+      sprites.push(flame);
+    }
+  }
+
   // ---------- логово колосса ----------
   // Гнездо из поваленных стволов, рёбра и черепа добычи, разбросанные кости и пятна крови.
   buildLair({ z, r, parts, gy, at }) {
@@ -318,7 +388,21 @@ export class ZonesView {
   }
 
   update(dt, target, far) {
-    for (const it of this.items) {
+    // ближние места достраиваем (по одному за кадр), очень дальние — выгружаем
+    let budget = this.warm ? Infinity : 1;
+    this.warm = false;
+    for (const z of this.zones) {
+      const d = Math.hypot(z.x - target.x, z.y - target.z) - z.r;
+      const it = this.built.get(z.id);
+      if (!it && d < far + 300 && budget > 0) {
+        this.built.set(z.id, this.build(z));
+        budget--;
+      } else if (it && d > far + 2500) {
+        this.dispose(it);
+        this.built.delete(z.id);
+      }
+    }
+    for (const it of this.built.values()) {
       const d = Math.hypot(it.z.x - target.x, it.z.y - target.z) - it.z.r;
       const vis = d < far + 200;
       it.mesh.visible = vis;

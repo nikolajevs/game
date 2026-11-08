@@ -56,22 +56,33 @@ export function generateMap(seed) {
   const elev = makeNoise(seed);
   const moist = makeNoise(seed + 101);
   const rocky = makeNoise(seed + 202);
+  // крупные черты большого острова: заливы и внутренние моря, хребты, обширные леса и равнины
+  const macro = makeNoise(seed + 303);
+  const ridge = makeNoise(seed + 404);
+  const biome = makeNoise(seed + 505);
+  const warp = makeNoise(seed + 606);
   const tiles = new Uint8Array(MAP_W * MAP_H);
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
-      const nx = x / MAP_W - 0.5;
-      const ny = y / MAP_H - 0.5;
+      // изрезанный берег: координаты для «круга острова» слегка искривлены
+      const wx = (warp(x / 260, y / 260, 3) - 0.5) * 0.32;
+      const wy = (warp(x / 260 + 37, y / 260 + 11, 3) - 0.5) * 0.32;
+      const nx = x / MAP_W - 0.5 + wx;
+      const ny = y / MAP_H - 0.5 + wy;
       const d = Math.sqrt(nx * nx + ny * ny) * 2;
-      const e = elev(x / 22, y / 22, 5) + 0.32 - Math.pow(d, 3) * 1.1;
+      const big = macro(x / 170, y / 170, 3) - 0.5;
+      const e = elev(x / 22, y / 22, 5) + 0.34 + big * 0.42 - Math.pow(d, 3) * 1.1;
       let t;
       if (e < 0.3) t = T.DEEP;
       else if (e < 0.36) t = T.SHALLOW;
       else if (e < 0.41) t = T.SAND;
       else {
-        const m = moist(x / 16, y / 16, 4);
+        const m = moist(x / 16, y / 16, 4) * 0.55 + biome(x / 120, y / 120, 3) * 0.45;
         const r = rocky(x / 12, y / 12, 3);
-        if (e > 0.98 || r > 0.68) t = T.ROCK;
-        else if (m > 0.53) t = T.FOREST;
+        // хребты: узкие гребни крупного шума
+        const rg = 1 - Math.abs(ridge(x / 110, y / 110, 3) * 2 - 1);
+        if (e > 1.06 || r > 0.7 || (rg > 0.94 && e > 0.5) || (rg > 0.86 && r > 0.62)) t = T.ROCK;
+        else if (m > 0.52) t = T.FOREST;
         else t = T.GRASS;
       }
       // по краю карты всегда глубина
@@ -80,6 +91,16 @@ export function generateMap(seed) {
     }
   }
   return tiles;
+}
+
+// Контрольная сумма карты (FNV-1a): клиент строит остров сам по зерну и сверяет её с сервером
+export function tilesHash(tiles) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < tiles.length; i++) {
+    h ^= tiles[i];
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
 }
 
 // Особые места: радиоактивные руины, рудники и логова — круги на суше, далеко друг от друга.
@@ -98,7 +119,7 @@ export function generateZones(tiles, seed) {
     const t = tileOf(x, y);
     return t !== T.DEEP && t !== T.SHALLOW;
   };
-  for (let tries = 0; tries < 6000 && zones.length < RAD.zones; tries++) {
+  for (let tries = 0; tries < 6000 + RAD.zones * 400 && zones.length < RAD.zones; tries++) {
     const x = (15 + Math.floor(R() * (MAP_W - 30))) * TILE + HS;
     const y = (15 + Math.floor(R() * (MAP_H - 30))) * TILE + HS;
     const r = 260 + R() * 140;
@@ -119,7 +140,7 @@ export function generateZones(tiles, seed) {
   const place = (kind, accept, minShare) => {
     const def = SITES[kind];
     let placed = 0;
-    for (let tries = 0; tries < 8000 && placed < def.count; tries++) {
+    for (let tries = 0; tries < 8000 + def.count * 600 && placed < def.count; tries++) {
       const x = (12 + Math.floor(R2() * (MAP_W - 24))) * TILE + HS;
       const y = (12 + Math.floor(R2() * (MAP_H - 24))) * TILE + HS;
       if (!accept(tileOf(x, y))) continue;
@@ -143,6 +164,7 @@ export function generateZones(tiles, seed) {
   };
   place('mine', (t) => t === T.ROCK, 0.4);
   place('lair', (t) => t === T.FOREST || t === T.ROCK, 0.55);
+  place('altar', (t) => t === T.GRASS || t === T.FOREST, 0.6); // древние алтари — на лугах и в лесах
   return zones;
 }
 
@@ -153,10 +175,32 @@ export function zoneFalloff(z, x, y) {
   return d < z.r * 0.6 ? 1 : (z.r - d) / (z.r * 0.4);
 }
 
+// Индекс мест по ячейкам: на большом острове их сотни, а проверять точку приходится очень часто
+const ZONE_CELL = 800;
+const zoneIndexes = new WeakMap();
+function zonesNear(zones, x, y) {
+  let idx = zoneIndexes.get(zones);
+  if (!idx) {
+    idx = new Map();
+    for (const z of zones) {
+      for (let i = Math.floor((z.x - z.r) / ZONE_CELL); i <= Math.floor((z.x + z.r) / ZONE_CELL); i++) {
+        for (let j = Math.floor((z.y - z.r) / ZONE_CELL); j <= Math.floor((z.y + z.r) / ZONE_CELL); j++) {
+          const key = i * 4096 + j;
+          if (!idx.has(key)) idx.set(key, []);
+          idx.get(key).push(z);
+        }
+      }
+    }
+    zoneIndexes.set(zones, idx);
+  }
+  return idx.get(Math.floor(x / ZONE_CELL) * 4096 + Math.floor(y / ZONE_CELL)) || EMPTY;
+}
+const EMPTY = [];
+
 // Сила радиации в точке: 0 снаружи, до уровня зоны (1–3) ближе к центру
 export function zoneStrength(zones, x, y) {
   let best = 0;
-  for (const z of zones) {
+  for (const z of zonesNear(zones, x, y)) {
     if (!z.lvl) continue;
     best = Math.max(best, z.lvl * zoneFalloff(z, x, y));
   }
@@ -164,7 +208,7 @@ export function zoneStrength(zones, x, y) {
 }
 
 export function zoneAt(zones, x, y) {
-  return zones.find((z) => Math.hypot(x - z.x, y - z.y) < z.r) || null;
+  return zonesNear(zones, x, y).find((z) => Math.hypot(x - z.x, y - z.y) < z.r) || null;
 }
 
 // Раскладка деревьев, камней, кустов, серы и металлолома. Возвращает [{ kind, x, y, v }]
@@ -190,7 +234,7 @@ export function generateResources(tiles, seed, zones = []) {
       if (site?.kind === 'mine') {
         // рудник: много руды, серы и металлолома
         kind = r < 0.17 ? (r2 < 0.45 ? 'sulfur' : 'rock') : r < 0.22 ? 'scrap' : null;
-      } else if (site?.kind === 'lair') {
+      } else if (site?.kind === 'lair' || site?.kind === 'altar') {
         // вытоптанная поляна: редкие камни и деревья
         kind = r < 0.03 ? 'rock' : r < 0.05 ? 'tree' : null;
       } else if (site) {

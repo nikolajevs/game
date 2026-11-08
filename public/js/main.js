@@ -1,8 +1,8 @@
 // Клиент игры: вход, сеть, интерполяция, управление, стройка, интерфейс.
 import {
-  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES,
+  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES, ABILITIES,
 } from '/shared/config.js';
-import { zoneAt } from '/shared/worldgen.js';
+import { zoneAt, generateMap, tilesHash } from '/shared/worldgen.js';
 import { computeStats, decodeGenome, defaultGenome, encodeGenome } from '/shared/creature.js';
 import { Net } from './net.js';
 import { AudioManager } from './audio.js';
@@ -11,6 +11,7 @@ import { Input } from './input.js';
 import { Hud } from './hud.js';
 import { Editor } from './editor.js';
 import { CreaturePreview } from './creature-preview.js';
+import { PathsWindow } from './paths.js';
 import { HAIR_COLORS, parseLook } from './gfx/human3d.js';
 
 const $ = (id) => document.getElementById(id);
@@ -34,6 +35,7 @@ const world = new WorldView($('game'), $('labels'), $('floaters'), audio);
 const input = new Input($('game'));
 const hud = new Hud((m) => net.send(m));
 const editor = new Editor((m) => net.send(m));
+const paths = new PathsWindow((m) => net.send(m));
 
 const S = {
   myId: null, uid: null, tiles: null, you: null, stats: computeStats(defaultGenome()), look: '',
@@ -43,6 +45,7 @@ const S = {
   structAt: new Map(), dead: false, chatOpen: false,
   lastInput: '', lastInputAt: 0, spitUntil: 0, lastMini: 0,
   aim: { x: 0, y: 0, sky: true }, // точка на земле под курсором
+  ready: false, pendingRes: [],
   siteId: -1, siteToast: {}, // текущее особое место и когда о нём последний раз подсказывали
 };
 const cursorEl = $('cursor');
@@ -136,18 +139,39 @@ nameInput.addEventListener('keydown', (e) => {
 });
 
 // ================= сообщения сервера =================
-net.on('welcome', (m) => {
-  store.set('mutagen.token', m.token);
-  S.myId = m.id;
-  S.uid = m.uid;
+// Остров огромный, поэтому сервер присылает только зерно и контрольную сумму:
+// браузер строит карту сам, а если сумма не сошлась — просит карту целиком.
+let tilesWaiter = null;
+net.on('tiles', (m) => {
   const bin = atob(m.tiles);
   const tiles = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) tiles[i] = bin.charCodeAt(i);
+  tilesWaiter?.(tiles);
+});
+async function buildTiles(seed, hash) {
+  const tiles = generateMap(seed);
+  if (tilesHash(tiles) === hash) return tiles;
+  console.warn('Карта не совпала с серверной — загружаем целиком');
+  return new Promise((resolve) => {
+    tilesWaiter = resolve;
+    net.send({ t: 'tiles' });
+  });
+}
+
+net.on('welcome', async (m) => {
+  store.set('mutagen.token', m.token);
+  S.myId = m.id;
+  S.uid = m.uid;
+  $('playBtn').textContent = 'Строим остров…';
+  await new Promise((r) => setTimeout(r, 30)); // дать браузеру показать надпись
+  const tiles = await buildTiles(m.seed, m.th);
   S.tiles = tiles;
   S.zones = m.zones || [];
   world.init(tiles, m.seed, m.uid, S.zones);
   applyStatics(m.statics, null);
   hud.setMap(tiles, S.zones);
+  S.ready = true;
+  for (const r of S.pendingRes.splice(0)) applyRes(r);
   $('join').classList.add('hidden');
   joinPreview.dispose();
   editor.ap = lookStr();
@@ -157,7 +181,18 @@ net.on('welcome', (m) => {
   requestAnimationFrame(frame);
 });
 
+// ресурсы приходят участками вокруг игрока: ближние добавляем, дальние забываем
+function applyRes(m) {
+  if (m.drop?.length) world.dropResChunks(m.drop);
+  if (m.add?.length) applyStatics(m.add, null);
+}
+net.on('res', (m) => {
+  if (!S.ready) S.pendingRes.push(m);
+  else applyRes(m);
+});
+
 net.on('s', (m) => {
+  if (!S.ready) return; // остров ещё строится
   const now = performance.now();
   const o = m.st - now;
   if (S.offset === null || Math.abs(o - S.offset) > 1000) S.offset = o;
@@ -203,6 +238,7 @@ net.on('s', (m) => {
   if (m.you.dead && !S.dead && $('death').classList.contains('hidden')) showDeath({ by: 'неизвестно', nest: !!m.you.nest });
   if (hud.cont && prev && invSig(prev) !== invSig(m.you)) hud.renderContainer(m.you);
   editor.refresh(m.you);
+  paths.refresh(m.you);
 });
 
 net.on('toast', (m) => hud.toast(m.text, m.big));
@@ -261,7 +297,7 @@ function hideDeath() {
 $('respNest').addEventListener('click', () => net.send({ t: 'respawn', nest: true }));
 $('respRandom').addEventListener('click', () => net.send({ t: 'respawn', nest: false }));
 
-const anyModal = () => editor.isOpen || S.dead || S.chatOpen;
+const anyModal = () => editor.isOpen || paths.isOpen || S.dead || S.chatOpen;
 
 // ================= чат =================
 function openChat() {
@@ -303,6 +339,35 @@ editor.onClose = () => {
 };
 $('btnEvolve').addEventListener('click', toggleEditor);
 
+// ================= пути развития =================
+function togglePaths() {
+  if (paths.isOpen) {
+    paths.close();
+    audio.play('uiClose', { volume: 0.28 });
+    return;
+  }
+  if (!S.you || S.you.dead) return;
+  setBuild(null);
+  if (editor.isOpen) editor.close();
+  input.enabled = false;
+  input.clear();
+  paths.open(S.you);
+  audio.play('uiOpen', { volume: 0.3 });
+}
+paths.onClose = () => {
+  input.enabled = !anyModal();
+};
+$('btnPath').addEventListener('click', togglePaths);
+
+// умение из пояса: заклинание берём «в руку», мгновенное применяем сразу
+function useSkill(id) {
+  const ab = ABILITIES[id];
+  if (!ab || !S.you) return;
+  if (ab.kind === 'instant') net.send({ t: 'cast', id });
+  else net.send({ t: 'equip', item: S.you.wp === id ? null : id });
+}
+hud.onSkill = useSkill;
+
 // ================= стройка =================
 function setBuild(kind) {
   S.buildKind = kind;
@@ -324,6 +389,7 @@ function buildCheck(kind, x, y) {
   const ty = Math.floor(y / TILE);
   if (isWater(S.tiles[ty * MAP_W + tx])) return 'Нельзя строить на воде';
   if (S.structAt.has(`${x},${y}`)) return 'Место занято';
+  if (def.ability && !(you.ab || []).includes(def.ability)) return `Нужно умение «${ABILITIES[def.ability].name}» (путь разума, P)`;
   for (const [r, v] of Object.entries(def.cost)) if (you.inv[r] < v) return 'Не хватает ресурсов';
   if (def.solid === true) {
     for (const v of world.ents.values()) {
@@ -404,15 +470,19 @@ function aimAngle() {
 input.onPress = (code) => {
   if (!S.you) return;
   if (code === 'Escape') {
-    if (editor.isOpen) editor.close();
+    if (paths.isOpen) paths.close();
+    else if (hud.bigOpen) hud.toggleBigMap(false);
+    else if (editor.isOpen) editor.close();
     else if (hud.cont) hud.onCloseCont();
     else if (S.buildKind) setBuild(null);
     return;
   }
   if (S.dead) return;
   if (code === 'KeyM') return hud.toast(audio.toggleMute() ? 'Звук выключен' : 'Звук включён');
+  if (code === 'KeyN') return hud.toggleBigMap();
   if (code === 'KeyG') return toggleEditor();
-  if (editor.isOpen) return;
+  if (code === 'KeyP') return togglePaths();
+  if (editor.isOpen || paths.isOpen) return;
   if (code === 'Enter') return openChat();
   if (code === 'Tab') return hud.togglePlayers(true);
   if (code === 'KeyH') return $('helpBox').classList.toggle('hidden');
@@ -429,12 +499,13 @@ input.onPress = (code) => {
     const n = Number(code.slice(5));
     if (S.buildKind) {
       // в режиме стройки цифры выбирают постройку
-      const k = STRUCT_ORDER[n - 1];
+      const k = STRUCT_ORDER[(n + 9) % 10]; // 1–9, 0 — десятая
       if (k) setBuild(k);
     } else {
       // иначе — оружие из пояса; повторное нажатие убирает его
       const k = hud.belt[n - 1];
-      if (k) net.send({ t: 'equip', item: S.you.wp === k ? null : k });
+      if (k && ABILITIES[k]) useSkill(k);
+      else if (k) net.send({ t: 'equip', item: S.you.wp === k ? null : k });
     }
     return;
   }
@@ -538,8 +609,9 @@ function frame(now) {
     t: 'in', mx: Math.round(mv.x * 100) / 100, my: Math.round(mv.y * 100) / 100,
     s: input.enabled && (input.keys.ShiftLeft || input.keys.ShiftRight) ? 1 : 0,
     a: attacking ? 1 : 0, b: spitting ? 1 : 0, ang: Math.round(S.me.face * 100) / 100,
+    ad: Math.round(Math.hypot(S.aim.x - S.me.x, S.aim.y - S.me.y) / 10) * 10, // дальность до курсора — для телепорта
   };
-  const sig = `${msg.mx},${msg.my},${msg.s},${msg.a},${msg.b},${msg.ang}`;
+  const sig = `${msg.mx},${msg.my},${msg.s},${msg.a},${msg.b},${msg.ang},${msg.ad}`;
   if ((sig !== S.lastInput && now - S.lastInputAt > 33) || now - S.lastInputAt > 250) {
     net.send(msg);
     S.lastInput = sig;
@@ -555,6 +627,7 @@ function frame(now) {
   world.setAim(S.aim.sky ? null : S.aim, showCursor && !S.buildKind);
   cursorEl.style.display = showCursor ? '' : 'none';
   if (showCursor) cursorEl.style.transform = `translate(${input.pos.x}px, ${input.pos.y}px)`;
+  world.myMed = !!you.med;
   world.render(dt, S.phase, you.dead ? 900 : S.stats.vision * VIEW_MULT);
 
   // особое место под ногами: подсказка при входе и название в строке состояния

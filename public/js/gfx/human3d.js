@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { decodeGenome } from '/shared/creature.js';
-import { WEAPONS } from '/shared/config.js';
+import { WEAPONS, ABILITIES } from '/shared/config.js';
 import { G, M, mergeParts, glowTexture } from './util.js';
 import { weaponGeometry, weaponMaterial } from './weapons3d.js';
 
@@ -17,6 +17,8 @@ export const HAIR = {
 export const HAIR_COLORS = ['#2b1d14', '#5a3a22', '#a5743f', '#d8c08a', '#8a8a8a'];
 const SKIN_TINTS = ['#ffffff', '#ffffff'];
 const LOWER = /^(root|pelvis|thigh_|calf_|foot_|ball_)/;
+// цвет сферы в руке для заклинаний
+export const SPELL_COLORS = { telekinesis: '#9fd8ff', fireball: '#ff8a2a', blink: '#c77dff', drain: '#d01845', hex: '#9dff5a' };
 const CLIP_NAMES = [
   'Idle_Loop', 'Walk_Loop', 'Jog_Fwd_Loop', 'Sprint_Loop', 'Punch_Jab', 'Punch_Cross', 'Sword_Attack', 'Sword_Idle',
   'Pistol_Idle_Loop', 'Pistol_Shoot', 'Pistol_Aim_Neutral', 'Death01', 'Hit_Chest', 'Swim_Fwd_Loop', 'Swim_Idle_Loop',
@@ -330,6 +332,20 @@ export class Human3D {
       this.hand.remove(this.weaponMesh);
       this.weaponMesh = null;
     }
+    if (this.orb) {
+      this.hand.remove(this.orb);
+      this.orb = null;
+    }
+    // заклинание «в руке» — светящаяся сфера над ладонью
+    if (kind && ABILITIES[kind]) {
+      const col = SPELL_COLORS[kind] || '#c77dff';
+      this.orb = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: col, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+      this.orb.scale.setScalar(16);
+      this.orb.position.set(-1, 7, 2);
+      this.hand.add(this.orb);
+      this.setUpper(this.upperLocomotion || 'Idle_Loop');
+      return;
+    }
     const geo = kind ? weaponGeometry(kind) : null;
     if (geo) {
       const m = new THREE.Mesh(geo, weaponMaterial);
@@ -359,7 +375,8 @@ export class Human3D {
     if (!this.ready || this.dead) return;
     const w = this.weaponKind ? WEAPONS[this.weaponKind] : null;
     let name;
-    if (!w) name = Math.random() < 0.5 ? 'Punch_Jab' : 'Punch_Cross';
+    if (this.weaponKind && ABILITIES[this.weaponKind]) name = 'Spell_Simple_Shoot';
+    else if (!w) name = Math.random() < 0.5 ? 'Punch_Jab' : 'Punch_Cross';
     else if (w.type === 'melee') name = 'Sword_Attack';
     else if (w.type === 'ranged') name = 'Pistol_Shoot';
     else name = 'Spell_Simple_Shoot';
@@ -421,6 +438,7 @@ export class Human3D {
     }
     this.mixer.update(dt);
     for (const m of this.acidMeshes) m.scale.setScalar(1 + Math.sin(this.t * 4) * 0.08);
+    if (this.orb) this.orb.material.opacity = 0.75 + Math.sin(this.t * 9) * 0.25;
     if (this.halo) this.halo.material.opacity = 0.15 + night * 0.85;
     // вспышка при попадании
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 5);
