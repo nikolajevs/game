@@ -13,11 +13,12 @@ const GW = MAP_W * RES + 1;
 const GH = MAP_H * RES + 1;
 const CHUNK_CELLS = 48; // клеток сетки в стороне участка
 const BASE_H = [-46, -13, 4, 12, 16, 26];
-const TILE_COL = ['#1b4f63', '#3c8a86', '#e3d09a', '#78b153', '#3f8040', '#8f8e86'];
+// луг чуть темнее и спокойнее — под цвет травы ez-tree, чтобы вдали, где пучков меньше, не было пятен
+const TILE_COL = ['#1b4f63', '#3c8a86', '#e3d09a', '#679b42', '#3f8040', '#8f8e86'];
 const BEACH = new THREE.Color('#e8d7a2');
 const CLIFF = new THREE.Color('#7d7a72');
 const SNOWY = new THREE.Color('#b9b8b0');
-const DRY = new THREE.Color('#b5b866');
+const DRY = new THREE.Color('#9fa65a');
 const LUSH = new THREE.Color('#3f8a45');
 const WASTE = new THREE.Color('#857f55'); // выжженная земля радиационных зон
 const ASH = new THREE.Color('#5c5848');
