@@ -9,23 +9,30 @@ import { Water } from './water.js';
 
 const SAND_SCALE = 150; // сколько единиц мира на один повтор текстуры песка
 const ROCK_SCALE = 210; // и скалы
+const GRASS_SCALE = 70; // мелкий травяной ковёр (и он же крупно — против заметных повторов)
+// средний линейный цвет текстур травы и земли — делим на него, чтобы текстура давала фактуру, не меняя оттенок
+const GRASS_MEAN = 'vec3(0.0677, 0.0748, 0.0344)';
 
 // Песок и скала поверх цвета вершин: вес каждого — атрибут вершины biome (x — песок, y — скала).
 // Скала — трипланарно (на склонах не растягивается), рельеф поверхности — из высот текстур (bump).
 function applyTerrainSurfaces(material) {
-  const { sand, rock } = surfaceTextures();
+  const { sand, rock, grass, dirt } = surfaceTextures();
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uSand = { value: sand };
     shader.uniforms.uRock = { value: rock };
+    shader.uniforms.uGrass = { value: grass };
+    shader.uniforms.uDirt = { value: dirt };
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec2 biome;\nvarying vec2 vBiome;\nvarying vec3 vTerrWP;')
+      .replace('#include <common>', '#include <common>\nattribute vec3 biome;\nvarying vec3 vBiome;\nvarying vec3 vTerrWP;')
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
         vBiome = biome;
         vTerrWP = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
     const heightFn = `
       uniform sampler2D uSand;
       uniform sampler2D uRock;
-      varying vec2 vBiome;
+      uniform sampler2D uGrass;
+      uniform sampler2D uDirt;
+      varying vec3 vBiome;
       varying vec3 vTerrWP;
       ${TRIPLANAR_GLSL}
       // высота поверхности: общая мелкая фактура, песок (рябь и зерно), скала (сколы и трещины)
@@ -33,6 +40,9 @@ function applyTerrainSurfaces(material) {
         float h = texture2D(bumpMap, uvD).x;
         float hs = texture2D(uSand, wp.xz / ${SAND_SCALE.toFixed(1)}).a;
         float hr = triSample(uRock, wp, ${ROCK_SCALE.toFixed(1)}, tw).a;
+        float green = clamp(1.0 - vBiome.x - vBiome.y, 0.0, 1.0);
+        float hg = dot(texture2D(uGrass, wp.xz / ${GRASS_SCALE.toFixed(1)}).rgb, vec3(4.0));
+        h = mix(h, hg * 0.9, green * 0.6);
         h = mix(h, hs * 1.8, vBiome.x);
         h = mix(h, hr * 3.2, vBiome.y);
         return h;
@@ -69,12 +79,22 @@ function applyTerrainSurfaces(material) {
         vec3 detail = texture2D(map, vMapUv).rgb;
         vec3 sandC = texture2D(uSand, vTerrWP.xz / ${SAND_SCALE.toFixed(1)}).rgb * 1.1;
         vec3 rockC = triSample(uRock, vTerrWP, ${ROCK_SCALE.toFixed(1)}, triWeights(vTerrWP)).rgb * 1.12;
+        // зелёная часть: травяной ковёр ez-tree; крупная копия той же текстуры прячет повторы
+        float green = clamp(1.0 - vBiome.x - vBiome.y, 0.0, 1.0);
+        vec3 gFine = texture2D(uGrass, vTerrWP.xz / ${GRASS_SCALE.toFixed(1)}).rgb / ${GRASS_MEAN};
+        vec3 gBig = texture2D(uGrass, vTerrWP.xz / ${(GRASS_SCALE * 7.3).toFixed(1)} + 0.37).rgb / ${GRASS_MEAN};
+        vec3 grassD = mix(vec3(1.0), clamp(gFine * mix(vec3(1.0), gBig, 0.4), 0.0, 2.6), 0.6) * 0.96;
+        detail = mix(detail, grassD, green);
         detail = mix(detail, sandC, vBiome.x);
         detail = mix(detail, rockC, vBiome.y);
         diffuseColor.rgb *= detail;
+        // лесная подстилка: в лесу местами проступает земля
+        float patches = smoothstep(0.42, 0.68, texture2D(uRock, vTerrWP.xz / 1600.0).a);
+        float dirtMask = vBiome.z * green * (0.25 + 0.55 * patches);
+        diffuseColor.rgb = mix(diffuseColor.rgb, texture2D(uDirt, vTerrWP.xz / 95.0).rgb * 1.45, dirtMask);
       #endif`);
   };
-  material.customProgramCacheKey = () => 'terrain-surfaces-v1';
+  material.customProgramCacheKey = () => 'terrain-surfaces-v2';
 }
 import { hash2 } from './util.js';
 
@@ -340,6 +360,7 @@ export class Terrain {
     const rockTile = this.sampleTiles(x, z, (tt) => (tt === T.ROCK ? 1 : 0));
     this.wRock = Math.min(1, Math.max(cliff * 1.2, smoothstep(0.25, 0.75, rockTile)));
     this.wSand *= 1 - this.wRock;
+    this.wForest = this.sampleTiles(x, z, (tt) => (tt === T.FOREST ? 1 : 0));
     c.lerp(CLIFF, cliff * 0.92);
     c.lerp(SNOWY, smoothstep(55, 88, h));
     if (h > 0 && zones.length) {
@@ -372,7 +393,7 @@ export class Terrain {
     const vw = i1 - i0 + 1;
     const vh = j1 - j0 + 1;
     const vcol = new Float32Array(vw * vh * 3);
-    const vbio = new Float32Array(vw * vh * 2); // веса песка и скалы
+    const vbio = new Float32Array(vw * vh * 3); // веса песка, скалы и леса
     const vh0 = new Float32Array(vw * vh);
     const c = new THREE.Color();
     const zones = this.zones;
@@ -383,8 +404,9 @@ export class Terrain {
         vcol[k * 3] = c.r;
         vcol[k * 3 + 1] = c.g;
         vcol[k * 3 + 2] = c.b;
-        vbio[k * 2] = this.wSand;
-        vbio[k * 2 + 1] = this.wRock;
+        vbio[k * 3] = this.wSand;
+        vbio[k * 3 + 1] = this.wRock;
+        vbio[k * 3 + 2] = this.wForest;
         vh0[k] = this.hv(i, j);
       }
     }
@@ -392,7 +414,7 @@ export class Terrain {
     const pos = new Float32Array(quads * 18);
     const col = new Float32Array(quads * 18);
     const uv = new Float32Array(quads * 12);
-    const bio = new Float32Array(quads * 12);
+    const bio = new Float32Array(quads * 18);
     let o = 0;
     let u = 0;
     const put = (i, j) => {
@@ -405,8 +427,9 @@ export class Terrain {
       col[o] = vcol[k * 3];
       col[o + 1] = vcol[k * 3 + 1];
       col[o + 2] = vcol[k * 3 + 2];
-      bio[u] = vbio[k * 2];
-      bio[u + 1] = vbio[k * 2 + 1];
+      bio[o] = vbio[k * 3];
+      bio[o + 1] = vbio[k * 3 + 1];
+      bio[o + 2] = vbio[k * 3 + 2];
       uv[u] = x / TEXTURE_WORLD_SIZE;
       uv[u + 1] = z / TEXTURE_WORLD_SIZE;
       o += 3;
@@ -422,7 +445,7 @@ export class Terrain {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    geo.setAttribute('biome', new THREE.BufferAttribute(bio, 2));
+    geo.setAttribute('biome', new THREE.BufferAttribute(bio, 3));
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
     const mesh = new THREE.Mesh(geo, this.mat);

@@ -6,15 +6,16 @@ import * as THREE from 'three';
 let tex = null;
 export function surfaceTextures() {
   if (tex) return tex;
-  const load = (name) => {
-    const t = new THREE.TextureLoader().load(`/assets/textures/${name}.webp`);
+  const load = (name, dir = 'textures') => {
+    const t = new THREE.TextureLoader().load(`/assets/${dir}/${name}.webp`);
     t.wrapS = THREE.RepeatWrapping;
     t.wrapT = THREE.RepeatWrapping;
     t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = 8;
     return t;
   };
-  tex = { sand: load('sand'), rock: load('rock') };
+  // трава и лесная земля — текстуры из демо ez-tree (MIT)
+  tex = { sand: load('sand'), rock: load('rock'), grass: load('ground_grass', 'ez-tree'), dirt: load('ground_dirt', 'ez-tree') };
   return tex;
 }
 
