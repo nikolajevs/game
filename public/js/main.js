@@ -280,6 +280,10 @@ net.on('welcome', async (m) => {
   hud.setMap(tiles, S.zones);
   S.ready = true;
   for (const r of S.pendingRes.splice(0)) applyRes(r);
+  try {
+    const saved = JSON.parse(store.get('mutagen.marker') || 'null');
+    if (saved && Number.isFinite(saved.x)) setMarker(saved, true);
+  } catch { /* старая или битая метка — без неё */ }
   $('join').classList.add('hidden');
   joinPreview.dispose();
   editor.ap = lookStr();
@@ -483,6 +487,19 @@ function useSkill(id) {
   else net.send({ t: 'equip', item: S.you.wp === id ? null : id });
 }
 hud.onSkill = useSkill;
+
+// ================= метка на карте =================
+function setMarker(m, silent = false) {
+  S.marker = m;
+  store.set('mutagen.marker', m ? JSON.stringify(m) : '');
+  hud.setMarker(m);
+  world.setMarker(m);
+  if (!silent) {
+    audio.play(m ? 'uiSelect' : 'uiClose', { volume: 0.3 });
+    hud.toast(m ? '📍 Метка поставлена — её видно на карте и столбом света в мире' : 'Метка убрана');
+  }
+}
+hud.onMarker = (m) => setMarker(m);
 
 // ================= стройка =================
 function setBuild(kind) {
@@ -758,6 +775,11 @@ function frame(now) {
     }
   }
   hud.siteName = site ? SITES[site.kind].name : '';
+  // дошли до метки — она больше не нужна
+  if (S.marker && !you.dead && Math.hypot(S.marker.x - S.me.x, S.marker.y - S.me.y) < 70) {
+    setMarker(null, true);
+    hud.toast('📍 Вы на месте — метка снята');
+  }
   hud.update(you, S.stats, { buildKind: S.buildKind });
   hud.clock(S.phase);
   if (now - S.lastMini > 100) {

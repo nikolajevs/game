@@ -5,6 +5,7 @@ import {
 } from '/shared/config.js';
 
 const MINI_SPAN = 4800; // сколько единиц мира видно на мини-карте
+const WORLD = MAP_W * TILE;
 
 const $ = (id) => document.getElementById(id);
 const TILE_RGB = [[27, 79, 99], [60, 138, 134], [227, 208, 154], [120, 177, 83], [63, 128, 64], [143, 142, 134]];
@@ -66,8 +67,9 @@ export class Hud {
     this.minimap = $('minimap');
     this.mctx = this.minimap.getContext('2d');
     this.bigOpen = false;
+    this.marker = null; // метка игрока на карте { x, y }
     this.minimap.addEventListener('click', () => this.toggleBigMap());
-    $('bigmap').addEventListener('click', () => this.toggleBigMap(false));
+    this.initBigMap();
     this.buildBar = $('buildBar');
     this.contEl = $('container');
     this.craftEl = $('craft');
@@ -343,7 +345,7 @@ export class Hud {
     }
   }
 
-  // Мини-карта: окрестности игрока (MINI_SPAN единиц), за краем — стрелки к палатке и метеориту
+  // Мини-карта: окрестности игрока (MINI_SPAN единиц), за краем — стрелки к палатке, метеориту и метке
   drawMinimap(me, face, nest, meteor, myStructures, t) {
     this.lastMap = { me, face, nest, meteor, myStructures };
     if (!me) return;
@@ -355,43 +357,47 @@ export class Hud {
     if (this.bigOpen) this.drawBigMap(t);
   }
 
-  // Общая отрисовка карты: область [x0, x0 + span] × [y0, y0 + span] мира в квадрат W×W
-  drawMap(g, W, x0, y0, span, { me, face, nest, meteor, myStructures, t, edge = false, iconSize = 10 }) {
+  // Общая отрисовка карты: span единиц мира по ширине W, начиная с (x0, y0), в прямоугольник W×H.
+  // big — большая карта: крупнее значки, заметная отметка игрока, расстояние до метки
+  drawMap(g, W, x0, y0, span, { me, face, nest, meteor, myStructures, t, edge = false, iconSize = 10, big = false, H = W }) {
     const s = W / span;
     const px = (x) => (x - x0) * s;
     const py = (y) => (y - y0) * s;
     g.fillStyle = '#1b4f63';
-    g.fillRect(0, 0, W, W);
-    g.imageSmoothingEnabled = false;
-    if (this.mapBase) g.drawImage(this.mapBase, x0 / TILE, y0 / TILE, span / TILE, span / TILE, 0, 0, W, W);
+    g.fillRect(0, 0, W, H);
+    // вблизи (больше пары пикселей на клетку) — сглаживаем, издалека — чёткие клетки
+    g.imageSmoothingEnabled = s * TILE > 2.5;
+    if (this.mapBase) g.drawImage(this.mapBase, x0 / TILE, y0 / TILE, span / TILE, H / s / TILE, 0, 0, W, H);
     g.fillStyle = '#ffffff';
-    for (const st of myStructures || []) g.fillRect(px(st.x) - 1, py(st.y) - 1, 2.5, 2.5);
+    const sq = big ? Math.max(2.5, s * TILE * 0.8) : 2.5;
+    for (const st of myStructures || []) g.fillRect(px(st.x) - sq / 2, py(st.y) - sq / 2, sq, sq);
     g.font = `${iconSize}px sans-serif`;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     for (const z of this.zones) {
       const zx = px(z.x);
       const zy = py(z.y);
-      if (zx < -10 || zy < -10 || zx > W + 10 || zy > W + 10) continue;
+      if (zx < -20 || zy < -20 || zx > W + 20 || zy > H + 20) continue;
       g.fillStyle = '#1d1d1f';
       g.fillText(SITES[z.kind]?.icon || '☢', zx, zy);
     }
     // точка на краю карты по направлению к цели, если сама цель за краем
     const clampEdge = (x, y) => {
       const cx = W / 2;
+      const cy = H / 2;
       const dx = x - cx;
-      const dy = y - cx;
-      const m = Math.max(Math.abs(dx), Math.abs(dy));
-      const lim = cx - 8;
-      if (m <= lim) return [x, y, false];
-      return [cx + (dx / m) * lim, cx + (dy / m) * lim, true];
+      const dy = y - cy;
+      const m = Math.max(Math.abs(dx) / (cx - 8), Math.abs(dy) / (cy - 8));
+      if (m <= 1) return [x, y, false];
+      return [cx + dx / m, cy + dy / m, true];
     };
+    const k = big ? 1.6 : 1;
     if (nest) {
       let [nx, ny, out] = [px(nest[0]), py(nest[1]), false];
       if (edge) [nx, ny, out] = clampEdge(nx, ny);
       g.fillStyle = '#ffd23f';
       g.beginPath();
-      g.arc(nx, ny, out ? 3 : 3.5, 0, Math.PI * 2);
+      g.arc(nx, ny, (out ? 3 : 3.5) * k, 0, Math.PI * 2);
       g.fill();
       g.strokeStyle = '#000';
       g.lineWidth = 1;
@@ -403,15 +409,57 @@ export class Hud {
       g.strokeStyle = '#c77dff';
       g.lineWidth = 2;
       g.beginPath();
-      g.arc(mx, my, (out ? 3 : 5) + Math.sin(t * 5) * 2, 0, Math.PI * 2);
+      g.arc(mx, my, ((out ? 3 : 5) + Math.sin(t * 5) * 2) * k, 0, Math.PI * 2);
       g.stroke();
       g.fillStyle = '#c77dff';
       g.fillRect(mx - 1.5, my - 1.5, 3, 3);
     }
+    // метка игрока: красный флажок-капля; на краю мини-карты — стрелка в её сторону
+    if (this.marker) {
+      let [mx, my, out] = [px(this.marker.x), py(this.marker.y), false];
+      if (edge) [mx, my, out] = clampEdge(mx, my);
+      const r = (out ? 4 : 6) * k;
+      g.fillStyle = '#ff5a3c';
+      g.strokeStyle = '#1a0a06';
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.moveTo(mx, my);
+      g.lineTo(mx - r * 0.8, my - r * 1.6);
+      g.arc(mx, my - r * 1.9, r * 0.85, Math.PI * 0.85, Math.PI * 0.15);
+      g.closePath();
+      g.fill();
+      g.stroke();
+      if (big && me) {
+        const dist = Math.hypot(this.marker.x - me.x, this.marker.y - me.y) / 24; // 24 ед. ≈ 1 м
+        g.font = 'bold 12px sans-serif';
+        g.fillStyle = '#fff';
+        g.strokeStyle = 'rgba(0,0,0,0.75)';
+        g.lineWidth = 3;
+        const txt = dist >= 1000 ? `${(dist / 1000).toFixed(1)} км` : `${Math.round(dist)} м`;
+        g.strokeText(txt, mx, my - r * 3.4);
+        g.fillText(txt, mx, my - r * 3.4);
+      }
+    }
     if (me) {
+      const ex = px(me.x);
+      const ey = py(me.y);
+      if (big) {
+        // на большой карте себя видно сразу: пульсирующее кольцо и подпись
+        const pulse = (t * 0.9) % 1;
+        g.strokeStyle = `rgba(156, 240, 164, ${1 - pulse})`;
+        g.lineWidth = 3;
+        g.beginPath();
+        g.arc(ex, ey, 10 + pulse * 26, 0, Math.PI * 2);
+        g.stroke();
+        g.fillStyle = 'rgba(11, 16, 22, 0.55)';
+        g.beginPath();
+        g.arc(ex, ey, 12, 0, Math.PI * 2);
+        g.fill();
+      }
       g.save();
-      g.translate(px(me.x), py(me.y));
+      g.translate(ex, ey);
       g.rotate(face);
+      g.scale(k * (big ? 1.25 : 1), k * (big ? 1.25 : 1));
       g.fillStyle = '#9cf0a4';
       g.strokeStyle = '#0b1016';
       g.lineWidth = 1.5;
@@ -424,27 +472,147 @@ export class Hud {
       g.fill();
       g.stroke();
       g.restore();
+      if (big) {
+        g.font = 'bold 12px sans-serif';
+        g.fillStyle = '#9cf0a4';
+        g.strokeStyle = 'rgba(0,0,0,0.8)';
+        g.lineWidth = 3;
+        g.strokeText('Вы', ex, ey + 24);
+        g.fillText('Вы', ex, ey + 24);
+      }
     }
   }
 
-  // Большая карта всего острова (N или щелчок по мини-карте)
-  toggleBigMap(force) {
-    this.bigOpen = force ?? !this.bigOpen;
-    $('bigmap').classList.toggle('hidden', !this.bigOpen);
+  // ---------- большая карта (N или щелчок по мини-карте) ----------
+  // колесо — масштаб к курсору, перетаскивание — сдвиг, щелчок — метка, ПКМ — убрать метку
+  initBigMap() {
+    const c = $('bigmapCanvas');
+    // span — сколько единиц мира помещается по короткой стороне окна карты
+    this.bigView = { cx: WORLD / 2, cy: WORLD / 2, span: 14000 };
+    const toWorld = (e) => {
+      const r = c.getBoundingClientRect();
+      const v = this.bigView;
+      const u = this.bigUnit();
+      return [v.cx + (e.clientX - r.left - r.width / 2) * u, v.cy + (e.clientY - r.top - r.height / 2) * u];
+    };
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const v = this.bigView;
+      const [wx, wy] = toWorld(e);
+      const span = Math.max(1600, Math.min(WORLD * 1.05, v.span * (e.deltaY > 0 ? 1.18 : 1 / 1.18)));
+      // точка под курсором остаётся на месте
+      v.cx = wx - (wx - v.cx) * (span / v.span);
+      v.cy = wy - (wy - v.cy) * (span / v.span);
+      v.span = span;
+      this.clampBigView();
+      this.drawBigMap(performance.now() / 1000);
+    }, { passive: false });
+    let drag = null;
+    c.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      if (e.button === 2) return;
+      drag = { x: e.clientX, y: e.clientY, cx: this.bigView.cx, cy: this.bigView.cy, moved: false };
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+      drag.moved = true;
+      c.classList.add('drag');
+      const u = this.bigUnit();
+      this.bigView.cx = drag.cx - dx * u;
+      this.bigView.cy = drag.cy - dy * u;
+      this.clampBigView();
+      this.drawBigMap(performance.now() / 1000);
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (!drag) return;
+      const wasDrag = drag.moved;
+      drag = null;
+      c.classList.remove('drag');
+      if (!wasDrag && e.target === c) {
+        const [wx, wy] = toWorld(e);
+        this.onMarker?.({ x: Math.round(wx), y: Math.round(wy) });
+      }
+    });
+    c.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onMarker?.(null);
+    });
+    $('bigmap').addEventListener('mousedown', (e) => {
+      if (e.target.id === 'bigmap') this.toggleBigMap(false); // щелчок мимо карты — закрыть
+    });
+    $('bigmapClose').addEventListener('click', () => this.toggleBigMap(false));
+    $('bigmapUnmark').addEventListener('click', () => this.onMarker?.(null));
+    $('bigmapMe').addEventListener('click', () => this.centerBigMap());
+  }
+
+  // размер окна карты в CSS-пикселях и сколько единиц мира приходится на пиксель
+  bigSize() {
+    const wrap = $('bigmapCanvas').parentElement;
+    return [wrap.clientWidth || 1, wrap.clientHeight || 1];
+  }
+
+  bigUnit() {
+    const [W, H] = this.bigSize();
+    return this.bigView.span / Math.min(W, H);
+  }
+
+  // не даём увести остров за край: если он целиком влезает по оси — держим по центру
+  clampBigView() {
+    const v = this.bigView;
+    const [W, H] = this.bigSize();
+    const u = this.bigUnit();
+    const hx = (W * u) / 2;
+    const hy = (H * u) / 2;
+    v.cx = Math.max(Math.min(hx, WORLD / 2), Math.min(Math.max(WORLD - hx, WORLD / 2), v.cx));
+    v.cy = Math.max(Math.min(hy, WORLD / 2), Math.min(Math.max(WORLD - hy, WORLD / 2), v.cy));
+  }
+
+  centerBigMap() {
+    const me = this.lastMap?.me;
+    if (me) {
+      this.bigView.cx = me.x;
+      this.bigView.cy = me.y;
+      this.clampBigView();
+    }
+    this.drawBigMap(performance.now() / 1000);
+  }
+
+  setMarker(m) {
+    this.marker = m;
     if (this.bigOpen) this.drawBigMap(performance.now() / 1000);
   }
 
-  drawBigMap(t) {
-    const c = $('bigmapCanvas');
-    const size = Math.floor(Math.min(window.innerWidth * 0.9, window.innerHeight * 0.82, 900));
-    if (c.width !== size) {
-      c.width = size;
-      c.height = size;
-    }
-    const m = this.lastMap || {};
-    this.drawMap(c.getContext('2d'), size, 0, 0, MAP_W * TILE, { ...m, t, iconSize: 11 });
+  toggleBigMap(force) {
+    this.bigOpen = force ?? !this.bigOpen;
+    $('bigmap').classList.toggle('hidden', !this.bigOpen);
+    if (this.bigOpen) this.centerBigMap(); // открывается вокруг игрока
   }
 
+  // Окно карты занимает почти весь экран; холст — в физических пикселях, чтобы на HiDPI не мылилось
+  drawBigMap(t) {
+    const c = $('bigmapCanvas');
+    const [W, H] = this.bigSize();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const bw = Math.round(W * dpr);
+    const bh = Math.round(H * dpr);
+    if (c.width !== bw || c.height !== bh) {
+      c.width = bw;
+      c.height = bh;
+      this.clampBigView(); // окно изменилось — остров не должен уехать за край
+    }
+    const g = c.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const v = this.bigView;
+    const u = this.bigUnit();
+    const m = this.lastMap || {};
+    const icon = Math.round(Math.max(12, Math.min(24, 12 * Math.sqrt(16000 / v.span))));
+    this.drawMap(g, W, v.cx - (W * u) / 2, v.cy - (H * u) / 2, W * u, { ...m, t, iconSize: icon, big: true, H });
+  }
 
   setHint(html) {
     if (this.cache.hint === html) return;

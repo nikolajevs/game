@@ -76,9 +76,12 @@
 
 <div id="bigmap" class="screen hidden">
   <div class="bigmap-box panel">
-    <div class="cont-head"><span>🗺 Карта острова <span class="muted small">(N или щелчок — закрыть)</span></span></div>
-    <canvas id="bigmapCanvas" width="640" height="640"></canvas>
-    <div class="muted small">☢ руины · ⛏ рудники · 🦴 логова · <span style="color:#ffd23f">●</span> палатка · <span style="color:#c77dff">◎</span> метеорит</div>
+    <div class="cont-head"><span>🗺 Карта острова</span>
+      <span class="bigmap-btns"><button id="bigmapMe" title="Показать, где я">◎ Где я</button><button id="bigmapUnmark" title="Убрать метку">✕ Метка</button><button id="bigmapClose" title="Закрыть (N)">✕</button></span>
+    </div>
+    <div class="bigmap-wrap"><canvas id="bigmapCanvas"></canvas></div>
+    <div class="bigmap-foot muted small"><span>Колесо — масштаб · перетаскивание — сдвиг · щелчок — поставить метку · ПКМ — убрать · N — закрыть</span>
+    <span>☢ руины · ⛏ рудники · 🦴 логова · 🕯 алтари · <span style="color:#ffd23f">●</span> палатка · <span style="color:#c77dff">◎</span> метеорит · <span style="color:#ff5a3c">▼</span> метка</span></div>
   </div>
 </div>
 

@@ -161,8 +161,15 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 #topRight { position: fixed; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 #minimapWrap { padding: 5px; cursor: pointer; }
 #bigmap { background: rgba(5, 10, 14, 0.55); z-index: 30; }
-.bigmap-box { padding: 12px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
-#bigmapCanvas { border-radius: 8px; image-rendering: pixelated; max-width: 90vw; max-height: 82vh; }
+/* карта на весь экран, кроме узкой рамки */
+.bigmap-box { width: calc(100vw - 32px); height: calc(100vh - 32px); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.bigmap-wrap { position: relative; flex: 1 1 auto; min-height: 0; border-radius: 8px; overflow: hidden; }
+#bigmapCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+#bigmapCanvas.drag { cursor: grabbing; }
+.bigmap-box .cont-head { width: 100%; margin-bottom: 0; }
+.bigmap-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; }
+.bigmap-btns { display: flex; gap: 6px; }
+.bigmap-btns button { padding: 3px 9px; font-size: 12.5px; }
 #minimap { display: block; width: 200px; height: 200px; border-radius: 8px; }
 #clock { padding: 5px 12px; font-size: 13px; }
 

@@ -503,6 +503,51 @@ export class WorldView {
     this.rings.push({ mesh, t: 0, life, radius });
   }
 
+  // ---------- метка игрока: столб света, видный издалека, и кольцо на земле ----------
+  setMarker(m) {
+    if (!m) {
+      if (this.markerView) {
+        this.scene.remove(this.markerView.group);
+        this.markerView = null;
+      }
+      return;
+    }
+    if (!this.markerView) {
+      const group = new THREE.Group();
+      const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(9, 14, 1400, 16, 1, true),
+        new THREE.MeshBasicMaterial({ color: '#ff7a3c', transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }),
+      );
+      beam.position.y = 700;
+      const core = new THREE.Mesh(
+        new THREE.CylinderGeometry(2.5, 2.5, 1400, 8, 1, true),
+        new THREE.MeshBasicMaterial({ color: '#ffd9a8', transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }),
+      );
+      core.position.y = 700;
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(16, 22, 40),
+        new THREE.MeshBasicMaterial({ color: '#ff7a3c', transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }),
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 2;
+      group.add(beam, core, ring);
+      this.scene.add(group);
+      this.markerView = { group, beam, ring };
+    }
+    this.markerView.x = m.x;
+    this.markerView.y = m.y;
+  }
+
+  updateMarker() {
+    const v = this.markerView;
+    if (!v) return;
+    v.group.position.set(v.x, Math.max(this.ground(v.x, v.y), 0), v.y);
+    const p = (this.time * 0.8) % 1;
+    v.ring.scale.setScalar(1 + p * 1.6);
+    v.ring.material.opacity = 0.85 * (1 - p);
+    v.beam.material.opacity = 0.26 + Math.sin(this.time * 2.4) * 0.06;
+  }
+
   // ---------- метеорит ----------
   setMeteor(m) {
     if (!m) {
@@ -674,6 +719,7 @@ export class WorldView {
     this.zonesView.update(dt, this.camTarget, env.far);
     this.statics.update(dt, this.camera.position, this.night, this.camTarget);
     this.updateMeteor(dt);
+    this.updateMarker();
     for (const dcl of this.decals) {
       dcl.life -= dt;
       if (dcl.life < 20) dcl.mesh.material.opacity = Math.max(0, dcl.life / 20) * 0.9;
