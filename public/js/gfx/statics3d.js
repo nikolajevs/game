@@ -5,6 +5,7 @@ import { Tree, TreePreset } from '/vendor/ez-tree/ez-tree.es.js';
 import { TILE, STRUCTURES } from '/shared/config.js';
 import { G, M, between, mergeParts, rng, shade, taper, glowTexture } from './util.js';
 import { Fire } from './fire.js';
+import { applyRockSurface } from './surfaces.js';
 
 const _m = new THREE.Matrix4();
 const _c = new THREE.Color();
@@ -134,6 +135,11 @@ class Pool {
   }
 }
 
+const rockMat = () => {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.95 });
+  applyRockSurface(m, 60); // валуны и серные глыбы — с текстурой скалы
+  return m;
+};
 const flatMat = (opts = {}) => new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.85, ...opts });
 
 // ---------- геометрия построек (склеенная, с цветами вершин) ----------
@@ -343,7 +349,7 @@ export class StaticsView {
       pineLeaves: [TREE_MODELS.pine.leaves, TREE_MODELS.pine.leavesMaterial, 24, false],
       oakBark: [TREE_MODELS.oak.bark, TREE_MODELS.oak.barkMaterial, 24, true],
       oakLeaves: [TREE_MODELS.oak.leaves, TREE_MODELS.oak.leavesMaterial, 24, false],
-      rock: [G.dodeca, flatMat({ roughness: 0.95 }), 32, true],
+      rock: [G.dodeca, rockMat(), 32, true],
       berry: [G.ico, flatMat({ roughness: 0.4 }), 32, false],
       mushStem: [G.cyl6, flatMat({ roughness: 0.8 }), 32, false],
       mushCap: [capGeo, flatMat({ roughness: 0.6 }), 32, false],

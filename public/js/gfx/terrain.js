@@ -4,6 +4,77 @@
 import * as THREE from 'three';
 import { TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T } from '/shared/config.js';
 import { makeNoise, zoneAt, zoneFalloff } from '/shared/worldgen.js';
+import { surfaceTextures, TRIPLANAR_GLSL } from './surfaces.js';
+
+const SAND_SCALE = 150; // сколько единиц мира на один повтор текстуры песка
+const ROCK_SCALE = 210; // и скалы
+
+// Песок и скала поверх цвета вершин: вес каждого — атрибут вершины biome (x — песок, y — скала).
+// Скала — трипланарно (на склонах не растягивается), рельеф поверхности — из высот текстур (bump).
+function applyTerrainSurfaces(material) {
+  const { sand, rock } = surfaceTextures();
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uSand = { value: sand };
+    shader.uniforms.uRock = { value: rock };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec2 biome;\nvarying vec2 vBiome;\nvarying vec3 vTerrWP;')
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        vBiome = biome;
+        vTerrWP = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
+    const heightFn = `
+      uniform sampler2D uSand;
+      uniform sampler2D uRock;
+      varying vec2 vBiome;
+      varying vec3 vTerrWP;
+      ${TRIPLANAR_GLSL}
+      // высота поверхности: общая мелкая фактура, песок (рябь и зерно), скала (сколы и трещины)
+      float terrainHeight(vec2 uvD, vec3 wp, vec3 tw) {
+        float h = texture2D(bumpMap, uvD).x;
+        float hs = texture2D(uSand, wp.xz / ${SAND_SCALE.toFixed(1)}).a;
+        float hr = triSample(uRock, wp, ${ROCK_SCALE.toFixed(1)}, tw).a;
+        h = mix(h, hs * 1.8, vBiome.x);
+        h = mix(h, hr * 3.2, vBiome.y);
+        return h;
+      }
+    `;
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <bumpmap_pars_fragment>', `#ifdef USE_BUMPMAP
+        uniform sampler2D bumpMap;
+        uniform float bumpScale;
+        ${heightFn}
+        vec2 dHdxy_fwd() {
+          vec3 tw = triWeights(vTerrWP);
+          vec2 dSTdx = dFdx(vBumpMapUv);
+          vec2 dSTdy = dFdy(vBumpMapUv);
+          vec3 dPdx = dFdx(vTerrWP);
+          vec3 dPdy = dFdy(vTerrWP);
+          float Hll = bumpScale * terrainHeight(vBumpMapUv, vTerrWP, tw);
+          float dBx = bumpScale * terrainHeight(vBumpMapUv + dSTdx, vTerrWP + dPdx, tw) - Hll;
+          float dBy = bumpScale * terrainHeight(vBumpMapUv + dSTdy, vTerrWP + dPdy, tw) - Hll;
+          return vec2(dBx, dBy);
+        }
+        vec3 perturbNormalArb(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDirection) {
+          vec3 vSigmaX = normalize(dFdx(surf_pos.xyz));
+          vec3 vSigmaY = normalize(dFdy(surf_pos.xyz));
+          vec3 vN = surf_norm;
+          vec3 R1 = cross(vSigmaY, vN);
+          vec3 R2 = cross(vN, vSigmaX);
+          float fDet = dot(vSigmaX, R1) * faceDirection;
+          vec3 vGrad = sign(fDet) * (dHdxy.x * R1 + dHdxy.y * R2);
+          return normalize(abs(fDet) * surf_norm - vGrad);
+        }
+      #endif`)
+      .replace('#include <map_fragment>', `#ifdef USE_MAP
+        vec3 detail = texture2D(map, vMapUv).rgb;
+        vec3 sandC = texture2D(uSand, vTerrWP.xz / ${SAND_SCALE.toFixed(1)}).rgb * 1.1;
+        vec3 rockC = triSample(uRock, vTerrWP, ${ROCK_SCALE.toFixed(1)}, triWeights(vTerrWP)).rgb * 1.12;
+        detail = mix(detail, sandC, vBiome.x);
+        detail = mix(detail, rockC, vBiome.y);
+        diffuseColor.rgb *= detail;
+      #endif`);
+  };
+  material.customProgramCacheKey = () => 'terrain-surfaces-v1';
+}
 import { hash2 } from './util.js';
 
 // 2 вершины на клетку: на большом острове 3 дали бы ~3 млн вершин и сотни МБ памяти
@@ -98,6 +169,7 @@ export class Terrain {
       roughness: 0.96,
       metalness: 0,
     });
+    applyTerrainSurfaces(this.mat);
     this.water = this.buildWater();
     this.group.add(this.water);
     this.group.add(this.buildSeabed());
@@ -237,12 +309,17 @@ export class Terrain {
     // пляж — только у настоящего берега, а не в каждой низине острова
     const shore = this.sampleTiles(x, z, (tt) => (tt <= T.SAND ? 1 : 0));
     const beach = smoothstep(-5, 0.5, h) * (1 - smoothstep(6, 13, h)) * shore;
+    const sandTile = this.sampleTiles(x, z, (tt) => (tt === T.SAND ? 1 : tt === T.SHALLOW ? 0.75 : 0));
+    this.wSand = Math.min(1, Math.max(beach, sandTile * 1.15));
     c.lerp(BEACH, beach * 0.9);
     const patch = this.patch(x / 260, z / 260, 3);
     const grassHeight = smoothstep(2, 9, h) * (1 - smoothstep(55, 76, h));
     if (patch > 0.55) c.lerp(DRY, grassHeight * Math.min(0.42, (patch - 0.55) * 2.4));
     else if (patch < 0.42) c.lerp(LUSH, grassHeight * Math.min(0.38, (0.42 - patch) * 2.4));
     const cliff = smoothstep(0.58, 1.35, steepness) * smoothstep(4, 18, h);
+    const rockTile = this.sampleTiles(x, z, (tt) => (tt === T.ROCK ? 1 : 0));
+    this.wRock = Math.min(1, Math.max(cliff * 1.2, smoothstep(0.25, 0.75, rockTile)));
+    this.wSand *= 1 - this.wRock;
     c.lerp(CLIFF, cliff * 0.92);
     c.lerp(SNOWY, smoothstep(55, 88, h));
     if (h > 0 && zones.length) {
@@ -275,6 +352,7 @@ export class Terrain {
     const vw = i1 - i0 + 1;
     const vh = j1 - j0 + 1;
     const vcol = new Float32Array(vw * vh * 3);
+    const vbio = new Float32Array(vw * vh * 2); // веса песка и скалы
     const vh0 = new Float32Array(vw * vh);
     const c = new THREE.Color();
     const zones = this.zones;
@@ -285,6 +363,8 @@ export class Terrain {
         vcol[k * 3] = c.r;
         vcol[k * 3 + 1] = c.g;
         vcol[k * 3 + 2] = c.b;
+        vbio[k * 2] = this.wSand;
+        vbio[k * 2 + 1] = this.wRock;
         vh0[k] = this.hv(i, j);
       }
     }
@@ -292,6 +372,7 @@ export class Terrain {
     const pos = new Float32Array(quads * 18);
     const col = new Float32Array(quads * 18);
     const uv = new Float32Array(quads * 12);
+    const bio = new Float32Array(quads * 12);
     let o = 0;
     let u = 0;
     const put = (i, j) => {
@@ -304,6 +385,8 @@ export class Terrain {
       col[o] = vcol[k * 3];
       col[o + 1] = vcol[k * 3 + 1];
       col[o + 2] = vcol[k * 3 + 2];
+      bio[u] = vbio[k * 2];
+      bio[u + 1] = vbio[k * 2 + 1];
       uv[u] = x / TEXTURE_WORLD_SIZE;
       uv[u + 1] = z / TEXTURE_WORLD_SIZE;
       o += 3;
@@ -319,6 +402,7 @@ export class Terrain {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geo.setAttribute('biome', new THREE.BufferAttribute(bio, 2));
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
     const mesh = new THREE.Mesh(geo, this.mat);
