@@ -514,6 +514,7 @@ function frame(now) {
   }
   const shadowCenter = cam.mode === 'third' ? target : tmpV.set(W(3), 0, H(3));
   const env = sky.update(phase, shadowCenter, view);
+  terrain.waterSky = { sky, light: env.k };
   const night = 1 - env.k;
   terrain.update(elapsed, target, view);
   decor.update(target, Math.min(view, 2400));

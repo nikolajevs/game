@@ -55,7 +55,7 @@ export class Game {
     this.turrets = new Set(); // автотурели игроков
     this.grid = new Grid(80);
     this.statics = new Map();
-    this.nests = new Map(); // uid -> постройка-гнездо
+    this.nests = new Map(); // uid -> палатка (точка возрождения)
     this.players = new Map();
     this.npcs = new Map();
     this.projectiles = new Map();

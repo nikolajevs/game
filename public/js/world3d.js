@@ -667,6 +667,7 @@ export class WorldView {
     }
     const env = this.sky.update(phase, this.camTarget, view, this.camera.position.distanceTo(this.camTarget));
     this.night = 1 - env.k;
+    this.terrain.waterSky = { sky: this.sky, light: env.k };
     // сколько видно вокруг персонажа (не зависит от отдаления камеры)
     this.decor.update(this.camTarget, env.far);
     this.terrain.update(this.time, this.camTarget, env.far);

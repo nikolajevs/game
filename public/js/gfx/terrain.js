@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T } from '/shared/config.js';
 import { makeNoise, zoneAt, zoneFalloff } from '/shared/worldgen.js';
 import { surfaceTextures, TRIPLANAR_GLSL } from './surfaces.js';
+import { Water } from './water.js';
 
 const SAND_SCALE = 150; // сколько единиц мира на один повтор текстуры песка
 const ROCK_SCALE = 210; // и скалы
@@ -170,7 +171,9 @@ export class Terrain {
       metalness: 0,
     });
     applyTerrainSurfaces(this.mat);
-    this.water = this.buildWater();
+    this.waterView = new Water(tiles);
+    this.water = this.waterView.mesh;
+    this.waterSky = null; // { sky, light } — задаёт сцена после обновления неба
     this.group.add(this.water);
     this.group.add(this.buildSeabed());
     this.warm = true; // первый раз строим всё видимое сразу, дальше — понемногу за кадр
@@ -266,6 +269,23 @@ export class Terrain {
     const ci = Math.min(NCI - 1, Math.floor(i / CHUNK_CELLS));
     const cj = Math.min(NCJ - 1, Math.floor(j / CHUNK_CELLS));
     return this.chunkHeights(ci, cj)[(j - cj * CHUNK_CELLS) * CS + (i - ci * CHUNK_CELLS)];
+  }
+
+  // Насколько точка — голый песок или камень (0..1): те же правила, что красят пляж, песчаные
+  // клетки, скалистые клетки и крутые обрывы. Растения там не растут.
+  bareAt(x, z) {
+    const h = this.heightAt(x, z);
+    const shore = this.sampleTiles(x, z, (tt) => (tt <= T.SAND ? 1 : 0));
+    const beach = smoothstep(-5, 0.5, h) * (1 - smoothstep(6, 13, h)) * shore;
+    const sandTile = this.sampleTiles(x, z, (tt) => (tt === T.SAND ? 1 : tt === T.SHALLOW ? 0.75 : 0));
+    const sand = Math.max(beach, sandTile * 1.15);
+    const d = CELL;
+    const sx = (this.heightAt(x + d, z) - this.heightAt(x - d, z)) / (2 * d);
+    const sz = (this.heightAt(x, z + d) - this.heightAt(x, z - d)) / (2 * d);
+    const cliff = smoothstep(0.58, 1.35, Math.hypot(sx, sz)) * smoothstep(4, 18, h);
+    const rockTile = this.sampleTiles(x, z, (tt) => (tt === T.ROCK ? 1 : 0));
+    const rock = Math.max(cliff * 1.2, smoothstep(0.25, 0.75, rockTile));
+    return Math.min(1, Math.max(sand, rock));
   }
 
   // Высота поверхности суши/дна в точке (x, z) — точно по треугольникам сетки
@@ -410,20 +430,6 @@ export class Terrain {
     return mesh;
   }
 
-  buildWater() {
-    const size = Math.max(WORLD_W, WORLD_H) * 4;
-    const geo = new THREE.PlaneGeometry(size, size, 1, 1);
-    geo.rotateX(-Math.PI / 2);
-    const mat = new THREE.MeshStandardMaterial({
-      color: '#2f8fb0', transparent: true, opacity: 0.72, roughness: 0.18, metalness: 0.1,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(WORLD_W / 2, 0, WORLD_H / 2);
-    mesh.receiveShadow = true;
-    mesh.renderOrder = 1;
-    return mesh;
-  }
-
   buildSeabed() {
     const size = Math.max(WORLD_W, WORLD_H) * 4;
     const geo = new THREE.PlaneGeometry(size, size, 1, 1);
@@ -436,8 +442,8 @@ export class Terrain {
   // target — точка, вокруг которой рисуем; far — дальность видимости.
   // Недостающие участки рядом строятся (ближние первыми, понемногу за кадр), дальние — выгружаются.
   update(t, target, far) {
-    // лёгкое «дыхание» воды
-    this.water.position.y = Math.sin(t * 0.8) * 0.6;
+    // вода: рябь, волны, отражение неба и блики солнца
+    this.waterView.update(t, target, this.waterSky?.sky, this.waterSky?.light ?? 1);
     if (!target) return;
     const size = CHUNK_CELLS * CELL;
     const lim = far + size * 0.75;

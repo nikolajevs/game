@@ -343,7 +343,7 @@ export class Hud {
     }
   }
 
-  // Мини-карта: окрестности игрока (MINI_SPAN единиц), за краем — стрелки к гнезду и метеориту
+  // Мини-карта: окрестности игрока (MINI_SPAN единиц), за краем — стрелки к палатке и метеориту
   drawMinimap(me, face, nest, meteor, myStructures, t) {
     this.lastMap = { me, face, nest, meteor, myStructures };
     if (!me) return;

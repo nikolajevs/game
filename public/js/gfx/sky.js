@@ -3,6 +3,76 @@ import * as THREE from 'three';
 import { lightAt } from '/shared/config.js';
 
 const C = (h) => new THREE.Color(h);
+
+// Облака: шум на «потолке» над головой, плывут по ветру. Общая функция — её же использует вода,
+// чтобы отражать облака по отражённому лучу (без второй отрисовки мира).
+export const CLOUDS_GLSL = /* glsl */ `
+  float cHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float cNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(cHash(i), cHash(i + vec2(1.0, 0.0)), f.x), mix(cHash(i + vec2(0.0, 1.0)), cHash(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+  float cFbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 5; i++) {
+      v += a * cNoise(p);
+      p = p * 2.07 + vec2(13.1, 7.7);
+      a *= 0.5;
+    }
+    return v;
+  }
+  // плотность облаков в направлении d (0..1); cover — чем больше, тем меньше облаков
+  float cloudDensity(vec3 d, float t, float cover) {
+    if (d.y <= 0.0) return 0.0;
+    vec2 uv = d.xz / (d.y + 0.12) * 1.1 + vec2(t * 0.007, t * 0.0025);
+    float n = cFbm(uv * 1.5);
+    float c = smoothstep(cover, cover + 0.3, n);
+    return c * smoothstep(0.0, 0.22, d.y);
+  }
+  // цвет облаков: светлые к солнцу, сероватые с теневой стороны; ночью тёмные, на закате тёплые
+  vec3 cloudColor(vec3 d, vec3 sunDir, vec3 sunColor, vec3 hor, float light) {
+    float s = max(dot(d, sunDir), 0.0);
+    vec3 lit = mix(vec3(0.68, 0.72, 0.8), vec3(1.0, 0.99, 0.97), 0.45 + 0.55 * s) + sunColor * pow(s, 6.0) * 0.25;
+    return mix(hor * 0.55 + vec3(0.03, 0.03, 0.05), lit, light);
+  }
+`;
+
+const domeVertex = /* glsl */ `
+  varying vec3 vDir;
+  void main() {
+    vDir = position;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+const domeFragment = /* glsl */ `
+  uniform vec3 uTop;
+  uniform vec3 uHor;
+  uniform vec3 uSunDir;
+  uniform vec3 uSunColor;
+  uniform float uTime;
+  uniform float uLight;
+  uniform float uCover;
+  varying vec3 vDir;
+  ${CLOUDS_GLSL}
+  void main() {
+    vec3 d = normalize(vDir);
+    float h = clamp(d.y, 0.0, 1.0);
+    vec3 col = mix(uHor, uTop, pow(h, 0.55));
+    if (d.y < 0.0) col = uHor * 0.8;
+    // ореол вокруг солнца
+    float sd = max(dot(d, uSunDir), 0.0);
+    col += uSunColor * (pow(sd, 6.0) * 0.18 + pow(sd, 48.0) * 0.35) * uLight;
+    float c = cloudDensity(d, uTime, uCover);
+    col = mix(col, cloudColor(d, uSunDir, uSunColor, uHor, uLight), c * 0.92);
+    gl_FragColor = vec4(col, 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
 const PAL = {
   day: { top: C('#4f9fe0'), hor: C('#cfe6f2'), hemiSky: C('#cfe8ff'), hemiGround: C('#5b6b45'), sun: C('#fff4e0') },
   dusk: { top: C('#3b4d8f'), hor: C('#f3a463'), hemiSky: C('#f1b98a'), hemiGround: C('#4a3b3a'), sun: C('#ffb067') },
@@ -30,12 +100,25 @@ export class Sky {
     this.sun.shadow.radius = 3.5;
     scene.add(this.sun, this.sun.target);
 
-    // купол неба с градиентом в цветах вершин
-    const domeGeo = new THREE.SphereGeometry(5000, 32, 16);
-    domeGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(domeGeo.attributes.position.count * 3), 3));
-    this.dome = new THREE.Mesh(domeGeo, new THREE.MeshBasicMaterial({
-      vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false,
-    }));
+    // купол неба: градиент, ореол солнца и облака — всё в шейдере
+    this.cover = 0.55; // чем больше, тем меньше облаков
+    this.domeMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTop: { value: new THREE.Color() },
+        uHor: { value: new THREE.Color() },
+        uSunDir: { value: new THREE.Vector3(0, 1, 0) },
+        uSunColor: { value: new THREE.Color() },
+        uTime: { value: 0 },
+        uLight: { value: 1 },
+        uCover: { value: this.cover },
+      },
+      vertexShader: domeVertex,
+      fragmentShader: domeFragment,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    });
+    this.dome = new THREE.Mesh(new THREE.SphereGeometry(5000, 48, 24), this.domeMat);
     this.dome.renderOrder = -10;
     scene.add(this.dome);
 
@@ -111,18 +194,18 @@ export class Sky {
     this.stars.position.copy(center);
     this.stars.material.opacity = Math.max(0, 1 - k * 1.6);
 
-    // градиент купола
-    const pos = this.dome.geometry.attributes.position;
-    const col = this.dome.geometry.attributes.color;
-    const tmp = new THREE.Color();
-    for (let i = 0; i < pos.count; i++) {
-      const y = pos.getY(i) / 5000;
-      const t = Math.pow(Math.max(0, y), 0.55);
-      tmp.copy(this.hor).lerp(this.top, t);
-      if (y < 0) tmp.copy(this.hor).multiplyScalar(0.8);
-      col.setXYZ(i, tmp.r, tmp.g, tmp.b);
-    }
-    col.needsUpdate = true;
+    // купол: цвета, солнце и облака (плывут по ветру)
+    this.cloudTime = performance.now() / 1000;
+    this.sunDir = dir;
+    this.dayLight = k;
+    const du = this.domeMat.uniforms;
+    du.uTop.value.copy(this.top);
+    du.uHor.value.copy(this.hor);
+    du.uSunDir.value.copy(dir);
+    du.uSunColor.value.copy(this.sun.color);
+    du.uTime.value = this.cloudTime;
+    du.uLight.value = k;
+    du.uCover.value = this.cover;
 
     // туман = дальность обзора; ночью видно гораздо хуже.
     // Отсчёт — от персонажа, а не от камеры: при отдалении камеры видна та же округа, только сверху

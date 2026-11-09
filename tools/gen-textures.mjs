@@ -212,4 +212,39 @@ function makeWorley(seed, G) {
   }
   await save('rock', H, C);
 }
+// ---------- вода: карта нормалей ряби (RGB = нормаль, z вверх), бесшовная ----------
+{
+  const W = 512;
+  const n1 = makeNoise(41);
+  const n2 = makeNoise(42);
+  const H = new Float32Array(W * W);
+  for (let j = 0; j < W; j++) {
+    for (let i = 0; i < W; i++) {
+      const u = i / W;
+      const v = j / W;
+      // мягкие волны + острые гребешки ряби
+      const soft = fbm(n1, u, v, 3, 4);
+      const crest = fbm(n2, u, v, 6, 3, true);
+      H[j * W + i] = soft * 0.6 + crest * 0.4;
+    }
+  }
+  const buf = Buffer.alloc(W * W * 3);
+  const k = 6.5;
+  for (let j = 0; j < W; j++) {
+    for (let i = 0; i < W; i++) {
+      const hx = H[j * W + ((i + 1) % W)] - H[j * W + ((i - 1 + W) % W)];
+      const hy = H[((j + 1) % W) * W + i] - H[((j - 1 + W) % W) * W + i];
+      let nx = -hx * k;
+      let ny = -hy * k;
+      let nz = 1;
+      const l = Math.hypot(nx, ny, nz);
+      nx /= l; ny /= l; nz /= l;
+      const o = (j * W + i) * 3;
+      buf[o] = Math.round((nx * 0.5 + 0.5) * 255);
+      buf[o + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      buf[o + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+    }
+  }
+  await sharp(buf, { raw: { width: W, height: W, channels: 3 } }).webp({ quality: 92 }).toFile(`${OUT}/water_normal.webp`);
+}
 console.log('done');

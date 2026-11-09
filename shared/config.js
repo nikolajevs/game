@@ -23,7 +23,7 @@ export const TERRAIN_SPEED = [0.45, 0.7, 0.95, 1, 0.92, 0.95];
 export const isWater = (t) => t === T.DEEP || t === T.SHALLOW;
 
 // Смена дня и ночи. phase: 0..1
-export const DAY_LENGTH = 420; // секунд на полный цикл
+export const DAY_LENGTH = 1800; // секунд на полный цикл: ~19 минут дня и ~11 минут ночи
 export function lightAt(phase) {
   if (phase < 0.55) return 1;
   if (phase < 0.65) return 1 - ((phase - 0.55) / 0.1) * 0.88;
@@ -164,7 +164,7 @@ export const STRUCTURES = {
   storage: { name: 'Хранилище', cost: { wood: 30, stone: 10 }, hp: 400, solid: true, mat: 'wood', storage: true, desc: 'Хранит ресурсы. Открыть — E' },
   campfire: { name: 'Костёр', cost: { wood: 15, stone: 5 }, hp: 200, solid: false, mat: 'stone', desc: 'Свет ночью и лечение рядом' },
   spikes: { name: 'Колья', cost: { wood: 25, stone: 5 }, hp: 250, solid: false, mat: 'wood', touchDmg: 12, desc: 'Ранят чужаков' },
-  nest: { name: 'Гнездо', cost: { wood: 40, berries: 10 }, hp: 400, solid: false, mat: 'wood', desc: 'Точка возрождения (одно на игрока)' },
+  nest: { name: 'Палатка', cost: { wood: 35, bone: 3 }, hp: 400, solid: false, mat: 'wood', desc: 'Точка возрождения (одна на игрока)' }, // ключ nest — ради старых сохранений
   workbench: { name: 'Верстак', cost: { wood: 50, stone: 30, scrap: 15 }, hp: 500, solid: true, mat: 'wood', desc: 'Нужен для огнестрела, патронов и взрывчатки' },
   lab: { name: 'Лаборатория', cost: { wood: 60, stone: 40, scrap: 30 }, hp: 550, solid: true, mat: 'stone', desc: 'Данные → знания, опыты; лазеры и энергоячейки' },
   turret: { name: 'Автотурель', cost: { scrap: 40, sulfur: 20, stone: 30 }, hp: 450, solid: true, mat: 'stone', ability: 'turret', desc: 'Сама стреляет по зверям и чужакам (путь разума)' },

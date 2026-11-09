@@ -70,7 +70,7 @@ const MEADOW_R = 430; // радиус густого луга (к краю тр�
 const FLOWERS = ['flower_white', 'flower_blue', 'flower_yellow'];
 const FLOWER_MAX = 600; // цветов одного вида вокруг игрока
 // сколько пучков на 1000 кв. единиц по типу клетки
-const MEADOW_DENSITY = { [T.GRASS]: 38, [T.FOREST]: 15, [T.SAND]: 1.5, [T.ROCK]: 4 };
+const MEADOW_DENSITY = { [T.GRASS]: 38, [T.FOREST]: 15 }; // на песке и скалах трава не растёт
 
 // Участки строятся, когда попадают в поле зрения, и выгружаются далеко за его краем:
 // на огромном острове держать в памяти траву всего мира нельзя.
@@ -182,6 +182,7 @@ export class Decor {
       if (r > keep) continue;
       const gy = terrain.heightAt(x, z);
       if (gy < 0.5) continue;
+      if (terrain.bareAt(x, z) > 0.25) continue; // пляж у воды и крутые обрывы — без травы
       if (terrain.zones.length && zoneAt(terrain.zones, x, z)) continue;
       const s1 = hash2(i, cx * 31 + cz, seed + 41);
       const s2 = hash2(i * 3, cz * 31 + cx, seed + 43);
@@ -192,7 +193,7 @@ export class Decor {
       const g = hash2(i * 5, cx + cz * 3, seed + 47);
       cols.push(c.setRGB(0.25 + g * 0.1, 0.3 + s2 * 0.3, 0.1).multiplyScalar(t === T.FOREST ? 1.3 : 1.55).clone());
       // цветы — только на лугах, редко
-      if (t === T.GRASS && hash2(i * 7, cz * 13 + cx, seed + 53) < 0.012) {
+      if (t === T.GRASS && hash2(i * 7, cz * 13 + cx, seed + 53) < 0.004) {
         // модель цветка внутри файла уменьшена (≈1,5 ед.) — растягиваем до 13–19 ед., чуть выше травы
         flowers.push([x, gy - 0.3, z, s1 * 6.283, 8.5 + s2 * 4, Math.floor(g * 3) % 3]);
       }
@@ -302,13 +303,18 @@ export class Decor {
           const z = ty * TILE + hash2(tx, ty, seed + k * 31 + 2) * TILE;
           const sc = 0.7 + hash2(tx, ty, seed + k * 31 + 3) * 0.7;
           if (terrain.heightAt(x, z) < 0.5) continue; // под водой не растёт
+          // на голом песке и камне — только галька
+          if ((t === T.GRASS || t === T.FOREST) && terrain.bareAt(x, z) > 0.25) {
+            if (r < 0.1) push('pebble', x, z, sc * 2.2, k);
+            continue;
+          }
           if (terrain.zones.length && zoneAt(terrain.zones, x, z)) {
             if (r < 0.25) push('pebble', x, z, sc * 2.6, k); // в особых местах только обломки
             continue;
           }
           if (t === T.GRASS) {
             if (r < 0.7) push('tuft', x, z, sc);
-            else if (r < 0.74) push('flower', x, z, sc, k);
+            else if (r < 0.712) push('flower', x, z, sc, k);
           } else if (t === T.FOREST) {
             if (r < 0.32) push('fern', x, z, sc);
             else if (r < 0.61) push('tuft', x, z, sc * 0.8);

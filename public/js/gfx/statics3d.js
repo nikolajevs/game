@@ -140,6 +140,23 @@ const rockMat = () => {
   applyRockSurface(m, 60); // валуны и серные глыбы — с текстурой скалы
   return m;
 };
+// полотно палатки: два ската и задняя стенка
+let _tentCanvas = null;
+function tentCanvasGeo() {
+  if (_tentCanvas) return _tentCanvas;
+  const g = new THREE.BufferGeometry();
+  // скаты от земли (z = ±13) до конька (y = 18), длина вдоль X — 32; сзади (x = -16) — треугольная стенка
+  const L = 16;
+  const v = [
+    -L, 0, 13, L, 0, 13, L, 18, 0, -L, 0, 13, L, 18, 0, -L, 18, 0,
+    -L, 0, -13, -L, 18, 0, L, 18, 0, -L, 0, -13, L, 18, 0, L, 0, -13,
+    -L, 0, 13, -L, 18, 0, -L, 0, -13,
+  ];
+  g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  g.computeVertexNormals();
+  _tentCanvas = g;
+  return g;
+}
 const flatMat = (opts = {}) => new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.85, ...opts });
 
 // ---------- геометрия построек (склеенная, с цветами вершин) ----------
@@ -238,14 +255,21 @@ function buildStructureGeoms() {
     out.spikes = mergeParts(parts);
   }
 
-  // гнездо
+  // палатка (точка возрождения): стойки, конёк, спальник внутри, колышки с растяжками.
+  // Само полотно — отдельной сеткой цвета игрока (см. addStructure)
   {
     const parts = [];
-    parts.push({ geom: new THREE.TorusGeometry(14, 5.5, 6, 14), matrix: M(0, 4, 0, Math.PI / 2, 0, 0), color: '#8a6a3a' });
-    parts.push({ geom: G.cyl, matrix: M(0, 1.5, 0, 0, 0, 0, 13, 2, 13), color: '#5a4426' });
-    for (let i = 0; i < 14; i++) {
-      const a = r() * Math.PI * 2;
-      parts.push({ geom: G.cyl6, matrix: M(Math.cos(a) * 15, 6 + r() * 3, Math.sin(a) * 15, r() * 3, a, Math.PI / 2 + (r() - 0.5), 0.9, 16, 0.9), color: '#a1824e' });
+    for (const x of [-15, 15]) {
+      for (const s of [-1, 1]) parts.push({ geom: G.cyl6, matrix: M(x, 9, s * 6.5, s * -0.62, 0, 0, 0.8, 22, 0.8), color: '#6b4a2b' });
+    }
+    parts.push({ geom: G.cyl6, matrix: M(0, 18.3, 0, 0, 0, Math.PI / 2, 0.7, 33, 0.7), color: '#7a5532' });
+    parts.push({ geom: G.box, matrix: M(-1, 1.2, 0, 0, 0, 0, 24, 2.2, 10), color: '#5e6b3a' }); // спальник
+    parts.push({ geom: G.cyl, matrix: M(10, 2.6, 0, 0, 0, Math.PI / 2, 2.2, 9, 2.2), color: '#d8ccb0' }); // свёрнутое одеяло
+    for (const x of [-15, 15]) {
+      for (const s of [-1, 1]) {
+        parts.push({ geom: G.cyl6, matrix: M(x * 1.25, 1.5, s * 17, 0, 0, s * 0.3, 0.5, 4, 0.5), color: '#5a3d22' });
+        parts.push({ geom: G.cyl6, matrix: M(x * 1.12, 9, s * 11.5, s * 0.9, 0, 0, 0.18, 19, 0.18), color: '#d8ccb0' });
+      }
     }
     out.nest = mergeParts(parts);
   }
@@ -706,16 +730,16 @@ export class StaticsView {
       grp.add(handle);
     }
     if (s.k === 'nest') {
-      const color = s.c || '#e8dcc0';
-      if (!this.eggMats.has(color)) this.eggMats.set(color, new THREE.MeshStandardMaterial({ color, roughness: 0.5, flatShading: true }));
-      for (let i = 0; i < 3; i++) {
-        const egg = new THREE.Mesh(G.sphere, this.eggMats.get(color));
-        const a = (i / 3) * Math.PI * 2;
-        egg.position.set(Math.cos(a) * 5, 6, Math.sin(a) * 5);
-        egg.scale.set(4.5, 6, 4.5);
-        egg.castShadow = true;
-        grp.add(egg);
+      // полотно палатки — цвета метки игрока, чуть приглушённое, как выгоревшая ткань
+      const color = s.c || '#c8b88a';
+      if (!this.eggMats.has(color)) {
+        const c = new THREE.Color(color).lerp(new THREE.Color('#b8a882'), 0.35);
+        this.eggMats.set(color, new THREE.MeshStandardMaterial({ color: c, roughness: 0.95, flatShading: true, side: THREE.DoubleSide }));
       }
+      const canvas = new THREE.Mesh(tentCanvasGeo(), this.eggMats.get(color));
+      canvas.castShadow = true;
+      canvas.receiveShadow = true;
+      grp.add(canvas);
     }
     if (s.k === 'campfire') {
       const fire = new Fire(1, (s.i * 0.618) % 1);
