@@ -32,6 +32,8 @@ export function updateNpc(g, n, dt, night) {
   let my = 0;
   let speed = def.speed;
   let target = null;
+  // хозяева мест и лесные духи не уходят далеко от дома
+  const homebound = def.behavior === 'territorial' || def.behavior === 'guardian';
 
   if (def.behavior === 'passive') {
     let threat = n.alertT > 0 ? g.getCreature(n.target) : null;
@@ -61,14 +63,14 @@ export function updateNpc(g, n, dt, night) {
       }
     }
     if (!target) {
-      const radius = def.behavior === 'territorial' ? def.aggro : night ? def.nightAggro : def.aggro;
+      const radius = homebound ? def.aggro : night ? def.nightAggro : def.aggro;
       const cand = g.nearestPlayer(n.x, n.y, radius, true);
       if (cand) {
         n.target = cand.id;
         target = cand;
       }
     }
-    if (target && def.behavior === 'territorial' && Math.hypot(target.x - n.homeX, target.y - n.homeY) > 600) {
+    if (target && homebound && Math.hypot(target.x - n.homeX, target.y - n.homeY) > (def.behavior === 'guardian' ? 900 : 600)) {
       n.target = null;
       target = null;
     }
@@ -98,18 +100,32 @@ export function updateNpc(g, n, dt, night) {
         } else if (d <= reach) {
           n.cd.melee = n.stats.attackCd;
           n.atkT = 0.22;
+          n.atkR = false;
           g.melee(n, n.stats.meleeDmg);
         }
-      } else if (d <= reach && n.cd.melee <= 0 && !(n.stunT > 0)) {
-        n.windupT = n.kind === 'colossus' ? 0.56 : 0.3;
+      } else if (def.dmg && d <= reach && n.cd.melee <= 0 && !(n.stunT > 0)) {
+        n.windupT = def.windup || 0.3;
         mx = 0;
         my = 0;
       }
-      if (n.windupT <= 0 && n.stats.spit && n.cd.spit <= 0 && d > 120 && d < 380) {
-        n.cd.spit = n.stats.spit.cd * 1.8;
-        g.spit(n);
+      const sh = def.shoot;
+      if (sh) {
+        // стрелок держит дистанцию: вплотную отходит, на своей дальности зависает
+        if (sh.keep && n.windupT <= 0) {
+          if (d < sh.keep * 0.6) {
+            mx = -dx / d;
+            my = -dy / d;
+          } else if (d < sh.keep) {
+            mx = 0;
+            my = 0;
+          }
+        }
+        if (n.windupT <= 0 && n.cd.spit <= 0 && d >= sh.min && d <= sh.range && !(n.stunT > 0)) {
+          n.cd.spit = sh.cd * (0.85 + Math.random() * 0.3);
+          g.npcShoot(n, target);
+        }
       }
-    } else if (Math.hypot(n.x - n.homeX, n.y - n.homeY) > (n.leash || (def.behavior === 'territorial' ? 220 : Infinity))) {
+    } else if (Math.hypot(n.x - n.homeX, n.y - n.homeY) > (n.leash || (homebound ? 220 : Infinity))) {
       const dx = n.homeX - n.x;
       const dy = n.homeY - n.y;
       const d = Math.hypot(dx, dy) || 1;
@@ -132,8 +148,16 @@ export function updateNpc(g, n, dt, night) {
     my = 0;
   }
 
+  // упёрся в стену или дерево на пути к цели — обходит сбоку
+  if (n.sideT > 0) {
+    n.sideT -= dt;
+    const c = Math.cos(1.25 * n.side);
+    const s = Math.sin(1.25 * n.side);
+    [mx, my] = [mx * c - my * s, mx * s + my * c];
+  }
+
   // сухопутные существа не заходят в воду
-  if ((mx || my) && !n.stats.swim) {
+  if ((mx || my) && !n.stats.swim && !n.fly) {
     const ax = n.x + mx * (n.stats.radius + 16);
     const ay = n.y + my * (n.stats.radius + 16);
     if (isWater(g.tileAt(ax, ay)) && !isWater(g.tileAt(n.x, n.y))) {
@@ -143,5 +167,11 @@ export function updateNpc(g, n, dt, night) {
     }
   }
 
-  g.moveCreature(n, mx, my, speed, dt);
+  const px = n.x;
+  const py = n.y;
+  const hit = g.moveCreature(n, mx, my, speed, dt);
+  if (hit && (mx || my) && !(n.sideT > 0) && Math.hypot(n.x - px, n.y - py) < speed * dt * 0.35) {
+    n.sideT = 0.5 + Math.random() * 0.4;
+    n.side = Math.random() < 0.5 ? -1 : 1;
+  }
 }

@@ -9,6 +9,7 @@ import { Terrain } from './gfx/terrain.js';
 import { Sky } from './gfx/sky.js';
 import { StaticsView } from './gfx/statics3d.js';
 import { Creature3D } from './gfx/creature3d.js';
+import { Monster3D } from './gfx/monster3d.js';
 import { Decor } from './gfx/decor.js';
 
 const SEED = 1337;
@@ -167,7 +168,7 @@ const damagedWall = [...statics.objs.values()].find((o) => o.s.k === 'wall_stone
 // ---------- существа ----------
 const actors = [];
 function addActor(o) {
-  const c = new Creature3D(o.look, o.color);
+  const c = o.kind ? new Monster3D(o.kind) : new Creature3D(o.look, o.color);
   scene.add(c.group);
   const a = {
     roam: 0, speed: 40, angle: Math.random() * 6.28, wait: Math.random() * 3, atkT: 1 + Math.random() * 2, ...o,
@@ -221,16 +222,16 @@ const raider = addActor({ look: 'o12300300003', color: '#d9534f', name: 'Рей�
 
 const meadow = { x: W(11), y: H(9) };
 for (let i = 0; i < 5; i++) {
-  addActor({ look: NPCS.grazer.genome, color: NPCS.grazer.color, name: i === 0 ? 'Травник' : null, x: meadow.x + (Math.random() - 0.5) * 160, y: meadow.y + (Math.random() - 0.5) * 160, roam: 130, speed: 45 });
+  addActor({ kind: 'stag', name: i === 0 ? NPCS.stag.name : null, x: meadow.x + (Math.random() - 0.5) * 160, y: meadow.y + (Math.random() - 0.5) * 160, roam: 130, speed: 45 });
 }
 const forest = nearestTile(W(2), H(2), [T.FOREST], 260);
 for (let i = 0; i < 2; i++) {
-  addActor({ look: NPCS.stalker.genome, color: NPCS.stalker.color, name: 'Клыкач', nameColor: '#ffb4a8', hp: 1, x: forest.x + i * 50, y: forest.y + i * 30, roam: 110, speed: 70, fighter: true });
+  addActor({ kind: i ? 'claw' : 'crooked', name: NPCS[i ? 'claw' : 'crooked'].name, nameColor: '#ffb4a8', hp: 1, x: forest.x + i * 50, y: forest.y + i * 30, roam: 110, speed: 70, fighter: true });
 }
 const rocks = nearestTile(W(2), H(2), [T.ROCK], 500);
-addActor({ look: NPCS.colossus.genome, color: NPCS.colossus.color, name: 'Колосс', nameColor: '#ffb4a8', hp: 1, x: rocks.x, y: rocks.y, roam: 90, speed: 25, fighter: true });
+addActor({ kind: 'glutton', name: NPCS.glutton.name, nameColor: '#ffb4a8', hp: 1, x: rocks.x, y: rocks.y, roam: 90, speed: 25, fighter: true });
 for (let i = 0; i < 2; i++) {
-  addActor({ look: NPCS.mutant.genome, color: NPCS.mutant.color, name: 'Мутант', nameColor: '#d6a8ff', hp: 1, x: crater.x + 110 * (i ? 1 : -1), y: crater.y + 60, roam: 90, speed: 60, fighter: true });
+  addActor({ kind: i ? 'drone' : 'spider', name: NPCS[i ? 'drone' : 'spider'].name, nameColor: '#ffd27a', hp: 1, x: crater.x + 110 * (i ? 1 : -1), y: crater.y + 60, roam: 90, speed: 60, fighter: true });
 }
 
 function walkable(x, y, a) {
@@ -306,7 +307,7 @@ miniBase.height = MAP_H;
 {
   const g = miniBase.getContext('2d');
   const img = g.createImageData(MAP_W, MAP_H);
-  const cols = [[27, 79, 99], [60, 138, 134], [227, 208, 154], [120, 177, 83], [63, 128, 64], [143, 142, 134]];
+  const cols = [[27, 79, 99], [60, 138, 134], [227, 208, 154], [120, 177, 83], [63, 128, 64], [143, 142, 134], [92, 88, 84], [34, 31, 29]];
   for (let i = 0; i < tiles.length; i++) {
     const c = cols[tiles[i]];
     img.data[i * 4] = c[0];
@@ -440,7 +441,7 @@ function updateActor(a, dt) {
         audio.playAt('swing', a.x, a.y, me.x, me.y, { volume: 0.2, range: 650, yaw: me.angle });
       }
     } else if ((a.atkT -= dt) <= 0) {
-      a.windupT = a.look === NPCS.colossus.genome ? 0.56 : 0.3;
+      a.windupT = NPCS[a.kind]?.windup || 0.3;
       audio.playAt('danger', a.x, a.y, me.x, me.y, { volume: 0.3, range: 700, yaw: me.angle, rate: 1.18 });
     }
   }
@@ -541,7 +542,7 @@ function frame(now) {
   // подписи над существами
   for (const a of actors) {
     if (!a.el) continue;
-    tmpV.set(a.x, a.gy + a.c.tpl.hb + a.c.R * 1.3 + 8, a.y);
+    tmpV.set(a.x, a.gy + (a.c.labelHeight ?? a.c.tpl.hb + a.c.R * 1.3) + 8, a.y);
     const dist = tmpV.distanceTo(camera.position);
     tmpV.project(camera);
     const vis = cam.mode === 'third' && tmpV.z < 1 && dist < scene.fog.far * 0.85;

@@ -1,5 +1,5 @@
 // Окно путей развития (P): путь разума и путь духа, их умения, очки, лаборатория и артефакты.
-import { PATHS, ABILITIES, ABILITY_ORDER, TIER_NEED, KNOW_GAIN, SPIRIT_GAIN, ITEMS } from '/shared/config.js';
+import { PATHS, ABILITIES, ABILITY_ORDER, TIER_NEED, KNOW_GAIN, SPIRIT_GAIN, ITEMS, NPCS } from '/shared/config.js';
 
 const $ = (id) => document.getElementById(id);
 const TIER_NAMES = ['', 'Ступень I', 'Ступень II', 'Ступень III'];
@@ -109,7 +109,7 @@ export class PathsWindow {
         const block = you.pa === 'mind';
         html += '<div class="path-acts">';
         html += `<button data-act="absorb" ${!n || block ? 'disabled' : ''}>🔮 Поглотить артефакты ×${n} → +${n * SPIRIT_GAIN.artifact} ✨</button>`;
-        html += `<div class="muted small">🕯 У алтаря стойте неподвижно — медитация даёт силу духа (у каждого алтаря свой запас). Победы над мутантами: +${SPIRIT_GAIN.mutant} ✨, над колоссом: +${SPIRIT_GAIN.colossus} ✨</div>`;
+        html += `<div class="muted small">🕯 У алтаря стойте неподвижно — медитация даёт силу духа (у каждого алтаря свой запас). Победы над духами и мутантами леса тоже дают силу: от +${NPCS.crooked.spirit} ✨ за горбуна до +${NPCS.glutton.spirit} ✨ за утробника</div>`;
         html += '</div>';
       }
       // ступени и умения

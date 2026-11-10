@@ -4,11 +4,12 @@ import { MAP_H, MAP_W, NPCS, PLAYER, T, TILE, RESOURCES, RES_CHUNK, ABILITIES } 
 import { Terrain } from './gfx/terrain.js';
 import { Sky } from './gfx/sky.js';
 import { StaticsView } from './gfx/statics3d.js';
-import { Creature3D } from './gfx/creature3d.js';
+import { Monster3D } from './gfx/monster3d.js';
 import { Human3D } from './gfx/human3d.js';
 import { Effects } from './gfx/effects.js';
 import { Decor } from './gfx/decor.js';
 import { ZonesView } from './gfx/zones3d.js';
+import { CityView } from './gfx/city3d.js';
 import { Hallucinations } from './gfx/hallucinations.js';
 import { G, M, mergeParts, glowTexture } from './gfx/util.js';
 
@@ -46,7 +47,7 @@ const IMPACT_COLORS = { laser: '#bff8ff', force: '#cfeaff', drain: '#c4163c', he
 const HIT_COLORS = {
   tree: ['#6b4423', '#4f8a3a'], rock: ['#8a8a85', '#6e6e68'], bush: ['#3f7d3a', '#c8324b'],
   crystal: ['#b06bff', '#e6d3ff'], wood: ['#8b5a2b', '#5a3a1c'], stone: ['#8e8f8a', '#6e6e68'],
-  sulfur: ['#d9c23a', '#8a8a85'], scrap: ['#8a5a3a', '#9a9a9a'],
+  sulfur: ['#d9c23a', '#8a8a85'], scrap: ['#8a5a3a', '#9a9a9a'], car: ['#8a5a3a', '#6e7a86'], terminal: ['#5ec8ff', '#3a3f48'],
   mush_brown: ['#7a4a22', '#e8dcc0'], mush_red: ['#d42e26', '#ffffff'], mush_glow: ['#5ec8ff', '#bfe6ff'],
 };
 const _v = new THREE.Vector3();
@@ -93,6 +94,7 @@ export class WorldView {
     this.scene.add(this.terrain.group);
     this.visions = new Hallucinations(this.renderer, this.scene, this.camera, (x, z) => this.ground(x, z));
     this.zonesView = new ZonesView(this.scene, this.terrain, zones);
+    this.cityView = new CityView(this.scene, this.terrain, tiles);
     this.decor = new Decor(this.terrain, tiles, seed);
     this.scene.add(this.decor.group);
     this.statics = new StaticsView(this.scene, this.terrain);
@@ -172,8 +174,8 @@ export class WorldView {
 
   // ---------- существа ----------
   addEnt(e) {
-    // игроки — люди (модели со скелетом), дикие существа — процедурные создания
-    const creature = e.k === 'p' ? new Human3D(e.ap, e.g, e.c) : new Creature3D(e.g, e.c);
+    // игроки — люди, чудовища — готовые анимированные модели (духи и мутанты леса, машины города)
+    const creature = e.k === 'p' ? new Human3D(e.ap, e.g, e.c) : new Monster3D(e.t);
     this.scene.add(creature.group);
     const v = { creature, look: e.g, ap: e.ap, color: e.c, dd: !!e.dd, px: e.x, py: e.y, speed: 0, stepTimer: Math.random() * 0.25, at: 0, hf: 0, label: null, hpFill: null, lastHp: -1 };
     const el = document.createElement('div');
@@ -185,7 +187,7 @@ export class WorldView {
     } else {
       const def = NPCS[e.t];
       nm.textContent = def.name;
-      nm.style.color = def.behavior === 'passive' ? '#e8e0c8' : '#ffb4a8';
+      nm.style.color = def.behavior === 'passive' ? '#e8e0c8' : def.faction === 'tech' ? '#ffd27a' : '#ffb4a8';
     }
     el.appendChild(nm);
     const bar = document.createElement('div');
@@ -261,11 +263,11 @@ export class WorldView {
       // предупреждение: моб замахивается (wu) или чужой игрок идёт на таран
       const warns = !isMe && (!!e.wu || (e.k === 'p' && !!e.ch));
       if (e.at && !v.at) {
-        v.creature.attack(!!v.warning);
+        v.creature.attack(!!v.warning, e.at === 2);
         this.audio?.playAt('swing', x, y, me.x, me.y, { volume: isMe ? 0.34 : 0.22, range: 650, yaw, rate: 0.94 });
       }
       if (warns && !v.warning) {
-        const colossus = e.t === 'colossus';
+        const colossus = (NPCS[e.t]?.windup || 0) >= 0.5; // тяжёлый замах великанов слышно издалека
         this.audio?.playAt('danger', x, y, me.x, me.y, {
           volume: colossus ? 0.48 : 0.34, range: colossus ? 900 : 700, yaw, rate: colossus ? 0.78 : 1.18,
         });
@@ -291,7 +293,7 @@ export class WorldView {
           const tx = Math.max(0, Math.min(MAP_W - 1, Math.floor(x / TILE)));
           const ty = Math.max(0, Math.min(MAP_H - 1, Math.floor(y / TILE)));
           const tile = this.terrain.tiles[ty * MAP_W + tx];
-          const step = tile === T.ROCK ? 'stepRock' : tile === T.SAND ? 'stepSand' : 'stepGrass';
+          const step = tile === T.ROCK || tile === T.CITY ? 'stepRock' : tile === T.SAND ? 'stepSand' : 'stepGrass';
           this.audio?.playAt(step, x, y, me.x, me.y, { volume: isMe ? 0.52 : 0.26, range: 520, yaw, rate: v.speed > 135 ? 1.08 : 0.96 });
           v.stepTimer = Math.max(0.3, Math.min(0.54, 0.58 - v.speed * 0.00135));
         }
@@ -331,7 +333,19 @@ export class WorldView {
       v.gy = gy;
       v.isMe = isMe;
     }
-    for (const id of [...this.ents.keys()]) if (!seen.has(id)) this.removeEnt(id);
+    for (const [id, v] of [...this.ents]) {
+      if (seen.has(id)) continue;
+      // убитое чудовище ещё пару секунд доигрывает смерть и оседает в землю
+      if (v.dying > 0) {
+        v.dying -= dt;
+        v.e = null;
+        v.label.style.display = 'none';
+        v.creature.update(dt, { dead: true, night: this.night });
+        if (v.dying < 0.8) v.creature.group.position.y -= dt * (v.creature.height || 40) * 0.9;
+        if (v.dying > 0) continue;
+      }
+      this.removeEnt(id);
+    }
     for (const [id, m] of this.projs) {
       if (!seenJ.has(id)) {
         this.scene.remove(m);
@@ -355,9 +369,9 @@ export class WorldView {
         case 'hit': {
           const m = f.m;
           const sound = m === 'tree' || m === 'wood' ? 'woodHit'
-            : m === 'rock' || m === 'stone' || m === 'sulfur' || m === 'scrap' ? 'stoneHit'
+            : m === 'rock' || m === 'stone' || m === 'sulfur' || m === 'scrap' || m === 'car' || m === 'terminal' ? 'stoneHit'
               : m === 'crystal' ? 'crystalHit' : 'softHit';
-          snd(sound, f, { volume: 0.44, range: 620, rate: m === 'scrap' ? 1.25 : 1 });
+          snd(sound, f, { volume: 0.44, range: 620, rate: m === 'scrap' || m === 'car' || m === 'terminal' ? 1.25 : 1 });
           for (const c of HIT_COLORS[f.m] || ['#cccccc']) fx.burst(f.x, gy + 18, f.y, c, 5, { speed: 70 });
           if (f.id) this.statics.hit(f.id);
           break;
@@ -368,11 +382,25 @@ export class WorldView {
           fx.text(f.x, gy + 44, f.y, f.text, '#c8f7c5', 'gain');
           break;
         }
-        case 'die':
-          snd('softBreak', f, { volume: 0.52, range: 700 });
-          fx.burst(f.x, gy + 15, f.y, f.c || '#ffffff', 28, { speed: 130, size: 3.5, life: 1 });
-          fx.burst(f.x, gy + 15, f.y, '#ffffff', 8, { speed: 90 });
+        case 'die': {
+          const body = f.id ? this.ents.get(f.id) : null;
+          if (body && body.creature.die) body.dying = 2.6; // тело остаётся и доигрывает смерть
+          if (f.f === 'tech') {
+            // машина: искры и дым
+            snd('stoneHit', f, { volume: 0.6, range: 800, rate: 0.8 });
+            fx.burst(f.x, gy + 20, f.y, '#ffd166', 26, { speed: 170, size: 2.2, life: 0.7 });
+            fx.burst(f.x, gy + 20, f.y, '#3a3a3a', 12, { speed: 40, size: 5, life: 1.4, gravity: -30 });
+          } else if (f.f === 'spirit') {
+            snd('softBreak', f, { volume: 0.52, range: 700 });
+            fx.burst(f.x, gy + 15, f.y, '#7a1016', 24, { speed: 120, size: 3.2, life: 0.9 });
+            fx.burst(f.x, gy + 15, f.y, f.c || '#ffffff', 8, { speed: 80 });
+          } else {
+            snd('softBreak', f, { volume: 0.52, range: 700 });
+            fx.burst(f.x, gy + 15, f.y, f.c || '#ffffff', 28, { speed: 130, size: 3.5, life: 1 });
+            fx.burst(f.x, gy + 15, f.y, '#ffffff', 8, { speed: 90 });
+          }
           break;
+        }
         case 'evolve':
           snd('evolve', f, { volume: 0.56, range: 700 });
           fx.burst(f.x, gy + 10, f.y, '#b98cff', 34, { speed: 70, up: 1.6, gravity: 40, life: 1.4 });
@@ -717,6 +745,7 @@ export class WorldView {
     this.decor.update(this.camTarget, env.far);
     this.terrain.update(this.time, this.camTarget, env.far);
     this.zonesView.update(dt, this.camTarget, env.far);
+    this.cityView.update(this.camTarget, env.far);
     this.statics.update(dt, this.camera.position, this.night, this.camTarget);
     this.updateMeteor(dt);
     this.updateMarker();
@@ -750,7 +779,7 @@ export class WorldView {
       const e = v.e;
       if (!e) continue;
       const damaged = e.h < e.mh;
-      const show = !v.isMe && (e.k === 'p' || damaged || e.t === 'colossus');
+      const show = !v.isMe && (e.k === 'p' || damaged || NPCS[e.t]?.behavior === 'territorial');
       if (!show) {
         if (v.label.style.display !== 'none') v.label.style.display = 'none';
         continue;

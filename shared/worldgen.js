@@ -1,6 +1,6 @@
 // Генерация острова и раскладка ресурсов по зерну (seed).
 // Общий код: сервер строит по нему мир, браузер — превью.
-import { MAP_W, MAP_H, TILE, T, RESOURCES, RAD, SITES } from './config.js';
+import { MAP_W, MAP_H, TILE, T, RESOURCES, RAD, SITES, CITY } from './config.js';
 
 export function mulberry32(a) {
   return function rand() {
@@ -90,7 +90,130 @@ export function generateMap(seed) {
       tiles[y * MAP_W + x] = t;
     }
   }
+  stampCity(tiles, seed);
   return tiles;
+}
+
+// ---- Мёртвый город ----
+// Один на острове: круг асфальта (T.CITY) с сеткой улиц, кварталами полуразрушенных домов (T.WALL — их стены)
+// и воронкой ядерного взрыва в центре. Чем ближе к воронке, тем меньше стен уцелело.
+const cities = new WeakMap();
+const hash3 = (a, b, c) => {
+  let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(c | 0, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+};
+
+function stampCity(tiles, seed) {
+  const R = mulberry32(seed ^ 0x51c17e3);
+  const at = (x, y) => (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H ? T.DEEP : tiles[y * MAP_W + x]);
+  // центр — там, где в радиусе города больше всего ровной суши
+  const value = [-1.6, -1.6, 0.5, 1, 0.85, 0.2];
+  let best = null;
+  const span = Math.max(1, MAP_W - 2 * CITY.r - 20);
+  const spanH = Math.max(1, MAP_H - 2 * CITY.r - 20);
+  for (let i = 0; i < 400; i++) {
+    const cx = CITY.r + 10 + Math.floor(R() * span);
+    const cy = CITY.r + 10 + Math.floor(R() * spanH);
+    if (at(cx, cy) < T.SAND) continue;
+    let score = 0;
+    for (let k = 0; k < 90; k++) {
+      const a = k * 2.399963;
+      const d = Math.sqrt((k + 0.5) / 90) * CITY.r;
+      score += value[at(Math.round(cx + Math.cos(a) * d), Math.round(cy + Math.sin(a) * d))];
+    }
+    if (!best || score > best.score) best = { cx, cy, score };
+  }
+  if (!best) return;
+  const { cx, cy } = best;
+  const edge = makeNoise(seed + 707);
+  const ruin = makeNoise(seed + 808);
+  const B = CITY.block;
+  const lot = B - CITY.street; // сторона квартала без улицы
+  const inCity = (x, y) => {
+    const t = at(x, y);
+    return t === T.CITY || t === T.WALL;
+  };
+  for (let y = cy - CITY.r - 2; y <= cy + CITY.r + 2; y++) {
+    for (let x = cx - CITY.r - 2; x <= cx + CITY.r + 2; x++) {
+      if (at(x, y) < T.SAND) continue;
+      const d = Math.hypot(x - cx, y - cy);
+      if (d > CITY.r * (0.8 + 0.2 * edge(x / 16, y / 16, 2))) continue;
+      tiles[y * MAP_W + x] = T.CITY;
+    }
+  }
+  // стена дома уцелела? у воронки — почти ничего, на окраине — почти всё
+  const wall = (x, y) => {
+    if (!inCity(x, y)) return;
+    const d = Math.hypot(x - cx, y - cy);
+    if (d < CITY.crater + 5) return;
+    const far = Math.min(1, (d - CITY.crater - 5) / (CITY.r * 0.75));
+    const score = ruin(x / 4.5, y / 4.5, 2) * 0.6 + hash3(x, y, seed) * 0.4;
+    if (score < 0.5 - far * 0.42) return;
+    tiles[y * MAP_W + x] = T.WALL;
+  };
+  const house = (x0, y0, w, h, r) => {
+    const doorX = x0 + 1 + Math.floor(r() * (w - 2));
+    const doorY = y0 + 1 + Math.floor(r() * (h - 2));
+    for (let x = x0; x < x0 + w; x++) {
+      if (x !== doorX) wall(x, y0);
+      if (x !== x0 + w - 1 - (doorX - x0)) wall(x, y0 + h - 1);
+    }
+    for (let y = y0 + 1; y < y0 + h - 1; y++) {
+      if (y !== doorY) wall(x0, y);
+      if (y !== y0 + h - 1 - (doorY - y0)) wall(x0 + w - 1, y);
+    }
+    // в большом доме — перегородка с проёмом
+    if (w >= 7 && h >= 5) {
+      const px = x0 + 3 + Math.floor(r() * (w - 6));
+      const gap = y0 + 1 + Math.floor(r() * (h - 2));
+      for (let y = y0 + 1; y < y0 + h - 1; y++) if (y !== gap) wall(px, y);
+    }
+  };
+  const nb = Math.ceil(CITY.r / B) + 1;
+  for (let by = -nb; by < nb; by++) {
+    for (let bx = -nb; bx < nb; bx++) {
+      const r = mulberry32((seed ^ Math.imul(bx + 977, 0x9e3779b1) ^ Math.imul(by + 331, 0x85ebca6b)) | 0);
+      const x0 = cx + bx * B + CITY.street;
+      const y0 = cy + by * B + CITY.street;
+      const kind = r();
+      const half = Math.floor((lot - 1) / 2);
+      if (kind < 0.14) continue; // пустырь или площадь
+      if (kind < 0.36) house(x0 + 1, y0 + 1, lot - 2, lot - 2, r);
+      else if (kind < 0.58) {
+        house(x0, y0, half, lot, r);
+        house(x0 + half + 1, y0, lot - half - 1, lot, r);
+      } else if (kind < 0.8) {
+        house(x0, y0, lot, half, r);
+        house(x0, y0 + half + 1, lot, lot - half - 1, r);
+      } else {
+        for (const [qx, qy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+          if (r() < 0.2) continue;
+          house(x0 + qx * (half + 1), y0 + qy * (half + 1), qx ? lot - half - 1 : half, qy ? lot - half - 1 : half, r);
+        }
+      }
+    }
+  }
+  cities.set(tiles, { x: (cx + 0.5) * TILE, y: (cy + 0.5) * TILE, r: CITY.r * TILE, crater: CITY.crater * TILE });
+}
+
+// Где на карте мёртвый город: { x, y, r, crater } в единицах мира или null.
+// Для карты, пришедшей с сервера целиком, центр находится по самим клеткам.
+export function cityInfo(tiles) {
+  if (cities.has(tiles)) return cities.get(tiles);
+  let sx = 0;
+  let sy = 0;
+  let n = 0;
+  for (let i = 0; i < tiles.length; i++) {
+    if (tiles[i] !== T.CITY && tiles[i] !== T.WALL) continue;
+    sx += i % MAP_W;
+    sy += Math.floor(i / MAP_W);
+    n++;
+  }
+  const info = n ? { x: (Math.round(sx / n) + 0.5) * TILE, y: (Math.round(sy / n) + 0.5) * TILE, r: CITY.r * TILE, crater: CITY.crater * TILE } : null;
+  cities.set(tiles, info);
+  return info;
 }
 
 // Контрольная сумма карты (FNV-1a): клиент строит остров сам по зерну и сверяет её с сервером
@@ -119,7 +242,14 @@ export function generateZones(tiles, seed) {
     const t = tileOf(x, y);
     return t !== T.DEEP && t !== T.SHALLOW;
   };
-  for (let tries = 0; tries < 6000 + RAD.zones * 400 && zones.length < RAD.zones; tries++) {
+  // мёртвый город и воронка в его центре (воронка — первой: внутри неё точка считается воронкой)
+  const city = cityInfo(tiles);
+  if (city) {
+    zones.push({ id: 0, kind: 'crater', x: city.x, y: city.y, r: city.crater + 5 * TILE, lvl: SITES.crater.lvl });
+    zones.push({ id: 1, kind: 'city', x: city.x, y: city.y, r: city.r, lvl: SITES.city.lvl });
+  }
+  const special = zones.length;
+  for (let tries = 0; tries < 6000 + RAD.zones * 400 && zones.length < RAD.zones + special; tries++) {
     const x = (15 + Math.floor(R() * (MAP_W - 30))) * TILE + HS;
     const y = (15 + Math.floor(R() * (MAP_H - 30))) * TILE + HS;
     const r = 260 + R() * 140;
@@ -228,10 +358,16 @@ export function generateResources(tiles, seed, zones = []) {
       const y = ty * TILE + HS + (R() - 0.5) * TILE * 0.6;
       const v = R();
       let kind = null;
-      if (t === T.DEEP || t === T.SHALLOW) continue;
+      if (t === T.DEEP || t === T.SHALLOW || t === T.WALL) continue;
       const site = zoneAt(zones, x, y);
-      if (site && site.kind !== 'ruins' && Math.hypot(x - site.x, y - site.y) < 70) continue; // место под шахту/гнездо
-      if (site?.kind === 'mine') {
+      if (site && site.kind !== 'ruins' && site.kind !== 'city' && Math.hypot(x - site.x, y - site.y) < 70) continue; // место под шахту/гнездо
+      if (t === T.CITY) {
+        // мёртвый город: остовы машин, серверные шкафы, груды металла и обломки; в воронке — только сияющие поганки
+        if (site?.kind === 'crater') kind = r < 0.012 ? 'mush_glow' : r < 0.03 ? 'scrap' : null;
+        else kind = r < 0.02 ? 'car' : r < 0.042 ? 'terminal' : r < 0.066 ? 'scrap' : r < 0.082 ? 'rock' : null;
+      } else if (site?.kind === 'city' || site?.kind === 'crater') {
+        kind = null; // клочки земли внутри города пусты
+      } else if (site?.kind === 'mine') {
         // рудник: много руды, серы и металлолома
         kind = r < 0.17 ? (r2 < 0.45 ? 'sulfur' : 'rock') : r < 0.22 ? 'scrap' : null;
       } else if (site?.kind === 'altar') {

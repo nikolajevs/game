@@ -1,0 +1,22 @@
+Анимированные модели чудовищ. Все — общественное достояние, лицензия CC0 1.0
+(https://creativecommons.org/publicdomain/zero/1.0/).
+
+Quaternius (https://quaternius.com), CC0 1.0:
+- stag.glb    — «Рогач»: Stag из набора Ultimate Animated Animals
+- wraith.glb  — «Лесной дух»: Ghost Skull из набора Ultimate Monsters
+- spider.glb  — «Паук-страж»: Enemy QuadShell из набора Sci-Fi Essentials Kit [Standard]
+- drone.glb   — «Дрон-око»: Enemy EyeDrone из набора Sci-Fi Essentials Kit [Standard]
+- reaper.glb  — «Жнец»: Enemy Trilobite из набора Sci-Fi Essentials Kit [Standard]
+- mech.glb    — «Каратель»: George из набора Animated Mech Pack
+
+OpenGameArt (https://opengameart.org), опубликованы как CC0:
+- crooked.glb — «Горбун»: Mutant 1 из 3rd person blender sci-fi pack, автор JohnnyBlack
+  https://opengameart.org/content/3rd-person-blender-sci-fi-pack
+- claw.glb    — «Когтень»: Mutant 2 из того же набора
+- glutton.glb — «Утробник»: Glutton Demon, автор Teh_Bucket (FreeDoom), концепт RayMooHawk
+  https://opengameart.org/content/glutton-demon
+
+Файлы взяты уже пересобранными для браузера (.glb, текстуры WebP) из открытых репозиториев
+github.com/nikitapage10/models (модели Quaternius, сжатие meshopt) и
+github.com/NeuralDrifter/Retro_FPS_GCS-assets (модели с OpenGameArt). В игре они перекрашены,
+а анимации оставлены как есть.
