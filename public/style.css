@@ -86,8 +86,14 @@ button.big { padding: 12px 22px; font-size: 17px; }
 /* прицел, который ходит за мышью (системный курсор над игрой скрыт) */
 canvas#game { cursor: none; }
 #cursor { position: fixed; left: 0; top: 0; width: 26px; height: 26px; margin: -13px 0 0 -13px; pointer-events: none; z-index: 6; display: none; will-change: transform; }
-#cursor::before { content: ''; position: absolute; inset: 3px; border: 2px solid rgba(255, 255, 255, 0.9); border-radius: 50%; box-shadow: 0 0 3px #000, inset 0 0 2px #000; }
-#cursor::after { content: ''; position: absolute; left: 11px; top: 11px; width: 4px; height: 4px; border-radius: 50%; background: #fff; box-shadow: 0 0 2px #000; }
+/* Белое кольцо с тёмной обводкой снаружи и внутри: читается и на светлом тумане, и на тёмной земле. */
+#cursor { --aim: #ffffff; --aim-edge: rgba(8, 12, 10, 0.92); }
+#cursor::before { content: ''; position: absolute; inset: 3px; border: 2.5px solid var(--aim); border-radius: 50%; box-shadow: 0 0 0 1.5px var(--aim-edge), inset 0 0 0 1.5px var(--aim-edge), 0 0 7px rgba(0, 0, 0, 0.55); transition: inset 0.08s, border-color 0.08s; }
+#cursor::after { content: ''; position: absolute; left: 10.5px; top: 10.5px; width: 5px; height: 5px; border-radius: 50%; background: var(--aim); box-shadow: 0 0 0 1.5px var(--aim-edge); transition: background 0.08s; }
+/* прицел наведён на цель: красный — враг, янтарный — дичь; кольцо чуть шире */
+#cursor.lock { --aim: #ff3b2f; }
+#cursor.lock[data-kind="prey"] { --aim: #ffc233; }
+#cursor.lock::before { inset: -1px; border-width: 3px; box-shadow: 0 0 0 1.5px var(--aim-edge), inset 0 0 0 1.5px var(--aim-edge), 0 0 12px var(--aim); }
 
 #topLeft { position: fixed; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 8px; width: 230px; }
 #vitals { padding: 9px 11px; }
@@ -389,6 +395,11 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 .label { position: absolute; left: 0; top: 0; font-size: 12px; font-weight: 600; white-space: nowrap; text-shadow: 0 1px 3px #000, 0 0 2px #000; text-align: center; will-change: transform; }
 .label .hp { height: 4px; width: 46px; margin: 3px auto 0; background: rgba(0, 0, 0, 0.55); border-radius: 2px; overflow: hidden; }
 .label .hp i { display: block; height: 100%; background: #e05a4f; }
+/* цель под прицелом: имя на яркой плашке, полоска здоровья крупнее; цвета — как у зоны под ногами */
+.label.target { z-index: 2; font-size: 13px; }
+.label.target span { display: inline-block; padding: 1px 8px 2px; border-radius: 5px; color: #fff !important; background: rgba(214, 38, 28, 0.92); box-shadow: 0 0 0 1.5px rgba(8, 12, 10, 0.85), 0 0 10px rgba(255, 59, 47, 0.7); text-shadow: 0 1px 2px #000; }
+.label.target .hp { width: 62px; height: 6px; background: rgba(8, 12, 10, 0.8); box-shadow: 0 0 0 1.5px rgba(8, 12, 10, 0.85); }
+.label.target[data-kind="prey"] span { background: rgba(224, 160, 20, 0.95); color: #1b1305 !important; text-shadow: none; box-shadow: 0 0 0 1.5px rgba(8, 12, 10, 0.85), 0 0 10px rgba(255, 194, 51, 0.7); }
 .floater { position: absolute; left: 0; top: 0; font-weight: 700; font-size: 15px; white-space: nowrap; text-shadow: 0 1px 3px #000, 0 0 2px #000; will-change: transform, opacity; }
 .floater.gain { font-size: 14px; color: #c8f7c5; }
 

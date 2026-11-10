@@ -147,6 +147,7 @@ export class Monster3D {
     this.busy = 0; // сколько ещё идёт разовая анимация (удар, выстрел, боль)
     this.lunge = -1; // выпад без клипа
     this.deadT = -1;
+    this.hi = null; // { r, g, b } — свечение цели под прицелом
     this.wasWarning = false;
     this.disposed = false;
     const a = assets.get(this.kind);
@@ -331,9 +332,10 @@ export class Monster3D {
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 5);
     const warn = warning ? 0.2 + (0.5 + 0.5 * Math.sin(this.t * 26)) * 0.25 : 0;
     const gold = def.glow ? 0.28 + Math.sin(this.t * 3) * 0.08 : 0; // проводник светится тёплым
-    const r = Math.max(this.flash * 0.8, warn * 0.7) + gold;
-    const g = this.flash * 0.25 + warn * 0.12 + (def.ghost ? 0.1 + night * 0.12 : 0) + gold * 0.7;
-    const b = this.flash * 0.25 + (def.ghost ? 0.08 + night * 0.1 : 0);
+    const hi = this.hi; // свечение цели под прицелом (задаёт TargetMark)
+    const r = Math.max(this.flash * 0.8, warn * 0.7) + gold + (hi ? hi.r : 0);
+    const g = this.flash * 0.25 + warn * 0.12 + (def.ghost ? 0.1 + night * 0.12 : 0) + gold * 0.7 + (hi ? hi.g : 0);
+    const b = this.flash * 0.25 + (def.ghost ? 0.08 + night * 0.1 : 0) + (hi ? hi.b : 0);
     for (const m of this.mats) if (m.emissive) m.emissive.setRGB(r, g, b);
   }
 

@@ -11,6 +11,7 @@ import { Decor } from './gfx/decor.js';
 import { ZonesView } from './gfx/zones3d.js';
 import { CityView } from './gfx/city3d.js';
 import { Hallucinations } from './gfx/hallucinations.js';
+import { TargetMark } from './gfx/target.js';
 import { G, M, mergeParts, glowTexture } from './gfx/util.js';
 
 // след за снарядом: [цвет, вероятность частицы за кадр, размер]
@@ -53,6 +54,7 @@ const HIT_COLORS = {
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
+const _white = new THREE.Color('#ffffff');
 
 export class WorldView {
   constructor(canvas, labelsEl, floatersEl, audio = null) {
@@ -114,14 +116,33 @@ export class WorldView {
     }
     this.gridCell = null;
     const ringMat = (color, opacity) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, fog: false });
-    this.aimRing = new THREE.Mesh(new THREE.RingGeometry(7, 10, 28), ringMat('#ffffff', 0.6));
     this.rangeRing = new THREE.Mesh(new THREE.RingGeometry(PLAYER.buildRange - 2.5, PLAYER.buildRange, 72), ringMat('#9cf0a4', 0.35));
-    for (const r of [this.aimRing, this.rangeRing]) {
-      r.rotation.x = -Math.PI / 2;
-      r.renderOrder = 10;
-      r.visible = false;
-      this.scene.add(r);
+    this.rangeRing.rotation.x = -Math.PI / 2;
+    this.rangeRing.renderOrder = 10;
+    this.rangeRing.visible = false;
+    this.scene.add(this.rangeRing);
+    // Прицел на земле: яркое кольцо с точкой и тёмной обводкой с обеих сторон — виден и на светлом
+    // тумане, и на тёмной земле. Рисуется без тумана и с ростом при удалении (см. setAim).
+    this.aimGroup = new THREE.Group();
+    this.aimMat = ringMat('#ffffff', 1);
+    const aimDarkMat = ringMat('#0b0f0c', 0.8);
+    const aimParts = [
+      [new THREE.RingGeometry(5.4, 12.6, 36), aimDarkMat, 10],
+      [new THREE.CircleGeometry(4, 16), aimDarkMat, 10],
+      [new THREE.RingGeometry(7.2, 10.8, 36), this.aimMat, 11],
+      [new THREE.CircleGeometry(2.4, 16), this.aimMat, 11],
+    ];
+    for (const [geo, mat, order] of aimParts) {
+      const m = new THREE.Mesh(geo, mat);
+      m.rotation.x = -Math.PI / 2;
+      m.renderOrder = order;
+      this.aimGroup.add(m);
     }
+    this.aimGroup.visible = false;
+    this.scene.add(this.aimGroup);
+    this.mark = new TargetMark(this.scene); // выделение цели под прицелом
+    this.lockV = null; // цель под курсором и сколько ещё её держим после того, как курсор сошёл
+    this.lockT = 0;
   }
 
   ground(x, y) {
@@ -228,6 +249,8 @@ export class WorldView {
   removeEnt(id) {
     const v = this.ents.get(id);
     if (!v) return;
+    if (this.mark?.v === v) this.mark.release();
+    if (this.lockV === v) this.lockV = null;
     this.scene.remove(v.creature.group);
     v.creature.dispose();
     v.label.remove();
@@ -816,11 +839,72 @@ export class WorldView {
     return null;
   }
 
-  // кольцо на земле в точке прицела
-  setAim(p, show) {
-    this.aimRing.visible = !!(show && p);
-    if (!this.aimRing.visible) return;
-    this.aimRing.position.set(p.x, Math.max(this.ground(p.x, p.y), 0) + 1, p.y);
+  // кольцо на земле в точке прицела; lock — прицел наведён на цель (кольцо краснеет)
+  setAim(p, show, lock = false) {
+    const g = this.aimGroup;
+    g.visible = !!(show && p);
+    if (!g.visible) return;
+    g.position.set(p.x, Math.max(this.ground(p.x, p.y), 0) + 1, p.y);
+    // вдали кольцо росло бы медленнее перспективы и тонуло в тумане — держим его читаемым
+    g.scale.setScalar(Math.max(1, this.camera.position.distanceTo(g.position) / 280) * (lock ? 1.25 : 1));
+    this.aimMat.color.copy(lock ? this.mark.color : _white); // цвет цели: красный — враг, янтарный — дичь
+  }
+
+  // Существо под курсором: луч из камеры через курсор против вертикального отрезка каждого существа
+  // (само тело, а не только точка земли под ним). Если луч прошёл мимо, но точка земли под курсором
+  // рядом с ногами — тоже считается. aim — точка земли под курсором; active — можно ли целиться.
+  // Цель держится ещё ~0.2 с после ухода курсора, чтобы выделение не мигало на краю модели.
+  updateTarget(cx, cy, aim, active, dt) {
+    let best = null;
+    if (active) {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const o = this.camera.position;
+      const dir = _v.set((cx / w) * 2 - 1, -(cy / h) * 2 + 1, 0.5).unproject(this.camera).sub(o).normalize();
+      const far = this.scene.fog.far * 0.95;
+      // расстояние до земли под курсором: цель дальше неё скрыта холмом, её не выделяем
+      // (если луч уходит в небо, закрыть цель нечему)
+      const groundD = aim && !aim.sky ? o.distanceTo(_v3.set(aim.x, Math.max(this.ground(aim.x, aim.y), 0), aim.y)) : Infinity;
+      let bt = Infinity;
+      for (const v of this.ents.values()) {
+        const e = v.e;
+        if (!e || v.isMe || e.dd) continue;
+        const cr = v.creature;
+        const top = Math.max(20, (cr.labelHeight ?? cr.tpl.hb * 2) - 6);
+        const bottom = v.cy ?? v.gy;
+        for (let i = 0; i < 5; i++) {
+          _v2.set(v.x, bottom + (top * i) / 4, v.y).sub(o);
+          const t = _v2.dot(dir);
+          if (t < 0 || t > far || t >= bt || t > groundD + 30) continue;
+          const rad = cr.R * 0.9 + 7 + t * 0.006; // чем дальше цель, тем щедрее попадание
+          if (_v2.lengthSq() - t * t <= rad * rad) {
+            bt = t;
+            best = v;
+          }
+        }
+      }
+      if (!best && aim && !aim.sky) {
+        let bd = Infinity;
+        for (const v of this.ents.values()) {
+          if (!v.e || v.isMe || v.e.dd) continue;
+          const d = Math.hypot(v.x - aim.x, v.y - aim.y);
+          if (d < v.creature.R + 10 && d < bd && groundD <= far) {
+            bd = d;
+            best = v;
+          }
+        }
+      }
+    }
+    if (best) {
+      this.lockV = best;
+      this.lockT = 0.2;
+    } else if (this.lockV && (this.lockT -= dt) <= 0) this.lockV = null;
+    const v = this.lockV && this.lockV.e && !this.lockV.e.dd && this.ents.get(this.lockV.e.i) === this.lockV && active ? this.lockV : null;
+    if (!v) this.lockV = null;
+    const e = v?.e;
+    const beh = e && e.k !== 'p' ? NPCS[e.t]?.behavior : null;
+    this.mark.set(v, beh === 'passive' || beh === 'guide' ? 'prey' : 'hostile');
+    return v;
   }
 
   // круг радиуса стройки вокруг игрока
@@ -898,6 +982,7 @@ export class WorldView {
     }
     this.rings = this.rings.filter((r) => r.t < r.life);
     this.effects.update(dt, this.camera, w, h);
+    this.mark.update(dt, this.camera, (x, z) => Math.max(this.ground(x, z), 0));
     this.visions.update(dt, this.hal.s, this.hal.t, this.camTarget, this.hal.trip);
     if (!this.visions.render()) this.renderer.render(this.scene, this.camera);
     this.updateLabels(w, h);
@@ -909,7 +994,13 @@ export class WorldView {
       const e = v.e;
       if (!e) continue;
       const damaged = e.h < e.mh;
-      const show = !v.isMe && (e.k === 'p' || damaged || NPCS[e.t]?.behavior === 'territorial');
+      const targeted = this.mark.v === v; // цель под прицелом: имя и полоска здоровья видны всегда
+      const show = targeted || (!v.isMe && (e.k === 'p' || damaged || NPCS[e.t]?.behavior === 'territorial'));
+      if (v.targeted !== targeted) {
+        v.targeted = targeted;
+        v.label.classList.toggle('target', targeted);
+        if (targeted) v.label.dataset.kind = this.mark.kind;
+      }
       if (!show) {
         if (v.label.style.display !== 'none') v.label.style.display = 'none';
         continue;
@@ -923,7 +1014,7 @@ export class WorldView {
       }
       v.label.style.display = '';
       v.label.style.transform = `translate(${(_v.x * 0.5 + 0.5) * w}px, ${(-_v.y * 0.5 + 0.5) * h}px) translate(-50%, -100%)`;
-      v.hpBar.style.display = damaged ? '' : 'none';
+      v.hpBar.style.display = damaged || targeted ? '' : 'none';
       if (e.h !== v.lastHp) {
         v.lastHp = e.h;
         v.hpFill.style.width = `${Math.max(0, Math.round((e.h / e.mh) * 100))}%`;

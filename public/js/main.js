@@ -829,8 +829,14 @@ function frame(now) {
   updateBuild();
   updateHint();
   const showCursor = input.enabled && input.pos.inside && !you.dead;
-  world.setAim(S.aim.sky ? null : S.aim, showCursor && !B.mode);
-  cursorEl.style.display = showCursor ? '' : 'none';
+  // цель под прицелом: контур, зона под ногами, имя и здоровье; прицел краснеет
+  const lock = world.updateTarget(input.pos.x, input.pos.y, S.aim, showCursor && !B.mode, dt);
+  world.setAim(S.aim.sky ? null : S.aim, showCursor && !B.mode, !!lock);
+  cursorEl.classList.toggle('lock', !!lock);
+  cursorEl.dataset.kind = lock ? world.mark.kind : '';
+  // экранный прицел виден всегда, даже когда курсор в тумане или в небе (кольцо на земле там тонет или пропадает);
+  // в CSS у #cursor стоит display: none, поэтому показываем явным block, а не сбросом в ''
+  cursorEl.style.display = showCursor ? 'block' : 'none';
   if (showCursor) cursorEl.style.transform = `translate(${input.pos.x}px, ${input.pos.y}px)`;
   world.myMed = !!you.med;
   world.hal.s = you.hs || 0;
