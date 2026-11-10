@@ -1,4 +1,4 @@
-// Облик особых мест: радиоактивные руины, старые рудники и логова колоссов.
+// Облик особых мест: радиоактивные руины, старые рудники и логова утробников и воронка мёртвого города.
 // Всё декоративное: сервер про эти обломки не знает и сквозь них можно пройти.
 import * as THREE from 'three';
 import { G, M, mergeParts, rng, glowTexture } from './util.js';
@@ -7,7 +7,7 @@ const CONCRETE = ['#9a968c', '#85827a', '#a8a397', '#77746d'];
 const ROCKS = ['#6f6a62', '#7d776d', '#5e5a54'];
 const WOOD = ['#6b4a2b', '#7a5532', '#5a3d22'];
 const BONE = ['#e8dcc0', '#d8ccb0', '#cfc2a2'];
-const MOTES = { ruins: 220, mine: 70, lair: 0, altar: 90 };
+const MOTES = { ruins: 220, mine: 70, lair: 0, altar: 90, city: 0, crater: 320 };
 const MOSSY = ['#7d8a78', '#6f7a6a', '#8a9488'];
 const _up = new THREE.Vector3(0, 1, 0);
 
@@ -51,7 +51,8 @@ export class ZonesView {
       const gy = (x, y) => Math.max(terrain.heightAt(x, y), 0);
       const at = (rad, ang) => [z.x + Math.cos(ang) * rad, z.y + Math.sin(ang) * rad];
       const ctx = { z, r, parts, sprites, gy, at };
-      if (z.kind === 'mine') this.buildMine(ctx);
+      if (z.kind === 'city') { /* дома и улицы рисует CityView */ } else if (z.kind === 'crater') this.buildCrater(ctx);
+      else if (z.kind === 'mine') this.buildMine(ctx);
       else if (z.kind === 'lair') this.buildLair(ctx);
       else if (z.kind === 'altar') this.buildAltar(ctx);
       else this.buildRuins(ctx);
@@ -94,6 +95,37 @@ export class ZonesView {
       this.group.remove(it.points);
       it.points.geometry.dispose();
     }
+  }
+
+  // ---------- эпицентр взрыва ----------
+  buildCrater({ z, r, parts, sprites, gy, at }) {
+    // оплавленные плиты и скрученные балки, отброшенные взрывом от центра
+    for (let i = 0; i < 26; i++) {
+      const ang = (i / 26) * Math.PI * 2 + r() * 0.2;
+      const rad = z.r * (0.5 + r() * 0.45);
+      const [x, y] = at(rad, ang);
+      const g0 = gy(x, y);
+      if (i % 2) {
+        const len = 40 + r() * 50;
+        const tip = new THREE.Vector3(x + Math.cos(ang) * len * 0.6, g0 + len * (0.35 + r() * 0.5), y + Math.sin(ang) * len * 0.6);
+        seg(parts, new THREE.Vector3(x, g0 - 2, y), tip, 2.2, '#3a2a22');
+        seg(parts, tip, tip.clone().add(new THREE.Vector3((r() - 0.5) * 30, -r() * 22, (r() - 0.5) * 30)), 1.6, '#4a3226');
+      } else {
+        const s = 16 + r() * 22;
+        parts.push({ geom: G.box, matrix: M(x, g0 + 3, y, (r() - 0.5) * 0.7, r() * 3, (r() - 0.5) * 0.7, s, 5 + r() * 5, s * (0.5 + r() * 0.5)), color: ['#2e2a26', '#3a3530', '#26221e'][i % 3] });
+      }
+    }
+    // лужи светящегося расплава на дне
+    for (let i = 0; i < 7; i++) {
+      const [x, y] = at(z.r * 0.4 * Math.sqrt(r()), r() * Math.PI * 2);
+      const s = 14 + r() * 26;
+      parts.push({ geom: G.cyl, matrix: M(x, gy(x, y) + 0.5, y, 0, r() * 3, 0, s, 0.8, s * (0.6 + r() * 0.4)), color: '#7dff4a' });
+      const glow = new THREE.Sprite(this.glowMat);
+      glow.scale.setScalar(s * 4);
+      glow.position.set(x, gy(x, y) + 10, y);
+      sprites.push(glow);
+    }
+    this.radSigns(parts, r, z, at, gy, 6);
   }
 
   // ---------- радиоактивные руины ----------
@@ -317,7 +349,7 @@ export class ZonesView {
     }
   }
 
-  // ---------- логово колосса ----------
+  // ---------- логово утробника ----------
   // Гнездо из поваленных стволов, рёбра и черепа добычи, разбросанные кости и пятна крови.
   buildLair({ z, r, parts, gy, at }) {
     // гнездо

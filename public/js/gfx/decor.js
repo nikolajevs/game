@@ -308,8 +308,10 @@ export class Decor {
             if (r < 0.1) push('pebble', x, z, sc * 2.2, k);
             continue;
           }
-          if (terrain.zones.length && zoneAt(terrain.zones, x, z)) {
-            if (r < 0.25) push('pebble', x, z, sc * 2.6, k); // в особых местах только обломки
+          const site = terrain.zones.length ? zoneAt(terrain.zones, x, z) : null;
+          if (site || t === T.CITY || t === T.WALL) {
+            // в особых местах только обломки; в городе их немного — там свои руины
+            if (t !== T.WALL && r < (!site || site.kind === 'city' ? 0.05 : 0.25)) push('pebble', x, z, sc * 2.6, k);
             continue;
           }
           if (t === T.GRASS) {

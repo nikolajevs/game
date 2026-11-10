@@ -104,9 +104,11 @@ export const CELL = TILE / RES;
 const GW = MAP_W * RES + 1;
 const GH = MAP_H * RES + 1;
 const CHUNK_CELLS = 48; // клеток сетки в стороне участка
-const BASE_H = [-46, -13, 4, 12, 16, 26];
+const BASE_H = [-46, -13, 4, 12, 16, 26, 13, 13];
 // луг чуть темнее и спокойнее — под цвет травы ez-tree, чтобы вдали, где пучков меньше, не было пятен
-const TILE_COL = ['#1b4f63', '#3c8a86', '#e3d09a', '#679b42', '#3f8040', '#8f8e86'];
+const TILE_COL = ['#1b4f63', '#3c8a86', '#e3d09a', '#679b42', '#3f8040', '#8f8e86', '#5d5a55', '#55524e'];
+const isCity = (t) => t === T.CITY || t === T.WALL;
+const GLASS = new THREE.Color('#26221e'); // оплавленная земля воронки
 const BEACH = new THREE.Color('#e8d7a2');
 const CLIFF = new THREE.Color('#7d7a72');
 const SNOWY = new THREE.Color('#b9b8b0');
@@ -174,6 +176,7 @@ export class Terrain {
   constructor(tiles, seed, zones = []) {
     this.tiles = tiles;
     this.zones = zones;
+    this.crater = zones.find((z) => z.kind === 'crater') || null;
     this.group = new THREE.Group();
     this.surfaceTextures = makeSurfaceTextures();
     this.n = [makeNoise(seed + 776), makeNoise(seed + 777), makeNoise(seed + 778), makeNoise(seed + 779)];
@@ -232,7 +235,14 @@ export class Terrain {
     const a = n1(x / 160, z / 160, 4) - 0.5;
     const b = n2(x / 58, z / 58, 3) - 0.5;
     const c = n3(x / 24, z / 24, 2) - 0.5;
-    let h = base + broad * 32 * landW + a * 36 * landW + b * 16 * landW + c * 8 * landW;
+    // мёртвый город стоит на ровном месте, в его центре — чаша воронки с валом по краю
+    const cityW = this.sampleTiles(x, z, (t) => (isCity(t) ? 1 : 0));
+    const rough = landW * (1 - cityW * 0.8);
+    let h = base + broad * 32 * rough + a * 36 * rough + b * 16 * rough + c * 8 * rough;
+    if (this.crater && cityW > 0) {
+      const d = Math.hypot(x - this.crater.x, z - this.crater.y) / (this.crater.r * 0.72);
+      if (d < 1.5) h += (d < 1 ? -11 * (1 - d * d) : 0) + 9 * Math.exp(-((d - 1.05) ** 2) / 0.02) + (d < 1.2 ? c * 6 : 0);
+    }
     // скалистые клетки поднимаются в холмы и горы
     h += Math.pow(rockW, 1.5) * (14 + Math.max(0, a + 0.3) * 150 + b * 30 + c * 28);
     if (base < -2) h += b * 6; // неровное дно
@@ -305,7 +315,8 @@ export class Terrain {
     const cliff = smoothstep(0.58, 1.35, Math.hypot(sx, sz)) * smoothstep(4, 18, h);
     const rockTile = this.sampleTiles(x, z, (tt) => (tt === T.ROCK ? 1 : 0));
     const rock = Math.max(cliff * 1.2, smoothstep(0.25, 0.75, rockTile));
-    return Math.min(1, Math.max(sand, rock));
+    const city = this.sampleTiles(x, z, (tt) => (isCity(tt) ? 1 : 0));
+    return Math.min(1, Math.max(sand, rock, smoothstep(0.15, 0.5, city)));
   }
 
   // Высота поверхности суши/дна в точке (x, z) — точно по треугольникам сетки
@@ -330,7 +341,7 @@ export class Terrain {
     const x = i * CELL;
     const z = j * CELL;
     c.setRGB(0, 0, 0);
-    for (let t = 0; t < 6; t++) {
+    for (let t = 0; t < tileCols.length; t++) {
       const w = this.sampleTiles(x, z, (tt) => (tt === t ? 1 : 0));
       if (w > 0) {
         c.r += tileCols[t].r * w;
@@ -353,12 +364,14 @@ export class Terrain {
     this.wSand = Math.min(1, Math.max(beach, sandTile * 1.15));
     c.lerp(BEACH, beach * 0.9);
     const patch = this.patch(x / 260, z / 260, 3);
-    const grassHeight = smoothstep(2, 9, h) * (1 - smoothstep(55, 76, h));
+    const cityTile = this.sampleTiles(x, z, (tt) => (isCity(tt) ? 1 : 0));
+    const grassHeight = smoothstep(2, 9, h) * (1 - smoothstep(55, 76, h)) * (1 - cityTile);
     if (patch > 0.55) c.lerp(DRY, grassHeight * Math.min(0.42, (patch - 0.55) * 2.4));
     else if (patch < 0.42) c.lerp(LUSH, grassHeight * Math.min(0.38, (0.42 - patch) * 2.4));
     const cliff = smoothstep(0.58, 1.35, steepness) * smoothstep(4, 18, h);
     const rockTile = this.sampleTiles(x, z, (tt) => (tt === T.ROCK ? 1 : 0));
-    this.wRock = Math.min(1, Math.max(cliff * 1.2, smoothstep(0.25, 0.75, rockTile)));
+    // асфальт и бетон города берут фактуру камня
+    this.wRock = Math.min(1, Math.max(cliff * 1.2, smoothstep(0.25, 0.75, rockTile), smoothstep(0.2, 0.7, cityTile) * 0.9));
     this.wSand *= 1 - this.wRock;
     this.wForest = this.sampleTiles(x, z, (tt) => (tt === T.FOREST ? 1 : 0));
     c.lerp(CLIFF, cliff * 0.92);
@@ -366,7 +379,13 @@ export class Terrain {
     if (h > 0 && zones.length) {
       const site = zoneAt(zones, x, z);
       const k = site ? zoneFalloff(site, x, z) : 0;
-      if (k > 0 && site.kind === 'mine') {
+      if (site && site.kind === 'crater') {
+        c.lerp(GLASS, Math.min(0.9, 0.35 + k * 0.6));
+        if (hash2(i, j, 77) < 0.2) c.lerp(ASH, 0.5);
+      } else if (site && site.kind === 'city') {
+        // трещины и пятна гари на асфальте
+        if (cityTile > 0.5 && hash2(i, j, 77) < 0.16) c.lerp(GLASS, 0.35);
+      } else if (k > 0 && site.kind === 'mine') {
         c.lerp(DUST, Math.min(0.85, 0.3 + k * 0.5));
         if (hash2(i, j, 77) < 0.22) c.lerp(ASH, 0.45);
       } else if (k > 0 && site.kind === 'lair') {

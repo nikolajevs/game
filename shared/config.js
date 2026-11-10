@@ -17,9 +17,12 @@ export const RES_DROP_R = 3400; // дальше этого — забывают�
 export const NPC_WAKE_R = 2600; // звери дальше от всех игроков не думают и не двигаются
 
 // Типы клеток карты
-export const T = { DEEP: 0, SHALLOW: 1, SAND: 2, GRASS: 3, FOREST: 4, ROCK: 5 };
-export const TERRAIN_NAMES = ['Глубина', 'Мелководье', 'Песок', 'Луг', 'Лес', 'Скалы'];
-export const TERRAIN_SPEED = [0.45, 0.7, 0.95, 1, 0.92, 0.95];
+// CITY — асфальт и бетон мёртвого города, WALL — уцелевшие стены его домов (сквозь них не пройти)
+export const T = { DEEP: 0, SHALLOW: 1, SAND: 2, GRASS: 3, FOREST: 4, ROCK: 5, CITY: 6, WALL: 7 };
+export const TERRAIN_NAMES = ['Глубина', 'Мелководье', 'Песок', 'Луг', 'Лес', 'Скалы', 'Мёртвый город', 'Руины домов'];
+export const TERRAIN_SPEED = [0.45, 0.7, 0.95, 1, 0.92, 0.95, 1, 1];
+// Мёртвый город: один на острове, с воронкой ядерного взрыва в центре. Размеры — в клетках.
+export const CITY = { r: 62, crater: 9, block: 14, street: 3 };
 export const isWater = (t) => t === T.DEEP || t === T.SHALLOW;
 
 // Смена дня и ночи. phase: 0..1
@@ -44,6 +47,7 @@ export const ITEMS = {
   glowcap: { name: 'Сияющие поганки', icon: '💠', kind: 'res' },
   bone: { name: 'Кости', icon: '🦴', kind: 'res' },
   scrap: { name: 'Металлолом', icon: '⚙️', kind: 'res' },
+  electronics: { name: 'Электроника', icon: '🔌', kind: 'res' }, // платы и провода из мёртвого города и роботов
   sulfur: { name: 'Сера', icon: '🟡', kind: 'res' },
   crystal: { name: 'Мутаген', icon: '💎', kind: 'res' },
   data: { name: 'Носитель данных', icon: '💾', kind: 'res' }, // знания для пути разума (лаборатория)
@@ -117,8 +121,8 @@ export const RECIPES = {
   shotgun: { cost: { scrap: 45, wood: 15 }, bench: true },
   bomb: { cost: { sulfur: 20, scrap: 6, wood: 5 }, bench: true },
   // технологии пути разума: нужна лаборатория рядом и изученное умение
-  laser: { cost: { scrap: 40, sulfur: 10, crystal: 3 }, lab: true, ability: 'laser' },
-  cell: { cost: { scrap: 3, sulfur: 2 }, out: 6, lab: true, ability: 'laser' },
+  laser: { cost: { scrap: 40, sulfur: 10, crystal: 3, electronics: 12 }, lab: true, ability: 'laser' },
+  cell: { cost: { scrap: 3, sulfur: 2, electronics: 1 }, out: 6, lab: true, ability: 'laser' },
 };
 export const RECIPE_GROUPS = [
   ['Ближний бой', ['club', 'spear', 'axe', 'blade', 'pickaxe']],
@@ -137,6 +141,9 @@ export const RESOURCES = {
   sulfur: { name: 'Сернистая руда', r: 24, cr: 22, hp: 160, give: 'sulfur', rate: 0.12, respawn: 160 },
   bush: { name: 'Ягодный куст', r: 18, cr: 0, hp: 40, give: 'berries', rate: 0.15, respawn: 70 },
   scrap: { name: 'Груда металлолома', r: 22, cr: 18, hp: 140, give: 'scrap', rate: 0.12, respawn: 120 },
+  // мёртвый город: остовы машин — металл, серверные шкафы — электроника
+  car: { name: 'Остов машины', r: 34, cr: 26, hp: 220, give: 'scrap', rate: 0.14, respawn: 300 },
+  terminal: { name: 'Серверный шкаф', r: 20, cr: 16, hp: 120, give: 'electronics', rate: 0.1, respawn: 240 },
   crystal: { name: 'Кристалл мутагена', r: 16, cr: 12, hp: 45, give: 'crystal', fixed: 15, dna: 4, respawn: 0 },
   // грибы: срываются за 2 удара (по грибу за удар), сквозь них можно пройти
   mush_brown: { name: 'Боровики', r: 11, cr: 0, hp: 30, give: 'mushroom', fixed: 15, respawn: 140 },
@@ -167,7 +174,7 @@ export const STRUCTURES = {
   nest: { name: 'Палатка', cost: { wood: 35, bone: 3 }, hp: 400, solid: false, mat: 'wood', desc: 'Точка возрождения (одна на игрока)' }, // ключ nest — ради старых сохранений
   workbench: { name: 'Верстак', cost: { wood: 50, stone: 30, scrap: 15 }, hp: 500, solid: true, mat: 'wood', desc: 'Нужен для огнестрела, патронов и взрывчатки' },
   lab: { name: 'Лаборатория', cost: { wood: 60, stone: 40, scrap: 30 }, hp: 550, solid: true, mat: 'stone', desc: 'Данные → знания, опыты; лазеры и энергоячейки' },
-  turret: { name: 'Автотурель', cost: { scrap: 40, sulfur: 20, stone: 30 }, hp: 450, solid: true, mat: 'stone', ability: 'turret', desc: 'Сама стреляет по зверям и чужакам (путь разума)' },
+  turret: { name: 'Автотурель', cost: { scrap: 40, sulfur: 20, stone: 30, electronics: 15 }, hp: 450, solid: true, mat: 'stone', ability: 'turret', desc: 'Сама стреляет по зверям и чужакам (путь разума)' },
 };
 export const STRUCT_ORDER = ['wall_wood', 'wall_stone', 'door', 'storage', 'campfire', 'spikes', 'nest', 'workbench', 'lab', 'turret'];
 export const TURRET = { range: 360, cd: 0.7, dmg: 11, speed: 1300 };
@@ -195,20 +202,30 @@ export const RAD = {
 export const CRATE = { name: 'Ящик с добычей', respawn: 200, rolls: 3, mutagen: [2, 6] }; // мутаген × уровень зоны
 
 // ---- Особые места острова ----
-// ruins — радиоактивные руины (их число — RAD.zones), mine — старые рудники, lair — логова колоссов.
+// ruins — радиоактивные руины (их число — RAD.zones), mine — старые рудники, lair — логова утробников,
+// city и crater — мёртвый город и воронка взрыва в его центре.
 // lvl — сила радиации в центре, crates — ящики с добычей, guards — кто охраняет (возрождаются, когда рядом нет игроков).
 export const SITES = {
+  // мёртвый город и воронка в его центре — по одному на остров (см. CITY)
+  crater: {
+    name: 'Эпицентр взрыва', icon: '☢', count: 1, lvl: 3, crates: 5, guards: { mech: 1, reaper: 2 },
+    enter: 'Эпицентр ядерного взрыва: оплавленная воронка, сильнейшая радиация и лучшая добыча города. Её стережёт Каратель.',
+  },
+  city: {
+    name: 'Мёртвый город', icon: '🏙', count: 1, lvl: 0, crates: 16, guards: { spider: 12, drone: 7, reaper: 3 },
+    enter: 'Мёртвый город: остовы машин, серверные шкафы с электроникой и ящики в развалинах. Улицы патрулируют машины-убийцы.',
+  },
   ruins: {
-    name: 'Радиоактивные руины', icon: '☢', crates: 4, guards: { mutant: 3 },
-    enter: 'Радиоактивные руины: ящики с добычей и металлолом. Здесь бродят мутанты, облучение копит мутаген.',
+    name: 'Радиоактивные руины', icon: '☢', crates: 4, guards: { spider: 2, drone: 1 },
+    enter: 'Радиоактивные руины: ящики с добычей и металлолом. Здесь всё ещё несут службу роботы, облучение копит мутаген.',
   },
   mine: {
-    name: 'Старый рудник', icon: '⛏', count: Math.round(3 * SITE_DENSITY), r: 220, lvl: 1, crates: 3, guards: { mutant: 4 },
-    enter: 'Старый рудник: богатая руда, сера и металлолом. Слабая радиация, охрана — мутанты.',
+    name: 'Старый рудник', icon: '⛏', count: Math.round(3 * SITE_DENSITY), r: 220, lvl: 1, crates: 3, guards: { spider: 3, drone: 1 },
+    enter: 'Старый рудник: богатая руда, сера и металлолом. Слабая радиация, охрана — горные роботы.',
   },
   lair: {
-    name: 'Логово колосса', icon: '🦴', count: Math.round(4 * SITE_DENSITY), r: 180, lvl: 0, crates: 2, guards: { colossus: 1, stalker: 3 },
-    enter: 'Логово колосса: тайник с добычей (бывают древние артефакты), мясо и кости. Хозяин и его стая где-то рядом!',
+    name: 'Логово утробника', icon: '🦴', count: Math.round(4 * SITE_DENSITY), r: 180, lvl: 0, crates: 2, guards: { glutton: 1, claw: 3 },
+    enter: 'Логово утробника: тайник с добычей (бывают древние артефакты), мясо и кости. Хозяин и его стая когтней где-то рядом!',
   },
   altar: {
     name: 'Древний алтарь', icon: '🕯', count: Math.round(1.5 * SITE_DENSITY), r: 130, lvl: 0, crates: 0, guards: {},
@@ -217,9 +234,11 @@ export const SITES = {
 };
 // особая добыча мест: [предмет, мин, макс, вес] добавляется к общему списку ящика
 export const SITE_LOOT = {
-  ruins: [['data', 1, 2, 7]],
+  ruins: [['data', 1, 2, 7], ['electronics', 2, 5, 5]],
   mine: [['data', 1, 3, 9]],
   lair: [['artifact', 1, 1, 8]],
+  city: [['electronics', 4, 10, 14], ['data', 1, 2, 7], ['cell', 4, 10, 4]],
+  crater: [['electronics', 8, 16, 12], ['data', 2, 4, 10], ['cell', 8, 16, 6], ['crystal', 2, 4, 6]],
 };
 // [предмет, мин, макс, вес]
 export const CRATE_LOOT = [
@@ -256,17 +275,63 @@ export const LEVEL3_CRYSTALS = 3; // 3-й уровень требует крис
 export const COMPLEXITY_CAP = 12; // максимум суммарных уровней мутаций
 export const MOUTH_CHANGE_COST = 10;
 
-// ---- Дикие существа ----
-// genome: буква рта + уровни частей в порядке PART_KEYS (недостающие = 0)
+// ---- Чудовища острова ----
+// Две силы. spirit — духи и органические мутанты: живут в лесах и логовах, стерегут деревья и грибы.
+// tech — машины-убийцы погибшей цивилизации: мёртвый город, руины и рудники.
+// model — готовая анимированная модель (public/assets/monsters), r — радиус тела, reach — дальность удара.
+// loot — добыча: целое — штук, дробь — шанс одной штуки. fly — парит: не замечает воду, деревья и стены.
+// shoot — дальняя атака: снаряд proj, пока цель между min и range.
 export const NPCS = {
-  grazer: { name: 'Травник', genome: 'h20001000000', color: '#c8a46a', hp: 50, speed: 115, dmg: 0, behavior: 'passive', flee: 230, dna: 0, meat: 3, bone: 2, biomes: [T.GRASS] }, // пасутся на лугах
-  stalker: { name: 'Клыкач', genome: 'c22102000001', color: '#8a3344', hp: 85, speed: 148, dmg: 9, behavior: 'aggressive', aggro: 230, nightAggro: 380, dna: 0, meat: 4, bone: 3, biomes: [T.FOREST, T.ROCK] }, // охотятся в лесах и скалах
-  colossus: { name: 'Колосс', genome: 'o30300200003', color: '#5b7a3d', hp: 650, speed: 78, dmg: 28, behavior: 'territorial', aggro: 170, dna: 20, meat: 14, bone: 12, crystal: 3, attackCd: 1.3, biomes: [] }, // только в логовах
-  mutant: { name: 'Мутант', genome: 'c22011010100', color: '#9b4be0', hp: 120, speed: 160, dmg: 12, behavior: 'aggressive', aggro: 420, nightAggro: 420, dna: 12, meat: 2, bone: 3, crystal: 1, biomes: [] },
+  stag: {
+    name: 'Рогач', faction: 'spirit', model: 'stag', color: '#b08a5a', r: 20, hp: 60, speed: 120, dmg: 0, behavior: 'passive', flee: 240,
+    dna: 0, loot: { meat: 4, bone: 2 }, biomes: [T.GRASS],
+  }, // пасутся на лугах
+  crooked: {
+    name: 'Горбун', faction: 'spirit', model: 'crooked', color: '#8a5a44', r: 17, hp: 90, speed: 152, dmg: 10, reach: 30, behavior: 'aggressive',
+    aggro: 240, nightAggro: 400, dna: 2, loot: { meat: 3, bone: 4 }, spirit: 1, biomes: [T.FOREST, T.ROCK],
+  }, // охотятся в лесах и скалах, ночью выходят к людям
+  claw: {
+    name: 'Когтень', faction: 'spirit', model: 'claw', color: '#7a4a3a', r: 18, hp: 130, speed: 162, dmg: 14, reach: 34, behavior: 'aggressive',
+    aggro: 380, nightAggro: 440, dna: 10, loot: { meat: 3, bone: 4, crystal: 1 }, spirit: 3, attackCd: 1.0, biomes: [T.FOREST],
+  }, // стаи у логов, чащи и воронки метеоритов
+  wraith: {
+    name: 'Лесной дух', faction: 'spirit', model: 'wraith', color: '#9fe8c8', r: 18, hp: 110, speed: 118, dmg: 8, reach: 26, behavior: 'guardian',
+    aggro: 150, dna: 6, loot: { artifact: 0.15, glowcap: 0.5, bone: 2 }, spirit: 4, fly: true, attackCd: 1.2,
+    shoot: { proj: 'drain', dmg: 11, cd: 2.4, speed: 520, life: 0.9, min: 70, range: 400 }, biomes: [T.FOREST],
+  }, // стережёт чащу: мстит тем, кто рубит деревья и рвёт грибы
+  glutton: {
+    name: 'Утробник', faction: 'spirit', model: 'glutton', color: '#7a1c1c', r: 34, hp: 700, speed: 80, dmg: 30, reach: 40, behavior: 'territorial',
+    aggro: 180, dna: 20, loot: { meat: 14, bone: 12, crystal: 3 }, spirit: 8, attackCd: 1.3, windup: 0.56, def: 0.2, biomes: [],
+  }, // только в логовах
+  spider: {
+    name: 'Паук-страж', faction: 'tech', model: 'spider', color: '#ffb000', r: 20, hp: 120, speed: 168, dmg: 12, reach: 28, behavior: 'aggressive',
+    aggro: 400, nightAggro: 400, dna: 0, loot: { scrap: 6, electronics: 2, data: 0.08 }, def: 0.15, biomes: [],
+  },
+  drone: {
+    name: 'Дрон-око', faction: 'tech', model: 'drone', color: '#ff3b30', r: 15, hp: 70, speed: 150, dmg: 0, reach: 0, behavior: 'aggressive',
+    aggro: 460, nightAggro: 460, dna: 0, loot: { scrap: 3, electronics: 3, cell: 4, data: 0.12 }, fly: true,
+    shoot: { proj: 'laser', dmg: 9, cd: 1.5, speed: 1500, life: 0.5, min: 0, range: 430, keep: 230 }, biomes: [],
+  },
+  reaper: {
+    name: 'Жнец', faction: 'tech', model: 'reaper', color: '#ffb000', r: 30, hp: 420, speed: 96, dmg: 26, reach: 40, behavior: 'aggressive',
+    aggro: 360, nightAggro: 360, dna: 0, loot: { scrap: 20, electronics: 8, cell: 6, data: 1 }, attackCd: 1.2, windup: 0.5, def: 0.3, biomes: [],
+  },
+  mech: {
+    name: 'Каратель', faction: 'tech', model: 'mech', color: '#ff3b30', r: 36, hp: 1100, speed: 84, dmg: 36, reach: 44, behavior: 'territorial',
+    aggro: 480, dna: 0, loot: { scrap: 45, electronics: 25, cell: 20, data: 4, crystal: 3 }, attackCd: 1.4, windup: 0.6, def: 0.35,
+    shoot: { proj: 'bullet', dmg: 13, cd: 0.55, speed: 1200, life: 0.6, min: 150, range: 620 }, biomes: [],
+  },
 };
 // сколько бродит по острову вне особых мест (охрана мест — в SITES)
-export const NPC_TARGET = { grazer: Math.round(150 * WILD_DENSITY), stalker: Math.round(45 * WILD_DENSITY) };
-export const NIGHT_STALKERS_PER_PLAYER = 5; // ночью вокруг каждого игрока выходят на охоту клыкачи
+export const NPC_TARGET = {
+  stag: Math.round(150 * WILD_DENSITY), crooked: Math.round(45 * WILD_DENSITY),
+  claw: Math.round(14 * WILD_DENSITY), wraith: Math.round(30 * WILD_DENSITY),
+};
+export const NIGHT_HUNTER = 'crooked'; // кто ночью выходит на охоту вокруг игроков
+export const METEOR_GUARD = 'claw'; // кого приманивает упавший метеорит
+export const NIGHT_STALKERS_PER_PLAYER = 5;
+export const GUARDIAN_ALERT_R = 560; // на таком расстоянии духи слышат, что рубят их лес
+export const EMP_TECH_MULT = 2.5; // ЭМИ бьёт по машинам сильнее и глушит их дольше
 
 export const PLAYER = {
   startDna: 0, // мутаген на старте: мутации начинаются с облучения
@@ -298,12 +363,12 @@ export const PATHS = {
   mind: {
     name: 'Путь разума', icon: '🧠', pt: 'know', ptName: 'Знания', ptIcon: '📘', color: '#5ec8ff',
     desc: 'Наука и технологии: глубокая генная инженерия, наниты, экзоскелет, лазеры, ЭМИ и автотурели.',
-    how: 'Носители данных 💾 из ящиков руин и рудников изучаются в лаборатории; там же можно ставить опыты.',
+    how: 'Носители данных 💾 из ящиков города, руин и рудников и из разбитых роботов изучаются в лаборатории; там же можно ставить опыты.',
   },
   spirit: {
     name: 'Путь духа', icon: '🔮', pt: 'spirit', ptName: 'Сила духа', ptIcon: '✨', color: '#c77dff',
     desc: 'Магия и тёмные силы: телекинез, телепорт, огненный шар, щит, вампиризм и проклятие ведьмы.',
-    how: 'Медитация у древних алтарей 🕯, артефакты 🔮 из логов колоссов и победы над мутантами. Заклинания тратят ману.',
+    how: 'Медитация у древних алтарей 🕯, артефакты 🔮 из логов утробников и победы над духами и мутантами леса. Заклинания тратят ману.',
   },
 };
 // kind: passive — действует всегда; unlock — открывает рецепт или постройку;
@@ -312,7 +377,7 @@ export const ABILITIES = {
   nanites: { path: 'mind', tier: 1, cost: 15, kind: 'passive', name: 'Регенеративные наниты', icon: '🩹', desc: 'Здоровье восстанавливается втрое быстрее, даже при облучении до 50', regenMul: 3, radRegen: 50 },
   exo: { path: 'mind', tier: 1, cost: 15, kind: 'passive', name: 'Экзоскелет', icon: '🦾', desc: '+20% к скорости и +15% к защите', speed: 1.2, def: 0.15 },
   laser: { path: 'mind', tier: 2, cost: 30, kind: 'unlock', name: 'Лазерная винтовка', icon: '🔦', desc: 'Рецепты лазерной винтовки и энергоячеек (в лаборатории)' },
-  emp: { short: 'ЭМИ', path: 'mind', tier: 2, cost: 30, kind: 'instant', name: 'ЭМИ-импульс', icon: '⚡', desc: 'Волна вокруг: 30 урона и оглушение на 2,5 с всем врагам в 230 ед.', cd: 18, r: 230, dmg: 30, stun: 2.5 },
+  emp: { short: 'ЭМИ', path: 'mind', tier: 2, cost: 30, kind: 'instant', name: 'ЭМИ-импульс', icon: '⚡', desc: 'Волна вокруг: 30 урона и оглушение на 2,5 с всем врагам в 230 ед.; по машинам — в 2,5 раза сильнее', cd: 18, r: 230, dmg: 30, stun: 2.5 },
   genetics: { path: 'mind', tier: 3, cost: 50, kind: 'passive', name: 'Генная инженерия', icon: '🧬', desc: 'Предел мутаций 12 → 20, мутации на 30% дешевле, 3-й уровень без кристаллов', cap: 8, priceMul: 0.7 },
   turret: { path: 'mind', tier: 3, cost: 50, kind: 'unlock', name: 'Автотурель', icon: '🗼', desc: 'Постройка (B): сама стреляет по зверям и чужакам в 360 ед.' },
   telekinesis: { short: 'Телекинез', path: 'spirit', tier: 1, cost: 15, kind: 'spell', name: 'Телекинез', icon: '🌀', desc: 'Удар силой мысли: отшвыривает врага далеко назад', mana: 12, cd: 0.7, proj: 'force', speed: 950, life: 0.42, dmg: 12, kb: 560 },
@@ -325,6 +390,6 @@ export const ABILITIES = {
 export const ABILITY_ORDER = Object.keys(ABILITIES);
 export const TIER_NEED = [0, 0, 15, 45]; // сколько очков пути нужно вложить, чтобы открыть ступень
 export const MANA = { base: 100, perAbility: 15, regen: 4, altarRegen: 12 };
-export const SPIRIT_GAIN = { every: 2, altarCharge: 20, altarRefill: 600, artifact: 12, mutant: 3, colossus: 8 };
+export const SPIRIT_GAIN = { every: 2, altarCharge: 20, altarRefill: 600, artifact: 12 }; // за победы над духами — NPCS[...].spirit
 export const KNOW_GAIN = { data: 5, experiment: { cost: { scrap: 10, crystal: 1 }, gain: 4 } };
 export const LAB_RANGE = 130;

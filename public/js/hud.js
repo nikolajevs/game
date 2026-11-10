@@ -8,7 +8,7 @@ const MINI_SPAN = 4800; // сколько единиц мира видно на 
 const WORLD = MAP_W * TILE;
 
 const $ = (id) => document.getElementById(id);
-const TILE_RGB = [[27, 79, 99], [60, 138, 134], [227, 208, 154], [120, 177, 83], [63, 128, 64], [143, 142, 134]];
+const TILE_RGB = [[27, 79, 99], [60, 138, 134], [227, 208, 154], [120, 177, 83], [63, 128, 64], [143, 142, 134], [92, 88, 84], [34, 31, 29]];
 const RECIPE_DESC = {
   cell: 'Боеприпас лазерной винтовки',
   arrows: 'Для лука и арбалета',
@@ -121,6 +121,8 @@ export class Hud {
       mine: ['rgba(200, 150, 80, 0.35)', 'rgba(230, 170, 70, 0.9)'],
       lair: ['rgba(150, 70, 50, 0.35)', 'rgba(200, 90, 60, 0.9)'],
       altar: ['rgba(160, 90, 220, 0.35)', 'rgba(199, 125, 255, 0.95)'],
+      city: ['rgba(0, 0, 0, 0)', 'rgba(255, 190, 90, 0.75)'], // сам город виден по клеткам — только контур
+      crater: ['rgba(190, 230, 60, 0.4)', 'rgba(230, 210, 40, 0.95)'],
     };
     for (const z of this.zones) {
       const [fill, stroke] = SITE_COLORS[z.kind] || SITE_COLORS.ruins;
@@ -378,6 +380,7 @@ export class Hud {
       const zx = px(z.x);
       const zy = py(z.y);
       if (zx < -20 || zy < -20 || zx > W + 20 || zy > H + 20) continue;
+      if (z.kind === 'city') continue; // город виден по клеткам, в его центре — значок воронки
       g.fillStyle = '#1d1d1f';
       g.fillText(SITES[z.kind]?.icon || '☢', zx, zy);
     }

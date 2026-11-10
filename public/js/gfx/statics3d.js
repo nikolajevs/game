@@ -12,7 +12,7 @@ const _c = new THREE.Color();
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const STATIC_CHUNK = 600;
 // ресурсы рисуются пулами по участкам карты; постройки — отдельными мешами
-const RESOURCE_KINDS = new Set(['tree', 'rock', 'sulfur', 'bush', 'crystal', 'scrap', 'mush_brown', 'mush_red', 'mush_glow']);
+const RESOURCE_KINDS = new Set(['tree', 'rock', 'sulfur', 'bush', 'crystal', 'scrap', 'car', 'terminal', 'mush_brown', 'mush_red', 'mush_glow']);
 const MUSH = new Set(['mush_brown', 'mush_red', 'mush_glow']);
 const capGeo = new THREE.SphereGeometry(1, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2); // шляпка — полусфера
 // вид грибов: [шляпка, ножка]
@@ -446,6 +446,8 @@ export class StaticsView {
     else if (s.k === 'bush') this.addBush(o);
     else if (s.k === 'crystal') this.addCrystal(o);
     else if (s.k === 'scrap') this.addScrap(o);
+    else if (s.k === 'car') this.addCar(o);
+    else if (s.k === 'terminal') this.addTerminal(o);
     else if (MUSH.has(s.k)) this.addMushrooms(o);
     else this.addStructure(o);
     if (o.s.k === 'tree' || o.s.k === 'rock' || o.s.k === 'sulfur') this.occluders.add(o);
@@ -481,6 +483,7 @@ export class StaticsView {
     else if (k === 'bush') this.addBush(o);
     else if (k === 'crystal') this.addCrystal(o);
     else if (k === 'scrap') this.addScrap(o);
+    else if (k === 'terminal') this.addTerminal(o);
     else if (MUSH.has(k)) this.addMushrooms(o);
   }
 
@@ -535,6 +538,60 @@ export class StaticsView {
       this.group.add(g);
     }
     if (o.mesh) o.mesh.visible = left > 0;
+  }
+
+  // остов машины: ржавый кузов, кабина без стёкол, спущенные колёса
+  addCar(o) {
+    const s = o.s;
+    const pools = o.pools;
+    const r = rng(s.v || 0.4);
+    const gy = this.ground(s.x, s.y);
+    const a = r() * Math.PI * 2;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    const tilt = (r() - 0.5) * 0.12;
+    const paint = ['#7a4a36', '#5e6a72', '#6e4a36', '#7d7a74', '#4a5a4a'][Math.floor(r() * 5)];
+    const at = (lx, lz) => [s.x + ca * lx + sa * lz, s.y - sa * lx + ca * lz];
+    const put = (pool, key, lx, y, lz, sx, sy, sz, color, rx = 0, rz = 0) => {
+      const [x, z] = at(lx, lz);
+      pool.set(`${s.i}:${key}`, M(x, gy + y, z, rx, a, tilt + rz, sx, sy, sz), _c.set(color).clone());
+      if (!o.built) o.parts.push([pool, `${s.i}:${key}`]);
+    };
+    put(pools.scrap, 'body', 0, 11, 0, 62, 12, 27, paint);
+    put(pools.scrap, 'cab', -5, 22, 0, 30, 11, 24, '#3a3432');
+    put(pools.scrap, 'roof', -5, 28.5, 0, 32, 2, 26, paint);
+    put(pools.scrap, 'hood', 22, 17.5, 0, 16, 2, 25, '#8a5a3a', 0, 0.25 + r() * 0.5);
+    let w = 0;
+    for (const lx of [-20, 20]) {
+      for (const lz of [-14, 14]) {
+        if (r() < 0.2) { w++; continue; } // колесо сняли
+        put(pools.barrel, `w${w++}`, lx, 5, lz, 6, 5, 6, '#1f1d1c', Math.PI / 2);
+      }
+    }
+    o.built = true;
+  }
+
+  // серверный шкаф: тёмная стойка с ещё горящими огоньками
+  addTerminal(o) {
+    const s = o.s;
+    const pools = o.pools;
+    const r = rng(s.v || 0.4);
+    const gy = this.ground(s.x, s.y);
+    const a = r() * Math.PI * 2;
+    const lean = (r() - 0.5) * 0.18;
+    const k = 0.75 + 0.25 * (s.h / (s.m || 1));
+    const put = (pool, key, x, y, z, rx, sx, sy, sz, color) => {
+      pool.set(`${s.i}:${key}`, M(x, gy + y, z, rx, a, lean, sx, sy, sz), _c.set(color).clone());
+      if (!o.built) o.parts.push([pool, `${s.i}:${key}`]);
+    };
+    put(pools.scrap, 'case', s.x, 22 * k, s.y, 0, 20, 44 * k, 16, '#2e3238');
+    put(pools.scrap, 'top', s.x, 44 * k + 1, s.y, 0, 22, 2, 18, '#4a4f58');
+    for (let i = 0; i < 3; i++) {
+      const y = (12 + i * 11) * k;
+      put(pools.scrap, `slot${i}`, s.x + Math.cos(a) * 10.2, y, s.y - Math.sin(a) * 10.2, 0, 1, 7, 13, '#15171a');
+      put(pools.mushGlow, `led${i}`, s.x + Math.cos(a) * 11 - Math.sin(a) * (i - 1) * 3.5, y + 1, s.y - Math.sin(a) * 11 - Math.cos(a) * (i - 1) * 3.5, 0, 1.3, 1.3, 1.3, i === 1 ? '#ffb347' : '#7fe3ff');
+    }
+    o.built = true;
   }
 
   // груда металлолома: ржавые ящики, листы и бочка

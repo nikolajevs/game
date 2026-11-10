@@ -521,6 +521,7 @@ function buildCheck(kind, x, y) {
   const tx = Math.floor(x / TILE);
   const ty = Math.floor(y / TILE);
   if (isWater(S.tiles[ty * MAP_W + tx])) return 'Нельзя строить на воде';
+  if (S.tiles[ty * MAP_W + tx] === 7) return 'Здесь стоит стена';
   if (S.structAt.has(`${x},${y}`)) return 'Место занято';
   if (def.ability && !(you.ab || []).includes(def.ability)) return `Нужно умение «${ABILITIES[def.ability].name}» (путь разума, P)`;
   for (const [r, v] of Object.entries(def.cost)) if (you.inv[r] < v) return 'Не хватает ресурсов';
