@@ -91,6 +91,18 @@ export function generateMap(seed) {
     }
   }
   stampCity(tiles, seed);
+  // Снежные широты с рваной границей: море и скалы сохраняются, город остаётся городом.
+  const climate = makeNoise(seed + 909);
+  const winterizeRow = (y) => {
+    for (let x = 2; x < MAP_W - 2; x++) {
+      const t = tiles[y * MAP_W + x];
+      if (t !== T.SAND && t !== T.GRASS && t !== T.FOREST) continue;
+      const edgeNoise = (climate(x / 95, y / 95, 3) - 0.5) * 100;
+      if (y < 260 + edgeNoise || y > MAP_H - 260 + edgeNoise) tiles[y * MAP_W + x] = T.SNOW;
+    }
+  };
+  for (let y = 2; y < 325; y++) winterizeRow(y);
+  for (let y = MAP_H - 325; y < MAP_H - 2; y++) winterizeRow(y);
   return tiles;
 }
 
@@ -388,6 +400,7 @@ export function generateResources(tiles, seed, zones = []) {
         if ((kind === 'mush_brown' || kind === 'mush_red') && !(tiles[ty * MAP_W + tx - 1] === T.FOREST && tiles[ty * MAP_W + tx + 1] === T.FOREST
           && tiles[(ty - 1) * MAP_W + tx] === T.FOREST && tiles[(ty + 1) * MAP_W + tx] === T.FOREST)) kind = null;
       }
+      else if (t === T.SNOW) kind = r < 0.14 ? 'tree' : r < 0.19 ? 'rock' : null;
       else if (t === T.GRASS) kind = r < 0.035 ? 'tree' : r < 0.055 ? 'bush' : r < 0.075 ? null : r < 0.09 ? 'rock' : null;
       else if (t === T.ROCK) kind = r < 0.2 ? (r2 < 0.3 ? 'sulfur' : 'rock') : r < 0.23 ? 'tree' : null;
       else if (t === T.SAND) {
@@ -402,7 +415,7 @@ export function generateResources(tiles, seed, zones = []) {
         let bare = false;
         for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
           const nt = tiles[(ty + dy) * MAP_W + tx + dx];
-          if (nt !== T.GRASS && nt !== T.FOREST) bare = true;
+          if (nt !== T.GRASS && nt !== T.FOREST && nt !== T.SNOW) bare = true;
         }
         if (bare && !site) continue;
       }
@@ -423,7 +436,7 @@ export function generateResources(tiles, seed, zones = []) {
         }
       }
       if (blocked) continue;
-      const o = { kind, x, y, v: Math.round(v * 1000) / 1000 };
+      const o = { kind, x, y, v: Math.round((kind === 'tree' && t === T.SNOW ? Math.min(v, 0.54) : v) * 1000) / 1000 };
       out.push(o);
       const k = key(cx, cy);
       if (!buckets.has(k)) buckets.set(k, []);

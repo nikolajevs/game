@@ -2,7 +2,7 @@
 // Ресурсов много, поэтому они рисуются через InstancedMesh (пулы).
 import * as THREE from 'three';
 import { Tree, TreePreset } from '/vendor/ez-tree/ez-tree.es.js';
-import { TILE, STRUCTURES } from '/shared/config.js';
+import { TILE, STRUCTURES, T } from '/shared/config.js';
 import { G, M, between, mergeParts, rng, shade, taper, glowTexture } from './util.js';
 import { Fire } from './fire.js';
 import { applyRockSurface } from './surfaces.js';
@@ -672,7 +672,8 @@ export class StaticsView {
     const pools = o.pools;
     const r = rng(s.v || 0.5);
     const gy = this.ground(s.x, s.y);
-    const pine = (s.v || 0.5) < 0.55;
+    const winter = this.terrain.tile(Math.floor(s.x / TILE), Math.floor(s.y / TILE)) === T.SNOW;
+    const pine = winter || (s.v || 0.5) < 0.55;
     const model = pine ? TREE_MODELS.pine : TREE_MODELS.oak;
     const giant = r() < 0.018;
     const sc = giant ? 1.75 + r() * 0.55 : 0.85 + r() * 0.45;
@@ -689,7 +690,9 @@ export class StaticsView {
     };
     const barkColor = _c.set(pine ? '#b58a5e' : '#c2a17d').offsetHSL(0, 0, (r() - 0.5) * 0.08).clone();
     let leavesColor;
-    if (pine) {
+    if (winter) {
+      leavesColor = _c.setHSL(0.56, 0.24, 0.76 + r() * 0.08).clone();
+    } else if (pine) {
       leavesColor = _c.setHSL(0.31 + r() * 0.04, 0.4, 0.68 + r() * 0.08).clone();
     } else {
       const autumn = r() < 0.14;

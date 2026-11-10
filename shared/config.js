@@ -18,9 +18,9 @@ export const NPC_WAKE_R = 2600; // звери дальше от всех игр�
 
 // Типы клеток карты
 // CITY — асфальт и бетон мёртвого города, WALL — уцелевшие стены его домов (сквозь них не пройти)
-export const T = { DEEP: 0, SHALLOW: 1, SAND: 2, GRASS: 3, FOREST: 4, ROCK: 5, CITY: 6, WALL: 7 };
-export const TERRAIN_NAMES = ['Глубина', 'Мелководье', 'Песок', 'Луг', 'Лес', 'Скалы', 'Мёртвый город', 'Руины домов'];
-export const TERRAIN_SPEED = [0.45, 0.7, 0.95, 1, 0.92, 0.95, 1, 1];
+export const T = { DEEP: 0, SHALLOW: 1, SAND: 2, GRASS: 3, FOREST: 4, ROCK: 5, CITY: 6, WALL: 7, SNOW: 8 };
+export const TERRAIN_NAMES = ['Глубина', 'Мелководье', 'Песок', 'Луг', 'Лес', 'Скалы', 'Мёртвый город', 'Руины домов', 'Снег'];
+export const TERRAIN_SPEED = [0.45, 0.7, 0.95, 1, 0.92, 0.95, 1, 1, 0.86];
 // Мёртвый город: один на острове, с воронкой ядерного взрыва в центре. Размеры — в клетках.
 export const CITY = { r: 62, crater: 9, block: 14, street: 3 };
 export const isWater = (t) => t === T.DEEP || t === T.SHALLOW;
@@ -361,11 +361,11 @@ export const MOUTH_CHANGE_COST = 10;
 export const NPCS = {
   stag: {
     name: 'Рогач', faction: 'spirit', model: 'stag', color: '#b08a5a', r: 20, hp: 60, speed: 120, dmg: 0, behavior: 'passive', flee: 240,
-    dna: 0, loot: { meat: 4, bone: 2 }, biomes: [T.GRASS],
+    dna: 0, loot: { meat: 4, bone: 2 }, biomes: [T.GRASS, T.SNOW],
   }, // пасутся на лугах
   crooked: {
     name: 'Горбун', faction: 'spirit', model: 'crooked', color: '#8a5a44', r: 17, hp: 90, speed: 152, dmg: 10, reach: 30, behavior: 'aggressive',
-    aggro: 240, nightAggro: 400, dna: 2, loot: { meat: 3, bone: 4 }, spirit: 1, biomes: [T.FOREST, T.ROCK],
+    aggro: 240, nightAggro: 400, dna: 2, loot: { meat: 3, bone: 4 }, spirit: 1, biomes: [T.FOREST, T.ROCK, T.SNOW],
   }, // охотятся в лесах и скалах, ночью выходят к людям
   claw: {
     name: 'Когтень', faction: 'spirit', model: 'claw', color: '#7a4a3a', r: 18, hp: 130, speed: 162, dmg: 14, reach: 34, behavior: 'aggressive',
