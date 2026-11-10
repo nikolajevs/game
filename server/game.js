@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import {
   TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, TERRAIN_SPEED, isWater, DAY_LENGTH, isNight,
-  ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, CRAFT_MAX, USES, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
+  ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, CRAFT_MAX, USES, TRIALS, buildCost, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
   NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
   RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
   ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET,
@@ -276,6 +276,7 @@ export class Game {
     this.clients.delete(c);
     const p = c.player;
     if (!p) return;
+    this.endTrial(p);
     this.saveProfile(p);
     this.players.delete(p.id);
     this.broadcast({ t: 'chat', sys: true, text: `${p.name} покинул остров` });
@@ -323,6 +324,7 @@ export class Game {
       case 'resetPath': return this.onResetPath(p);
       case 'research': return this.onResearch(p, msg);
       case 'absorb': return this.onAbsorb(p);
+      case 'trial': return this.onTrial(p);
       case 'cast': return this.onCast(p, msg);
       default: return undefined;
     }
@@ -365,20 +367,75 @@ export class Game {
     const ab = ABILITIES[m.id];
     if (!ab || p.abil.has(m.id)) return;
     const path = PATHS[ab.path];
-    if (p.path && p.path !== ab.path) return this.toast(p, `Этот путь закрыт: вы выбрали ${PATHS[p.path].name.toLowerCase()}`);
+    if (!p.path) return this.toast(p, 'Сначала пройдите испытание пути у алтаря выбора');
+    if (p.path !== ab.path) return this.toast(p, `Этот путь закрыт: вы выбрали ${PATHS[p.path].name.toLowerCase()}`);
     if (this.spentOn(p, ab.path) < TIER_NEED[ab.tier]) return this.toast(p, `Сначала вложите ${TIER_NEED[ab.tier]} очков в нижние ступени`);
     if (p[path.pt] < ab.cost) return this.toast(p, `Не хватает: ${path.ptName.toLowerCase()} (${p[path.pt]}/${ab.cost})`);
-    if (!p.path) {
-      p.path = ab.path;
-      this.send(p.client, { t: 'toast', big: true, text: `${path.icon} Вы ступили на ${path.name.toLowerCase()}. Это навсегда.` });
-      this.broadcast({ t: 'chat', sys: true, text: `${p.name} выбирает ${path.name.toLowerCase()}` });
-    }
     p[path.pt] -= ab.cost;
     p.abil.add(m.id);
     this.applyGenome(p);
     if (ab.path === 'spirit') p.mana = Math.min(p.maxMana, p.mana + 30);
     this.fx.push({ k: 'learn', x: p.x, y: p.y, c: path.color });
     this.toast(p, `${ab.icon} Изучено: ${ab.name}`);
+  }
+
+  // ---------- испытания пути (у алтаря выбора) ----------
+  atShrine(p) {
+    const z = zoneAt(this.zones, p.x, p.y);
+    return z && z.kind === 'shrine' ? z : null;
+  }
+
+  // испытание пройдено: путь выбран навсегда
+  setPath(p, id) {
+    const path = PATHS[id];
+    p.path = id;
+    this.applyGenome(p);
+    if (id === 'spirit') p.mana = p.maxMana;
+    this.fx.push({ k: 'learn', x: p.x, y: p.y, c: path.color });
+    this.send(p.client, { t: 'toast', big: true, text: `${path.icon} Испытание пройдено: вы ступили на ${path.name.toLowerCase()}. Это навсегда.` });
+    this.broadcast({ t: 'chat', sys: true, text: `${p.name} выбирает ${path.name.toLowerCase()}` });
+    this.saveProfile(p);
+  }
+
+  // Испытание духа: гриб, кактус и жаба съедаются разом — начинается трип,
+  // и в нём вокруг алтаря появляются проводники в мир духов. Их видит и может убить только сам игрок.
+  onTrial(p) {
+    if (p.dead) return;
+    if (p.path) return this.toast(p, `Вы уже выбрали ${PATHS[p.path].name.toLowerCase()}`);
+    if (p.trial) return this.toast(p, 'Трип уже идёт — ищите проводников');
+    const z = this.atShrine(p);
+    if (!z) return this.toast(p, 'Ритуал проводят у алтаря выбора');
+    const T_ = TRIALS.spirit;
+    const miss = T_.items.filter((k) => !(p.inv[k] > 0));
+    if (miss.length) return this.toast(p, `Не хватает: ${miss.map((k) => ITEMS[k].name.toLowerCase()).join(', ')}`);
+    for (const k of T_.items) p.inv[k]--;
+    p.halT = T_.time;
+    p.halS = 1;
+    const ids = [];
+    for (let i = 0; i < T_.guides; i++) {
+      for (let tries = 0; tries < 40; tries++) {
+        const a = Math.random() * Math.PI * 2;
+        const d = T_.spread[0] + Math.random() * (T_.spread[1] - T_.spread[0]);
+        const x = z.x + Math.cos(a) * d;
+        const y = z.y + Math.sin(a) * d;
+        if (isWater(this.tileAt(x, y))) continue;
+        const n = this.spawnNpc('guide', true, { x, y });
+        n.owner = p.id;
+        n.leash = 230;
+        ids.push(n.id);
+        break;
+      }
+    }
+    p.trial = { until: this.time + T_.time, guides: ids, left: ids.length };
+    this.fx.push({ k: 'learn', x: p.x, y: p.y, c: PATHS.spirit.color });
+    this.send(p.client, { t: 'toast', big: true, text: `🔮 Гриб, кактус и жаба съедены. Мир рвётся по швам: где-то рядом ${ids.length} проводника в мир духов — найдите и убейте их, пока длится трип!` });
+  }
+
+  endTrial(p, text) {
+    if (!p.trial) return;
+    for (const id of p.trial.guides) this.npcs.delete(id);
+    p.trial = null;
+    if (text) this.send(p.client, { t: 'toast', big: true, text });
   }
 
   onResetPath(p) {
@@ -546,7 +603,7 @@ export class Game {
       let bd = TURRET.range;
       for (const c of this.creaturesNear(s.x, s.y, TURRET.range)) {
         if (c.dead) continue;
-        if (c.type === 'npc' && NPCS[c.kind].behavior === 'passive') continue;
+        if (c.type === 'npc' && (NPCS[c.kind].behavior === 'passive' || c.owner)) continue;
         if (c.type === 'player' && (c.uid === s.owner || c.spawnProtect > 0)) continue;
         const d = Math.hypot(c.x - s.x, c.y - s.y);
         if (d < bd) {
@@ -583,7 +640,11 @@ export class Game {
     const rec = RECIPES[m.item];
     if (!rec) return;
     // технологии и ритуалы — только своему пути
-    if (rec.path && p.path !== rec.path) return this.toast(p, `Это умеет только ${PATHS[rec.path].name.toLowerCase()}`);
+    // исключение — испытание разума: без пути, у алтаря выбора, на собранном там верстаке
+    const trial = !!rec.trial && !p.path && !!this.atShrine(p);
+    if (rec.path && p.path !== rec.path && !trial) {
+      return this.toast(p, rec.trial && !p.path ? 'Испытание разума проходят у алтаря выбора: соберите там верстак' : `Это умеет только ${PATHS[rec.path].name.toLowerCase()}`);
+    }
     if (rec.bench && !this.nearBench(p)) return this.toast(p, 'Нужен верстак рядом');
     if (rec.ability && !p.abil.has(rec.ability)) return this.toast(p, `Нужно умение «${ABILITIES[rec.ability].name}» (путь разума)`);
     if (rec.lab && !this.nearLab(p)) return this.toast(p, 'Нужна лаборатория рядом');
@@ -598,6 +659,7 @@ export class Game {
     p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${out} ${ITEMS[m.item].icon} ${ITEMS[m.item].name}` });
     // новое оружие сразу в лапы, если они свободны
     if (WEAPONS[m.item] && !p.weapon && p.stats.canHold) p.weapon = m.item;
+    if (trial) this.setPath(p, 'mind'); // оружие создано своими руками — испытание разума пройдено
   }
 
   onUse(p, m) {
@@ -781,7 +843,8 @@ export class Game {
     if (Math.hypot(x - p.x, y - p.y) > PLAYER.buildRange + HS) return this.toast(p, 'Слишком далеко для стройки');
     if (isWater(this.tiles[ty * MAP_W + tx])) return this.toast(p, 'Нельзя строить на воде');
     if (this.tiles[ty * MAP_W + tx] === T.WALL) return this.toast(p, 'Здесь стоит стена');
-    for (const k in def.cost) if ((p.inv[k] || 0) < def.cost[k]) return this.toast(p, 'Не хватает ресурсов');
+    const cost = buildCost(m.kind, p.path); // части верстака нужны всем, кроме пути разума
+    for (const k in cost) if ((p.inv[k] || 0) < cost[k]) return this.toast(p, def.parts && !(k in def.cost) ? `Нужна часть верстака: ${ITEMS[k].name.toLowerCase()}` : 'Не хватает ресурсов');
     let count = 0;
     for (const s of this.statics.values()) if (s.cat === 'struct' && s.owner === p.uid) count++;
     if (count >= PLAYER.maxStructures) return this.toast(p, 'Достигнут лимит построек');
@@ -796,7 +859,7 @@ export class Game {
         if (circleBox(c.x, c.y, c.stats.radius, x, y)) return this.toast(p, 'Мешает существо');
       }
     }
-    for (const k in def.cost) p.inv[k] -= def.cost[k];
+    for (const k in cost) p.inv[k] -= cost[k];
     if (m.kind === 'nest') {
       const old = this.nests.get(p.uid);
       if (old) this.removeStatic(old);
@@ -881,7 +944,10 @@ export class Game {
       }
       if (f.mana && p.path === 'spirit') p.mana = Math.min(p.maxMana, p.mana + f.mana);
       if (f.rad) p.rad = Math.min(100, p.rad + f.rad);
-      this.toast(p, f.hal.s >= 1 ? '💠 Реальность трескается и сияет…' : '🍄 Мир начинает плыть…');
+      if (f.wind) p.windT = f.wind;
+      if (f.numb) p.numbT = f.numb;
+      this.toast(p, f.wind ? '🌵 Второе дыхание: бег не отнимает сил' : f.numb ? '🐸 Тело немеет: удары почти не чувствуются'
+        : f.hal.s >= 1 ? '💠 Реальность трескается и сияет…' : '🍄 Мир начинает плыть…');
     }
     p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${Math.round(food)} 🍖${f.water ? `  +${f.water} 💧` : ''}${extra}` });
   }
@@ -1033,6 +1099,9 @@ export class Game {
     if (p.weapon && !ABILITIES[p.weapon] && !(p.inv[p.weapon] > 0)) p.weapon = null; // оружие выложили или потратили
     for (const id in p.abcd) if (p.abcd[id] > 0) p.abcd[id] = Math.max(0, p.abcd[id] - dt);
     p.medWarnT = Math.max(0, p.medWarnT - dt);
+    if (p.windT > 0) p.windT -= dt;
+    if (p.numbT > 0) p.numbT -= dt;
+    if (p.trial && this.time > p.trial.until) this.endTrial(p, '🔮 Трип кончился, проводники растаяли. Испытание духа не пройдено — соберите гриб, кактус и жабу заново.');
     if (p.halT > 0) {
       p.halT -= dt;
       if (p.halT <= 0) {
@@ -1089,7 +1158,7 @@ export class Game {
     }
     if (sprinting) {
       speed *= PLAYER.sprintMul;
-      p.stamina = Math.max(0, p.stamina - PLAYER.staminaUse * dt);
+      if (!(p.windT > 0)) p.stamina = Math.max(0, p.stamina - PLAYER.staminaUse * dt); // пейотль: бег даром
     } else {
       p.stamina = Math.min(100, p.stamina + PLAYER.staminaRegen * dt);
     }
@@ -1565,7 +1634,9 @@ export class Game {
     if (t.dead || amount <= 0) return 0;
     const silent = kind === 'starve' || kind === 'rad'; // урон «изнутри»: без цифр и защиты
     if (t.type === 'player' && t.spawnProtect > 0 && !silent) return 0;
+    if (t.owner && (!src || src.id !== t.owner)) return 0; // проводника ранит только тот, чьё это испытание
     if (!silent) amount *= 1 - t.stats.defense;
+    if (!silent && t.numbT > 0) amount *= 0.6; // онемение от жабы
     if (!silent && t.hexT > 0) amount *= t.hexVuln || 1.25;
     // щит духа поглощает урон первым
     if (!silent && t.shieldT > 0 && t.shieldHp > 0) {
@@ -1603,6 +1674,18 @@ export class Game {
       this.npcs.delete(t.id);
       const def = NPCS[t.kind];
       this.fx.push({ k: 'die', x: t.x, y: t.y, c: t.color, r: t.stats.radius, id: t.id, f: def.faction });
+      if (t.owner) {
+        // проводник в мир духов: когда убиты все — испытание духа пройдено
+        const o = this.players.get(t.owner);
+        if (o && o.trial) {
+          o.trial.left--;
+          if (o.trial.left <= 0) {
+            o.trial = null;
+            o.halT = Math.min(o.halT, 12);
+            if (!o.path) this.setPath(o, 'spirit');
+          } else this.toast(o, `🔮 Проводник повержен. Осталось: ${o.trial.left}`);
+        }
+      }
       if (killerIsPlayer) {
         src.dna += def.dna;
         const parts = [];
@@ -1631,6 +1714,7 @@ export class Game {
     t.hexT = 0;
     t.stunT = 0;
     if (t.type === 'player') {
+      this.endTrial(t, '🔮 Вы погибли в трипе — испытание духа не пройдено.');
       t.halT = 0;
       t.halS = 0;
     }
@@ -2086,6 +2170,8 @@ export class Game {
       acd: Object.fromEntries(Object.entries(p.abcd).filter(([, v]) => v > 0).map(([k, v]) => [k, round1(v)])),
       lab: this.nearLab(p) ? 1 : 0, med: p.meditating ? 1 : 0, sh: p.shieldT > 0 ? Math.ceil(p.shieldHp) : 0,
       hal: p.halT > 0 ? round1(p.halT) : 0, hs: p.halS,
+      wd: p.windT > 0 ? Math.ceil(p.windT) : 0, nb: p.numbT > 0 ? Math.ceil(p.numbT) : 0,
+      tr: p.trial ? [p.trial.left, Math.ceil(p.trial.until - this.time)] : null,
     };
   }
 
@@ -2118,6 +2204,7 @@ export class Game {
       const e = [];
       for (const d of dyn) if ((d.x - p.x) ** 2 + (d.y - p.y) ** 2 <= vr2) e.push(d);
       for (const n of this.npcsNear(p.x, p.y, vr)) {
+        if (n.owner && n.owner !== p.id) continue; // проводников видит только тот, кто в трипе
         let d = npcSer.get(n.id);
         if (!d) npcSer.set(n.id, (d = this.serNpc(n)));
         e.push(d);

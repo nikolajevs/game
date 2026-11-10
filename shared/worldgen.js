@@ -295,6 +295,7 @@ export function generateZones(tiles, seed) {
   place('mine', (t) => t === T.ROCK, 0.4);
   place('lair', (t) => t === T.FOREST || t === T.ROCK, 0.55);
   place('altar', (t) => t === T.GRASS || t === T.FOREST, 0.6); // древние алтари — на лугах и в лесах
+  place('shrine', (t) => t === T.GRASS, 0.7); // алтари выбора пути — на открытых лугах
   return zones;
 }
 
@@ -370,6 +371,8 @@ export function generateResources(tiles, seed, zones = []) {
       } else if (site?.kind === 'mine') {
         // рудник: много руды, серы и металлолома
         kind = r < 0.17 ? (r2 < 0.45 ? 'sulfur' : 'rock') : r < 0.22 ? 'scrap' : null;
+      } else if (site?.kind === 'shrine') {
+        kind = r < 0.02 ? 'rock' : null; // вокруг алтаря выбора чисто
       } else if (site?.kind === 'altar') {
         // у алтаря: редкие камни, деревья и сияющие поганки
         kind = r < 0.03 ? 'rock' : r < 0.05 ? 'tree' : r < 0.056 ? 'mush_glow' : null;
@@ -387,7 +390,12 @@ export function generateResources(tiles, seed, zones = []) {
       }
       else if (t === T.GRASS) kind = r < 0.035 ? 'tree' : r < 0.055 ? 'bush' : r < 0.075 ? null : r < 0.09 ? 'rock' : null;
       else if (t === T.ROCK) kind = r < 0.2 ? (r2 < 0.3 ? 'sulfur' : 'rock') : r < 0.23 ? 'tree' : null;
-      else if (t === T.SAND) kind = r < 0.015 ? 'rock' : null;
+      else if (t === T.SAND) {
+        // на песке: редкие камни и кактусы-пейотль, а у самой воды — сияющие жабы
+        const shore = tiles[ty * MAP_W + tx - 1] === T.SHALLOW || tiles[ty * MAP_W + tx + 1] === T.SHALLOW
+          || tiles[(ty - 1) * MAP_W + tx] === T.SHALLOW || tiles[(ty + 1) * MAP_W + tx] === T.SHALLOW;
+        kind = r < 0.015 ? 'rock' : r < 0.021 ? 'cactus' : shore && r < 0.035 ? 'frog' : null;
+      }
       if (!kind || (kind === 'tree' && t === T.ROCK)) continue;
       if (kind === 'tree' || kind === 'bush' || kind === 'mush_brown' || kind === 'mush_red') {
         // растения — только если вокруг тоже луг или лес, а не пляж, вода или скалы

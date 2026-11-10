@@ -7,7 +7,7 @@ const CONCRETE = ['#9a968c', '#85827a', '#a8a397', '#77746d'];
 const ROCKS = ['#6f6a62', '#7d776d', '#5e5a54'];
 const WOOD = ['#6b4a2b', '#7a5532', '#5a3d22'];
 const BONE = ['#e8dcc0', '#d8ccb0', '#cfc2a2'];
-const MOTES = { ruins: 220, mine: 70, lair: 0, altar: 90, city: 0, crater: 320 };
+const MOTES = { ruins: 220, mine: 70, lair: 0, altar: 90, city: 0, crater: 320, shrine: 110 };
 const MOSSY = ['#7d8a78', '#6f7a6a', '#8a9488'];
 const _up = new THREE.Vector3(0, 1, 0);
 
@@ -55,6 +55,7 @@ export class ZonesView {
       else if (z.kind === 'mine') this.buildMine(ctx);
       else if (z.kind === 'lair') this.buildLair(ctx);
       else if (z.kind === 'altar') this.buildAltar(ctx);
+      else if (z.kind === 'shrine') this.buildShrine(ctx);
       else this.buildRuins(ctx);
 
       const mesh = new THREE.Mesh(mergeParts(parts), mat);
@@ -79,7 +80,7 @@ export class ZonesView {
         }
         const pg = new THREE.BufferGeometry();
         pg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        points = new THREE.Points(pg, z.kind === 'altar' ? this.altarMoteMat : moteMat);
+        points = new THREE.Points(pg, z.kind === 'altar' || z.kind === 'shrine' ? this.altarMoteMat : moteMat);
         points.frustumCulled = false;
         this.group.add(points);
       }
@@ -304,6 +305,55 @@ export class ZonesView {
 
   // ---------- древний алтарь ----------
   // Круг замшелых монолитов с горящими рунами, плита алтаря и парящий кристалл над ней.
+  // ---------- алтарь выбора пути ----------
+  // Круглый помост и два обелиска: холодный синий — путь разума, лиловый — путь духа; между ними чаша с огнём.
+  buildShrine({ z, r, parts, sprites, gy, at }) {
+    const cy = gy(z.x, z.y);
+    const STONE = ['#8a8d94', '#787b83', '#9a9da3'];
+    parts.push({ geom: G.cyl, matrix: M(z.x, cy + 1.5, z.y, 0, 0.2, 0, 62, 3, 62), color: STONE[1] });
+    parts.push({ geom: G.cyl, matrix: M(z.x, cy + 4.5, z.y, 0, 0.5, 0, 50, 3, 50), color: STONE[0] });
+    parts.push({ geom: G.cyl, matrix: M(z.x, cy + 7.5, z.y, 0, 0.8, 0, 16, 3, 16), color: STONE[2] });
+    // чаша с огнём в центре
+    parts.push({ geom: G.cyl6, matrix: M(z.x, cy + 13, z.y, 0, 0, 0, 3, 9, 3), color: '#4a4d55' });
+    parts.push({ geom: G.cyl, matrix: M(z.x, cy + 19, z.y, 0, 0, 0, 8, 3, 8), color: '#3a3d45' });
+    const fire = new THREE.Sprite(this.lampMat);
+    fire.scale.setScalar(34);
+    fire.position.set(z.x, cy + 26, z.y);
+    sprites.push(fire);
+    const side = (dir, color, mat, gear) => {
+      const x = z.x + dir * 38;
+      const h = 78;
+      parts.push({ geom: G.box, matrix: M(x, cy + 6 + h / 2, z.y, 0, 0.78, dir * 0.04, 13, h, 13), color: STONE[0] });
+      parts.push({ geom: G.box, matrix: M(x, cy + 6 + h * 0.3, z.y, 0, 0.78, 0, 15, 5, 15), color: STONE[1] });
+      parts.push({ geom: G.cone5, matrix: M(x, cy + 6 + h + 8, z.y, 0, 0.78, 0, 9, 16, 9), color: STONE[2] });
+      // знак пути над обелиском: шестерня разума или кристалл духа
+      if (gear) {
+        parts.push({ geom: G.cyl, matrix: M(x, cy + h + 42, z.y, Math.PI / 2, 0, 0, 9, 3, 9), color });
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          parts.push({ geom: G.box, matrix: M(x + Math.cos(a) * 10.5, cy + h + 42 + Math.sin(a) * 10.5, z.y, 0, 0, a, 4, 3.4, 3), color });
+        }
+      } else parts.push({ geom: G.octa, matrix: M(x, cy + h + 42, z.y, 0, 0.6, 0, 7, 13, 7), color });
+      for (const [s, dy] of [[52, h + 42], [22, h * 0.55]]) {
+        const g = new THREE.Sprite(mat);
+        g.scale.setScalar(s);
+        g.position.set(x, cy + dy, z.y);
+        sprites.push(g);
+      }
+    };
+    if (!this.mindMat) this.mindMat = new THREE.SpriteMaterial({ map: glowTexture(), color: '#5ec8ff', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.5 });
+    if (!this.soulMat) this.soulMat = new THREE.SpriteMaterial({ map: glowTexture(), color: '#c77dff', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.5 });
+    side(-1, '#8fdcff', this.mindMat, true);
+    side(1, '#d8a8ff', this.soulMat, false);
+    // кольцо низких камней по границе
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      const [x, y] = at(z.r * 0.55, a);
+      const h = 10 + r() * 8;
+      parts.push({ geom: G.box, matrix: M(x, gy(x, y) + h / 2 - 1, y, 0, -a, (r() - 0.5) * 0.2, 6, h, 9), color: STONE[i % 3] });
+    }
+  }
+
   buildAltar({ z, r, parts, sprites, gy, at }) {
     const cy = gy(z.x, z.y);
     // ступенчатое основание и плита

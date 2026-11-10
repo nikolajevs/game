@@ -117,15 +117,23 @@ canvas#game { cursor: none; }
 .pw-title { font-size: 26px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; background: linear-gradient(90deg, #5ec8ff, #e8f0e6 50%, #c77dff); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .pw-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
 .pw-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.pw-card { position: relative; height: min(600px, calc(100vh - 170px)); min-height: 430px; border-radius: 16px; overflow: hidden; cursor: pointer; border: 1px solid color-mix(in srgb, var(--pc) 45%, transparent);
+.pw-card { position: relative; height: min(640px, calc(100vh - 150px)); min-height: 520px; border-radius: 16px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--pc) 45%, transparent);
   transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease, border-color 0.25s; }
 .pw-art { position: absolute; inset: 0; background-size: cover; background-position: center top; transition: transform 0.6s ease; }
-.pw-shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0, 0, 0, 0) 38%, rgba(4, 6, 10, 0.78) 62%, rgba(4, 6, 10, 0.97) 100%); }
+.pw-shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0, 0, 0, 0) 22%, rgba(4, 6, 10, 0.8) 46%, rgba(4, 6, 10, 0.97) 100%); }
 .pw-card:hover { transform: translateY(-6px) scale(1.012); border-color: var(--pc); box-shadow: 0 0 0 1px var(--pc), 0 0 46px color-mix(in srgb, var(--pc) 55%, transparent), 0 20px 50px rgba(0, 0, 0, 0.6); }
 .pw-card:hover .pw-art { transform: scale(1.07); }
 .pw-cards:hover .pw-card:not(:hover) { filter: saturate(0.45) brightness(0.6); }
-.pw-card-body { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 20px 18px; display: flex; flex-direction: column; gap: 7px; }
-.pw-name { font-size: 30px; font-weight: 800; letter-spacing: 1px; color: #fff; text-shadow: 0 0 22px var(--pc), 0 2px 6px #000; line-height: 1.1; }
+.pw-card-body { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 18px 16px; display: flex; flex-direction: column; gap: 5px; }
+.pw-trial { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 10px; background: rgba(0, 0, 0, 0.5); border: 1px solid color-mix(in srgb, var(--pc) 40%, transparent); }
+.pw-trial-h { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; color: var(--pc); margin-bottom: 2px; }
+.pw-step { display: flex; gap: 7px; font-size: 12.5px; line-height: 1.35; color: #d5ddd8; }
+.pw-step i { font-style: normal; width: 14px; text-align: center; color: var(--muted); flex: none; }
+.pw-step.ok { color: #fff; }
+.pw-step.ok i { color: var(--accent2); }
+.pw-step em { font-style: normal; color: var(--muted); font-size: 11.5px; }
+.pw-trial button { align-self: flex-start; margin-top: 5px; font-size: 13px; padding: 6px 14px; background: color-mix(in srgb, var(--pc) 55%, #10161a); border-color: var(--pc); }
+.pw-name { font-size: 27px; font-weight: 800; letter-spacing: 1px; color: #fff; text-shadow: 0 0 22px var(--pc), 0 2px 6px #000; line-height: 1.1; }
 .pw-tag { font-size: 12.5px; text-transform: uppercase; letter-spacing: 3px; color: var(--pc); font-weight: 700; }
 .pw-desc { font-size: 13.5px; line-height: 1.4; color: #dfe8e2; }
 .pw-chips { display: flex; flex-wrap: wrap; gap: 5px; }
@@ -136,7 +144,7 @@ canvas#game { cursor: none; }
 .pw-pts b { color: var(--pc); font-size: 15px; }
 .pw-pts.big { font-size: 15px; padding: 5px 14px; }
 .pw-pts.big b { font-size: 20px; }
-.pw-go { align-self: flex-start; margin-top: 4px; padding: 9px 20px; border-radius: 10px; font-weight: 700; font-size: 14.5px; color: #06090c; background: var(--pc); box-shadow: 0 0 20px color-mix(in srgb, var(--pc) 60%, transparent); transition: transform 0.2s; }
+.pw-go { align-self: flex-start; margin-top: 4px; cursor: pointer; padding: 7px 18px; border-radius: 10px; font-weight: 700; font-size: 14.5px; color: #06090c; background: var(--pc); box-shadow: 0 0 20px color-mix(in srgb, var(--pc) 60%, transparent); transition: transform 0.2s; }
 .pw-card:hover .pw-go { transform: translateX(6px); }
 /* дерево умений выбранного пути */
 .pw-banner { position: relative; height: 150px; border-radius: 14px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--pc) 50%, transparent); }
@@ -338,6 +346,7 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 .cr-info { width: 270px; flex: none; padding-left: 14px; border-left: 1px solid rgba(255, 255, 255, 0.08); display: flex; flex-direction: column; gap: 5px; }
 .cr-info .bm-name { color: var(--pc); font-size: 16px; }
 .cr-big { font-size: 54px; line-height: 1.15; text-align: center; padding: 6px 0; border-radius: 12px; background: radial-gradient(ellipse at center, color-mix(in srgb, var(--pc) 22%, transparent), transparent 70%); filter: drop-shadow(0 6px 6px rgba(0, 0, 0, 0.5)); }
+.cr-trial { font-size: 12px; line-height: 1.35; padding: 6px 9px; border-radius: 8px; color: #e6f7ff; background: rgba(94, 200, 255, 0.14); border: 1px solid rgba(94, 200, 255, 0.5); }
 .cr-need { font-size: 12px; display: flex; flex-direction: column; gap: 1px; }
 .cr-need .ok { color: var(--accent2); }
 .cr-need .poor { color: #ff8a80; }

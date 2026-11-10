@@ -1,6 +1,6 @@
 // Клиент игры: вход, сеть, интерполяция, управление, стройка, интерфейс.
 import {
-  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, BUILD_CATS, BUILD_PAINT, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES, ABILITIES,
+  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, BUILD_CATS, BUILD_PAINT, buildCost, ITEMS, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES, ABILITIES,
 } from '/shared/config.js';
 import { zoneAt, generateMap, tilesHash } from '/shared/worldgen.js';
 import { computeStats, decodeGenome, defaultGenome, encodeGenome } from '/shared/creature.js';
@@ -544,7 +544,9 @@ function buildCheck(kind, x, y) {
   if (S.tiles[ty * MAP_W + tx] === 7) return 'Здесь стоит стена';
   if (S.structAt.has(`${x},${y}`)) return 'Место занято';
   if (def.ability && !(you.ab || []).includes(def.ability)) return `Нужно умение «${ABILITIES[def.ability].name}» (путь разума, P)`;
-  for (const [r, v] of Object.entries(def.cost)) if (you.inv[r] < v) return 'Не хватает ресурсов';
+  for (const [r, v] of Object.entries(buildCost(kind, you.pa))) {
+    if ((you.inv[r] || 0) < v) return def.parts && !(r in def.cost) ? `Нужна часть верстака: ${ITEMS[r].name.toLowerCase()}` : 'Не хватает ресурсов';
+  }
   if (def.solid === true) {
     for (const v of world.ents.values()) {
       if (v.dd) continue; // павшие не мешают
@@ -845,6 +847,8 @@ function frame(now) {
     }
   }
   hud.siteName = site ? SITES[site.kind].name : '';
+  hud.atShrine = site?.kind === 'shrine';
+  paths.atShrine = hud.atShrine;
   // дошли до метки — она больше не нужна
   if (S.marker && !you.dead && Math.hypot(S.marker.x - S.me.x, S.marker.y - S.me.y) < 70) {
     setMarker(null, true);

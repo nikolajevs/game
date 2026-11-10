@@ -12,7 +12,7 @@ const _c = new THREE.Color();
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const STATIC_CHUNK = 600;
 // ресурсы рисуются пулами по участкам карты; постройки — отдельными мешами
-const RESOURCE_KINDS = new Set(['tree', 'rock', 'sulfur', 'bush', 'crystal', 'scrap', 'car', 'terminal', 'mush_brown', 'mush_red', 'mush_glow']);
+const RESOURCE_KINDS = new Set(['tree', 'rock', 'sulfur', 'bush', 'crystal', 'scrap', 'car', 'terminal', 'cactus', 'frog', 'mush_brown', 'mush_red', 'mush_glow']);
 const MUSH = new Set(['mush_brown', 'mush_red', 'mush_glow']);
 const capGeo = new THREE.SphereGeometry(1, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2); // шляпка — полусфера
 // вид грибов: [шляпка, ножка]
@@ -447,6 +447,8 @@ export class StaticsView {
     else if (s.k === 'crystal') this.addCrystal(o);
     else if (s.k === 'scrap') this.addScrap(o);
     else if (s.k === 'car') this.addCar(o);
+    else if (s.k === 'cactus') this.addCactus(o);
+    else if (s.k === 'frog') this.addFrog(o);
     else if (s.k === 'terminal') this.addTerminal(o);
     else if (MUSH.has(s.k)) this.addMushrooms(o);
     else this.addStructure(o);
@@ -484,6 +486,8 @@ export class StaticsView {
     else if (k === 'crystal') this.addCrystal(o);
     else if (k === 'scrap') this.addScrap(o);
     else if (k === 'terminal') this.addTerminal(o);
+    else if (k === 'cactus') this.addCactus(o);
+    else if (k === 'frog') this.addFrog(o);
     else if (MUSH.has(k)) this.addMushrooms(o);
   }
 
@@ -538,6 +542,53 @@ export class StaticsView {
       this.group.add(g);
     }
     if (o.mesh) o.mesh.visible = left > 0;
+  }
+
+  // пейотль: приплюснутые зелёные «пуговицы» с розовым цветком; чем меньше прочности, тем их меньше
+  addCactus(o) {
+    const s = o.s;
+    const pools = o.pools;
+    const r = rng(s.v || 0.4);
+    const gy = this.ground(s.x, s.y);
+    const left = Math.max(1, Math.ceil((s.h / (s.m || 1)) * 3));
+    for (let i = 0; i < 3; i++) {
+      const a = r() * Math.PI * 2;
+      const d = i === 0 ? 0 : 7 + r() * 3;
+      const sc = (i === 0 ? 5.5 : 3.8) + r();
+      const x = s.x + Math.cos(a) * d;
+      const z = s.y + Math.sin(a) * d;
+      const show = i < left;
+      pools.berry.set(`${s.i}:c${i}`, show ? M(x, gy + sc * 0.55, z, 0, r() * 3, 0, sc, sc * 0.7, sc) : _hidden, _c.set(i ? '#5f9a6a' : '#6fae78').clone());
+      pools.berry.set(`${s.i}:f${i}`, show ? M(x, gy + sc * 1.25, z, 0, 0, 0, sc * 0.3, sc * 0.2, sc * 0.3) : _hidden, _c.set('#ff8fc4').clone());
+      if (!o.built) o.parts.push([pools.berry, `${s.i}:c${i}`], [pools.berry, `${s.i}:f${i}`]);
+    }
+    o.built = true;
+  }
+
+  // сияющая жаба: приземистое тело, выпученные глаза и светящиеся пятна на спине
+  addFrog(o) {
+    const s = o.s;
+    const pools = o.pools;
+    const r = rng(s.v || 0.4);
+    const gy = this.ground(s.x, s.y);
+    const a = r() * Math.PI * 2;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    const k = s.h >= (s.m || 1) ? 1 : 0.8;
+    const put = (pool, key, fx, y, fz, sx, sy, sz, color) => {
+      pool.set(`${s.i}:${key}`, M(s.x + ca * fx + sa * fz, gy + y * k, s.y - sa * fx + ca * fz, 0, a, 0, sx * k, sy * k, sz * k), _c.set(color).clone());
+      if (!o.built) o.parts.push([pool, `${s.i}:${key}`]);
+    };
+    put(pools.berry, 'body', 0, 3.2, 0, 6.5, 4, 5.5, '#3f8f4a');
+    put(pools.berry, 'head', 4.6, 4.2, 0, 3.8, 3, 4.4, '#4aa056');
+    put(pools.berry, 'belly', 1, 1.8, 0, 5.5, 2, 4.8, '#c9d98a');
+    for (const side of [-1, 1]) {
+      put(pools.berry, `leg${side}`, -3.4, 1.6, side * 4.8, 3.6, 1.8, 2.4, '#357a40');
+      put(pools.berry, `eye${side}`, 5.6, 6.6, side * 2.3, 1.5, 1.5, 1.5, '#f5e9a0');
+      put(pools.mushGlow, `spot${side}`, -0.5, 6.1, side * 2.2, 1.5, 0.9, 1.5, '#9dffb0');
+    }
+    put(pools.mushGlow, 'spot0', -3, 5.6, 0, 1.3, 0.8, 1.3, '#9dffb0');
+    o.built = true;
   }
 
   // остов машины: ржавый кузов, кабина без стёкол, спущенные колёса

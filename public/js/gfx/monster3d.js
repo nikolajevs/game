@@ -21,6 +21,11 @@ const MODELS = {
     h: 54, hover: 12, clips: { idle: 'Flying_Idle', walk: 'Flying_Idle', run: 'Fast_Flying', attack: 'Punch', shoot: 'Headbutt', hit: 'HitReact', death: 'Death' },
     runAt: 60, impact: 0.4, ghost: true,
   },
+  // проводник в мир духов: тот же призрак, но золотой и ярче — его видно только в трипе испытания
+  guide: {
+    file: 'wraith', h: 62, hover: 16, clips: { idle: 'Flying_Idle', walk: 'Flying_Idle', run: 'Fast_Flying', hit: 'HitReact', death: 'Death' },
+    runAt: 60, ghost: true, ghostTint: '#ffe9a0', glow: '#ffd76a',
+  },
   spider: { h: 30, clips: { idle: 'Idle', walk: 'Walk', run: 'Run', attack: 'Attack', hit: 'Hit', death: 'TurnOff' }, runAt: 90, stride: 120, impact: 0.45, eye: 0.6, tint: '#a4a4ac' },
   drone: { h: 26, hover: 36, clips: { idle: 'Idle', walk: 'Idle', run: 'Idle', shoot: 'Attack', hit: 'Hit' }, runAt: 999, impact: 0.3, eye: 0.5, lean: 0.35, tint: '#a4a4ac' },
   reaper: { h: 66, clips: { idle: 'Idle', walk: 'Walk', run: 'Run', attack: 'Attack', hit: 'Hit', death: 'TurnOff' }, runAt: 70, stride: 90, impact: 0.45, eye: 0.7, tint: '#a4a4ac' },
@@ -56,7 +61,7 @@ function loadModel(kind) {
     loader.setMeshoptDecoder(MeshoptDecoder);
   }
   const def = MODELS[kind];
-  const p = loader.loadAsync(`${BASE}${kind}.glb`).then((gltf) => {
+  const p = loader.loadAsync(`${BASE}${def.file || kind}.glb`).then((gltf) => {
     const scene = gltf.scene;
     const roots = new Set();
     scene.traverse((o) => {
@@ -168,7 +173,7 @@ export class Monster3D {
             c.transparent = true;
             c.opacity = 0.78;
             c.depthWrite = true;
-            c.color.multiply(new THREE.Color('#b8ffe0'));
+            c.color.multiply(new THREE.Color(this.def.ghostTint || '#b8ffe0'));
           }
           own.set(m, c);
           this.mats.push(c);
@@ -188,7 +193,7 @@ export class Monster3D {
     }
     // огонёк: у машин — красный или жёлтый «глаз», у духа — холодное сияние
     if (this.def.eye || this.def.ghost) {
-      this.eye = new THREE.Sprite(eyeMaterial(this.def.ghost ? '#7dffd0' : this.npc.color));
+      this.eye = new THREE.Sprite(eyeMaterial(this.def.glow || (this.def.ghost ? '#7dffd0' : this.npc.color)));
       this.eye.scale.setScalar(this.def.ghost ? this.height * 1.5 : this.height * 0.55);
       this.eye.position.set(this.def.ghost ? 0 : this.height * 0.12, this.height * (this.def.ghost ? 0.5 : this.def.eye), 0);
       this.root.add(this.eye);
@@ -325,8 +330,9 @@ export class Monster3D {
     // вспышка при попадании и предупреждение о замахе
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 5);
     const warn = warning ? 0.2 + (0.5 + 0.5 * Math.sin(this.t * 26)) * 0.25 : 0;
-    const r = Math.max(this.flash * 0.8, warn * 0.7);
-    const g = this.flash * 0.25 + warn * 0.12 + (def.ghost ? 0.1 + night * 0.12 : 0);
+    const gold = def.glow ? 0.28 + Math.sin(this.t * 3) * 0.08 : 0; // проводник светится тёплым
+    const r = Math.max(this.flash * 0.8, warn * 0.7) + gold;
+    const g = this.flash * 0.25 + warn * 0.12 + (def.ghost ? 0.1 + night * 0.12 : 0) + gold * 0.7;
     const b = this.flash * 0.25 + (def.ghost ? 0.08 + night * 0.1 : 0);
     for (const m of this.mats) if (m.emissive) m.emissive.setRGB(r, g, b);
   }

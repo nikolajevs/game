@@ -35,9 +35,15 @@ export function updateNpc(g, n, dt, night) {
   // хозяева мест и лесные духи не уходят далеко от дома
   const homebound = def.behavior === 'territorial' || def.behavior === 'guardian';
 
-  if (def.behavior === 'passive') {
+  if (def.behavior === 'passive' || def.behavior === 'guide') {
     let threat = n.alertT > 0 ? g.getCreature(n.target) : null;
     if (!threat || threat.dead) threat = g.nearestPlayer(n.x, n.y, def.flee, false);
+    // проводник в мир духов бежит только от своего игрока и далеко от своего места не уходит
+    if (def.behavior === 'guide') {
+      const o = g.getCreature(n.owner);
+      threat = o && !o.dead && Math.hypot(o.x - n.x, o.y - n.y) < def.flee ? o : null;
+      if (threat && Math.hypot(n.x - n.homeX, n.y - n.homeY) > n.leash) threat = null;
+    }
     if (threat) {
       const dx = n.x - threat.x;
       const dy = n.y - threat.y;
@@ -46,6 +52,13 @@ export function updateNpc(g, n, dt, night) {
       my = dy / d;
       speed *= 1.25;
       n.angle = Math.atan2(my, mx);
+    } else if (def.behavior === 'guide' && Math.hypot(n.x - n.homeX, n.y - n.homeY) > n.leash * 0.7) {
+      // оторвался — плывёт обратно к своему месту
+      const d = Math.hypot(n.homeX - n.x, n.homeY - n.y) || 1;
+      mx = (n.homeX - n.x) / d;
+      my = (n.homeY - n.y) / d;
+      n.angle = Math.atan2(my, mx);
+      speed *= 0.5;
     } else {
       [mx, my] = wander(n, dt);
       speed *= 0.45;

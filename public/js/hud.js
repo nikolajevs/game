@@ -1,6 +1,6 @@
 // Интерфейс поверх 3D: полоски, инвентарь, пояс с оружием, крафт, мини-карта, чат, хранилище.
 import {
-  ITEMS, ITEM_KEYS, RES_KEYS, STRUCTURES, BUILD_CATS, repairCost, demolishRefund, MAP_W, MAP_H, TILE, lightAt,
+  ITEMS, ITEM_KEYS, RES_KEYS, STRUCTURES, BUILD_CATS, buildCost, repairCost, demolishRefund, MAP_W, MAP_H, TILE, lightAt,
   WEAPONS, WEAPON_ORDER, RECIPES, CRAFT_TABS, CRAFT_MAX, USES, RAD, SITES, ABILITIES, ABILITY_ORDER, FOOD,
 } from '/shared/config.js';
 
@@ -111,6 +111,7 @@ export class Hud {
       altar: ['rgba(160, 90, 220, 0.35)', 'rgba(199, 125, 255, 0.95)'],
       city: ['rgba(0, 0, 0, 0)', 'rgba(255, 190, 90, 0.75)'], // сам город виден по клеткам — только контур
       crater: ['rgba(190, 230, 60, 0.4)', 'rgba(230, 210, 40, 0.95)'],
+      shrine: ['rgba(255, 255, 255, 0.35)', 'rgba(255, 255, 255, 0.95)'],
     };
     for (const z of this.zones) {
       const [fill, stroke] = SITE_COLORS[z.kind] || SITE_COLORS.ruins;
@@ -179,10 +180,13 @@ export class Hud {
     else if (you.fire) status = '🔥 У костра: здоровье восстанавливается быстрее';
     else if (you.lab) status = '🔬 Лаборатория рядом: изучайте данные и ставьте опыты в окне пути (P), крафтите технологии (C)';
     if (you.hal > 0) status = `${you.hs >= 1 ? '💠' : '🍄'} Галлюцинации: ещё ${Math.ceil(you.hal)} с — не всему, что видите, можно верить`;
+    if (you.wd > 0) status = `🌵 Второе дыхание: бег не отнимает сил ещё ${you.wd} с`;
+    if (you.nb > 0) status = `🐸 Онемение: урон по вам меньше на 40% ещё ${you.nb} с`;
     if (you.med) status = '🕯 Медитация у алтаря: сила духа копится, мана восстанавливается быстрее';
     if (you.sh > 0) status = `🛡 Щит духа: ${you.sh}`;
     if (you.rz > 0) status = `☢ ${this.siteName || 'Радиационная зона'} (радиация ${Math.ceil(you.rz)}) — облучение растёт, копится мутаген`;
     if (you.rad >= RAD.dmgStart) status = '☢ Лучевая болезнь! Уйдите из зоны и примите антирад [R]';
+    if (you.tr) status = `🔮 Трип: найдите и убейте проводников в мир духов — осталось ${you.tr[0]}, времени ${you.tr[1]} с`;
     if (you.f <= 0 || you.w <= 0) status = '⚠ Вы голодаете — поешьте [F] или попейте у воды [E]';
     if (this.cache.status !== status) {
       this.cache.status = status;
@@ -349,16 +353,17 @@ export class Hud {
     }
     // карточки построек раздела
     const lack = (cost) => Object.entries(cost).some(([r, v]) => (inv[r] || 0) < v);
-    const cards = cat.items.map((k) => `${k}${lack(STRUCTURES[k].cost) ? 'p' : ''}${STRUCTURES[k].ability && !has.has(STRUCTURES[k].ability) ? 'l' : ''}`).join(',') + `|${placing ? b.kind : ''}`;
+    const costOf = (k) => buildCost(k, you.pa); // части верстака нужны всем, кроме пути разума
+    const cards = cat.items.map((k) => `${k}${lack(costOf(k)) ? 'p' : ''}${STRUCTURES[k].ability && !has.has(STRUCTURES[k].ability) ? 'l' : ''}`).join(',') + `|${placing ? b.kind : ''}`;
     if (this.cache.bmCards !== cards) {
       this.cache.bmCards = cards;
       bm.cards.innerHTML = cat.items.map((k, i) => {
         const d = STRUCTURES[k];
         const locked = d.ability && !has.has(d.ability);
         const icon = this.buildIcons[k] ? `<img src="${this.buildIcons[k]}" alt="" draggable="false">` : '<div class="bm-noicon">🔨</div>';
-        return `<div class="bm-card${placing && k === b.kind ? ' on' : ''}${lack(d.cost) ? ' poor' : ''}${locked ? ' locked' : ''}" data-kind="${k}">
+        return `<div class="bm-card${placing && k === b.kind ? ' on' : ''}${lack(costOf(k)) ? ' poor' : ''}${locked ? ' locked' : ''}" data-kind="${k}">
           <kbd>${i + 1}</kbd>${locked ? '<div class="bm-lock">🔒</div>' : ''}${icon}
-          <div class="bm-n">${d.name}</div><div class="bm-c">${costText(d.cost, inv)}</div></div>`;
+          <div class="bm-n">${d.name}</div><div class="bm-c">${costText(costOf(k), inv)}</div></div>`;
       }).join('');
     }
     // справка справа
@@ -374,7 +379,7 @@ export class Hud {
         : b.reason ? `<div class="bm-state bad">✖ ${b.reason}</div>` : '<div class="bm-state good">✔ Можно ставить</div>';
       info = `<div class="bm-name">${d.name}</div><div class="bm-desc">${d.desc}</div>
         <div class="bm-stats"><span>❤ ${d.hp}</span><span>${d.mat === 'stone' ? '🪨 камень' : '🪵 дерево'}</span><span>${d.solid === true ? 'преграда' : d.solid === 'owner' ? 'проход только вам' : 'можно пройти'}</span></div>
-        <div class="bm-reslist">${resRows(d.cost)}</div>${state}`;
+        <div class="bm-reslist">${resRows(costOf(b.kind))}</div>${state}`;
     } else {
       const repair = b.mode === 'repair';
       const t = b.target;
@@ -453,10 +458,11 @@ export class Hud {
   }
 
   renderCraft(you) {
-    const sig = `${ITEM_KEYS.map((k) => you.inv[k] || 0).join(',')}|${you.bench}|${you.lab}|${you.fire}|${(you.ab || []).join(',')}|${you.pa}|${this.craftTab}|${this.craftSel}`;
+    const sig = `${ITEM_KEYS.map((k) => you.inv[k] || 0).join(',')}|${this.atShrine}|${you.bench}|${you.lab}|${you.fire}|${(you.ab || []).join(',')}|${you.pa}|${this.craftTab}|${this.craftSel}`;
     if (this.cache.craft === sig) return;
     this.cache.craft = sig;
-    const tabs = CRAFT_TABS.filter((t) => !t.path || t.path === you.pa);
+    // вкладка испытания разума — только тем, кто ещё без пути и стоит у алтаря выбора
+    const tabs = CRAFT_TABS.filter((t) => (t.trial ? !you.pa && this.atShrine : !t.path || t.path === you.pa));
     let tab = tabs.find((t) => t.id === this.craftTab);
     if (!tab) {
       tab = tabs[0];
@@ -464,10 +470,10 @@ export class Hud {
     }
     if (!tab.items.includes(this.craftSel)) this.craftSel = tab.items[0];
     const sel = this.craftSel;
-    this.craftEl.dataset.path = tab.path || '';
-    $('craftTabs').innerHTML = tabs.map((t) => `<div class="cr-tab${t === tab ? ' on' : ''}${t.path ? ` path-${t.path}` : ''}" data-tab="${t.id}"><span>${t.icon}</span>${t.name}</div>`).join('');
+    this.craftEl.dataset.path = tab.path || (tab.trial ? 'mind' : '');
+    $('craftTabs').innerHTML = tabs.map((t) => `<div class="cr-tab${t === tab ? ' on' : ''}${t.path || t.trial ? ` path-${t.path || 'mind'}` : ''}" data-tab="${t.id}"><span>${t.icon}</span>${t.name}</div>`).join('');
     // мастерские пути: что из них сейчас рядом
-    const st = you.pa === 'mind' ? [['🔨', 'Верстак', you.bench], ['🔬', 'Лаборатория', you.lab]] : you.pa === 'spirit' ? [['🔥', 'Костёр', you.fire]] : [];
+    const st = tab.trial ? [['⚖️', 'Алтарь выбора', true], ['🔨', 'Верстак', you.bench]] : you.pa === 'mind' ? [['🔨', 'Верстак', you.bench], ['🔬', 'Лаборатория', you.lab]] : you.pa === 'spirit' ? [['🔥', 'Костёр', you.fire]] : [];
     $('craftStations').innerHTML = st.map(([ic, nm, on]) => `<div class="cr-st${on ? ' on' : ''}" title="${on ? 'Рядом' : 'Не рядом — подойдите или постройте (B)'}">${ic} ${nm}</div>`).join('');
     $('craftGrid').innerHTML = tab.items.map((k) => {
       const rec = RECIPES[k];
@@ -502,6 +508,7 @@ export class Hud {
       <div class="cr-big">${ITEMS[sel].icon}</div>
       <div class="bm-name">${ITEMS[sel].name}${rec.out > 1 ? ` ×${rec.out}` : ''}</div>
       <div class="bm-desc">${w ? w.desc : RECIPE_DESC[sel] || ''}</div>
+      ${tab.trial ? '<div class="cr-trial">⚖️ Создайте это оружие на верстаке у алтаря выбора — и вы навсегда ступите на путь разума.</div>' : ''}
       <div class="bm-stats">${chips.map((c) => `<span>${c}</span>`).join('')}</div>
       ${need.length ? `<div class="cr-need">${need.map(([t, ok]) => `<div class="${ok ? 'ok' : 'poor'}">${ok ? '✔' : '✖'} ${t}</div>`).join('')}</div>` : ''}
       <div class="bm-reslist">${Object.entries(rec.cost).map(([r, v]) => {

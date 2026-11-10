@@ -390,6 +390,8 @@ export class Terrain {
         if (hash2(i, j, 77) < 0.22) c.lerp(ASH, 0.45);
       } else if (k > 0 && site.kind === 'lair') {
         c.lerp(TRAMPLED, Math.min(0.75, k * 0.7));
+      } else if (k > 0 && site.kind === 'shrine') {
+        c.lerp(MOSS, k * 0.3);
       } else if (k > 0 && site.kind === 'altar') {
         c.lerp(MOSS, k * 0.45);
       } else if (k > 0) {

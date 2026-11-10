@@ -45,9 +45,15 @@ export const ITEMS = {
   mushroom: { name: 'Боровики', icon: '🟤', kind: 'res' },
   amanita: { name: 'Мухоморы', icon: '🍄', kind: 'res' },
   glowcap: { name: 'Сияющие поганки', icon: '💠', kind: 'res' },
+  peyote: { name: 'Пейотль', icon: '🌵', kind: 'res' }, // кактус с пляжей и скал: второе дыхание
+  toad: { name: 'Сияющая жаба', icon: '🐸', kind: 'res' }, // ловится у воды: онемение
   bone: { name: 'Кости', icon: '🦴', kind: 'res' },
   scrap: { name: 'Металлолом', icon: '⚙️', kind: 'res' },
   electronics: { name: 'Электроника', icon: '🔌', kind: 'res' }, // платы и провода из мёртвого города и роботов
+  // три части верстака для испытания пути разума: лежат в ящиках рудников, города и руин
+  vise: { name: 'Тиски', icon: '🗜️', kind: 'res' },
+  toolkit: { name: 'Набор инструментов', icon: '🧰', kind: 'res' },
+  drive: { name: 'Приводной механизм', icon: '🔩', kind: 'res' },
   sulfur: { name: 'Сера', icon: '🟡', kind: 'res' },
   crystal: { name: 'Мутаген', icon: '💎', kind: 'res' },
   data: { name: 'Носитель данных', icon: '💾', kind: 'res' }, // знания для пути разума (лаборатория)
@@ -126,7 +132,8 @@ export const RECIPES = {
   antirad: { cost: { berries: 4, bone: 2 }, out: 1 },
   // технологии пути разума
   bullets: { cost: { scrap: 1, sulfur: 3 }, out: 4, bench: true, path: 'mind' },
-  pistol: { cost: { scrap: 25, wood: 10 }, bench: true, path: 'mind' },
+  // trial — этим рецептом у алтаря выбора проходят испытание разума: его видно и без пути
+  pistol: { cost: { scrap: 25, wood: 10 }, bench: true, path: 'mind', trial: true },
   shotgun: { cost: { scrap: 45, wood: 15 }, bench: true, path: 'mind' },
   bomb: { cost: { sulfur: 20, scrap: 6, wood: 5 }, bench: true, path: 'mind' },
   laser: { cost: { scrap: 40, sulfur: 10, crystal: 3, electronics: 12 }, lab: true, ability: 'laser', path: 'mind' },
@@ -140,6 +147,7 @@ export const RECIPES = {
 export const CRAFT_TABS = [
   { id: 'weapons', name: 'Оружие', icon: '⚔️', items: ['club', 'spear', 'axe', 'blade', 'pickaxe', 'sling', 'bow', 'crossbow'] },
   { id: 'supplies', name: 'Припасы', icon: '🎒', items: ['arrows', 'antirad'] },
+  { id: 'trial', trial: true, name: 'Испытание разума', icon: '⚖️', items: ['pistol'] }, // только без пути и у алтаря выбора
   { id: 'tech', path: 'mind', name: 'Технологии', icon: '⚙️', items: ['bullets', 'pistol', 'shotgun', 'bomb', 'cell', 'laser'] },
   { id: 'ritual', path: 'spirit', name: 'Ритуалы', icon: '🔮', items: ['elixir', 'dagger', 'staff'] },
 ];
@@ -167,6 +175,9 @@ export const RESOURCES = {
   mush_brown: { name: 'Боровики', r: 11, cr: 0, hp: 30, give: 'mushroom', fixed: 15, respawn: 140 },
   mush_red: { name: 'Мухоморы', r: 11, cr: 0, hp: 30, give: 'amanita', fixed: 15, respawn: 180 },
   mush_glow: { name: 'Сияющие поганки', r: 11, cr: 0, hp: 30, give: 'glowcap', fixed: 15, respawn: 240 },
+  // для испытания пути духа: кактус растёт на песке, жаба сидит на берегу у самой воды
+  cactus: { name: 'Пейотль', r: 12, cr: 0, hp: 30, give: 'peyote', fixed: 15, respawn: 220 },
+  frog: { name: 'Сияющая жаба', r: 11, cr: 0, hp: 30, give: 'toad', fixed: 15, respawn: 240 },
 };
 
 // Пища: сколько насыщает и множитель по типу рта
@@ -178,6 +189,9 @@ export const FOOD = {
   // hal — сколько секунд и насколько сильно «плывёт» мир; spirit — сила духа (кроме пути разума)
   amanita: { food: 4, water: 0, mult: { herb: 1, carn: 1, omni: 1 }, hal: { t: 45, s: 0.6 }, spirit: 2 },
   glowcap: { food: 3, water: 2, mult: { herb: 1, carn: 1, omni: 1 }, hal: { t: 60, s: 1 }, spirit: 3, mana: 40, rad: 8 },
+  // у каждого своё действие: кактус — второе дыхание (бег не тратит силы), жаба — онемение (меньше урона)
+  peyote: { food: 3, water: 8, mult: { herb: 1, carn: 1, omni: 1 }, hal: { t: 30, s: 0.35 }, spirit: 1, wind: 60 },
+  toad: { food: 2, water: 0, mult: { herb: 1, carn: 1, omni: 1 }, hal: { t: 20, s: 0.3 }, spirit: 1, numb: 45 },
 };
 
 // Постройки занимают одну клетку TILE x TILE
@@ -190,7 +204,7 @@ export const STRUCTURES = {
   campfire: { name: 'Костёр', cost: { wood: 15, stone: 5 }, hp: 200, solid: false, mat: 'stone', desc: 'Свет ночью и лечение рядом' },
   spikes: { name: 'Колья', cost: { wood: 25, stone: 5 }, hp: 250, solid: false, mat: 'wood', touchDmg: 12, desc: 'Ранят чужаков' },
   nest: { name: 'Палатка', cost: { wood: 35, bone: 3 }, hp: 400, solid: false, mat: 'wood', desc: 'Точка возрождения (одна на игрока)' }, // ключ nest — ради старых сохранений
-  workbench: { name: 'Верстак', cost: { wood: 50, stone: 30, scrap: 15 }, hp: 500, solid: true, mat: 'wood', desc: 'Нужен для огнестрела, патронов и взрывчатки' },
+  workbench: { name: 'Верстак', cost: { wood: 50, stone: 30, scrap: 15 }, parts: { vise: 1, toolkit: 1, drive: 1 }, hp: 500, solid: true, mat: 'wood', desc: 'Огнестрел, патроны и взрывчатка. Тем, кто не на пути разума, нужны три части верстака' },
   lab: { name: 'Лаборатория', cost: { wood: 60, stone: 40, scrap: 30 }, hp: 550, solid: true, mat: 'stone', desc: 'Данные → знания, опыты; лазеры и энергоячейки' },
   turret: { name: 'Автотурель', cost: { scrap: 40, sulfur: 20, stone: 30, electronics: 15 }, hp: 450, solid: true, mat: 'stone', ability: 'turret', desc: 'Сама стреляет по зверям и чужакам (путь разума)' },
 };
@@ -224,6 +238,11 @@ export function repairCost(kind, hp, maxHp) {
 }
 export const TURRET = { range: 360, cd: 0.7, dmg: 11, speed: 1300 };
 export const STORAGE_CAP = 1500;
+// Цена постройки для игрока с таким путём: части верстака (parts) нужны всем, кроме пути разума
+export function buildCost(kind, path) {
+  const d = STRUCTURES[kind];
+  return d.parts && path !== 'mind' ? { ...d.cost, ...d.parts } : d.cost;
+}
 // Множители урона по постройкам в зависимости от типа атаки и материала
 export const STRUCT_DMG = {
   melee: { wood: 0.5, stone: 0.25 },
@@ -276,13 +295,18 @@ export const SITES = {
     name: 'Древний алтарь', icon: '🕯', count: Math.round(1.5 * SITE_DENSITY), r: 130, lvl: 0, crates: 0, guards: {},
     enter: 'Древний алтарь: постойте неподвижно в круге камней — медитация копит силу духа.',
   },
+  // здесь и только здесь выбирают путь: испытания — в TRIALS
+  shrine: {
+    name: 'Алтарь выбора', icon: '⚖️', count: 6, r: 190, lvl: 0, crates: 0, guards: {},
+    enter: 'Алтарь выбора: здесь выбирают путь. Что нужно для испытаний разума и духа — в окне путей (P).',
+  },
 };
 // особая добыча мест: [предмет, мин, макс, вес] добавляется к общему списку ящика
 export const SITE_LOOT = {
-  ruins: [['data', 1, 2, 7], ['electronics', 2, 5, 5]],
-  mine: [['data', 1, 3, 9]],
+  ruins: [['data', 1, 2, 7], ['electronics', 2, 5, 5], ['drive', 1, 1, 7]],
+  mine: [['data', 1, 3, 9], ['vise', 1, 1, 8]],
   lair: [['artifact', 1, 1, 8]],
-  city: [['electronics', 4, 10, 14], ['data', 1, 2, 7], ['cell', 4, 10, 4]],
+  city: [['electronics', 4, 10, 14], ['data', 1, 2, 7], ['cell', 4, 10, 4], ['toolkit', 1, 1, 9]],
   crater: [['electronics', 8, 16, 12], ['data', 2, 4, 10], ['cell', 8, 16, 6], ['crystal', 2, 4, 6]],
 };
 // [предмет, мин, макс, вес]
@@ -367,6 +391,11 @@ export const NPCS = {
     shoot: { proj: 'bullet', dmg: 13, cd: 0.55, speed: 1200, life: 0.6, min: 150, range: 620 }, biomes: [],
   },
 };
+// Проводник в мир духов: появляется только в трипе испытания, виден и уязвим лишь для того, кто его проходит
+NPCS.guide = {
+  name: 'Проводник', faction: 'spirit', model: 'guide', color: '#ffe08a', r: 18, hp: 70, speed: 128, dmg: 0, reach: 0, behavior: 'guide', flee: 210,
+  dna: 0, loot: {}, spirit: 5, fly: true, biomes: [],
+};
 // сколько бродит по острову вне особых мест (охрана мест — в SITES)
 export const NPC_TARGET = {
   stag: Math.round(150 * WILD_DENSITY), crooked: Math.round(45 * WILD_DENSITY),
@@ -407,12 +436,14 @@ export const PLAYER_COLORS = ['#6fbf73', '#4fa3e0', '#e0a34f', '#d9534f', '#b574
 export const PATHS = {
   mind: {
     name: 'Путь разума', icon: '🧠', pt: 'know', ptName: 'Знания', ptIcon: '📘', color: '#5ec8ff',
-    desc: 'Наука и технологии: глубокая генная инженерия, наниты, экзоскелет, лазеры, ЭМИ и автотурели.',
+    desc: 'Наука и технологии: огнестрел, наниты, экзоскелет, лазеры, ЭМИ и автотурели.',
+    trial: 'Найдите три части верстака, соберите его у алтаря выбора и создайте на нём оружие.',
     how: 'Носители данных 💾 из ящиков города, руин и рудников и из разбитых роботов изучаются в лаборатории; там же можно ставить опыты.',
   },
   spirit: {
     name: 'Путь духа', icon: '🔮', pt: 'spirit', ptName: 'Сила духа', ptIcon: '✨', color: '#c77dff',
     desc: 'Магия и тёмные силы: телекинез, телепорт, огненный шар, щит, вампиризм и проклятие ведьмы.',
+    trial: 'Найдите мухомор, пейотль и сияющую жабу, съешьте их разом у алтаря выбора — и убейте в трипе проводников в мир духов.',
     how: 'Медитация у древних алтарей 🕯, артефакты 🔮 из логов утробников и победы над духами и мутантами леса. Заклинания тратят ману.',
   },
 };
@@ -431,6 +462,14 @@ export const ABILITIES = {
   blink: { short: 'Телепорт', path: 'spirit', tier: 2, cost: 30, kind: 'spell', name: 'Телепорт', icon: '✴️', desc: 'Мгновенный перенос в точку под курсором (до 480 ед.)', mana: 30, cd: 5, range: 480 },
   drain: { short: 'Вампиризм', path: 'spirit', tier: 3, cost: 50, kind: 'spell', name: 'Тёмный вампиризм', icon: '🩸', desc: 'Сгусток тьмы высасывает 18 здоровья из врага и лечит вас', mana: 20, cd: 1.1, proj: 'drain', speed: 720, life: 0.8, dmg: 18 },
   hex: { short: 'Порча', path: 'spirit', tier: 3, cost: 50, kind: 'spell', name: 'Проклятие ведьмы', icon: '💀', desc: 'Порча: 6 урона в секунду 6 с, замедление, цель получает на 25% больше урона', mana: 25, cd: 2.5, proj: 'hex', speed: 620, life: 0.9, dmg: 4, time: 6, dps: 6, vuln: 1.25 },
+};
+// ---- Испытания пути ----
+// Путь выбирают у алтаря выбора (место shrine).
+// Дух: принести гриб, кактус и жабу, съесть их разом — и за время трипа убить проводников в мир духов.
+// Разум: принести три части верстака, собрать его у алтаря и создать на нём оружие (рецепт с trial).
+export const TRIALS = {
+  spirit: { items: ['amanita', 'peyote', 'toad'], guides: 3, time: 150, spread: [220, 480] },
+  mind: { items: ['vise', 'toolkit', 'drive'], weapon: 'pistol' },
 };
 export const ABILITY_ORDER = Object.keys(ABILITIES);
 export const TIER_NEED = [0, 0, 15, 45]; // сколько очков пути нужно вложить, чтобы открыть ступень

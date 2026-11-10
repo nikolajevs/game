@@ -47,7 +47,7 @@ const IMPACT_COLORS = { laser: '#bff8ff', force: '#cfeaff', drain: '#c4163c', he
 const HIT_COLORS = {
   tree: ['#6b4423', '#4f8a3a'], rock: ['#8a8a85', '#6e6e68'], bush: ['#3f7d3a', '#c8324b'],
   crystal: ['#b06bff', '#e6d3ff'], wood: ['#8b5a2b', '#5a3a1c'], stone: ['#8e8f8a', '#6e6e68'],
-  sulfur: ['#d9c23a', '#8a8a85'], scrap: ['#8a5a3a', '#9a9a9a'], car: ['#8a5a3a', '#6e7a86'], terminal: ['#5ec8ff', '#3a3f48'],
+  sulfur: ['#d9c23a', '#8a8a85'], scrap: ['#8a5a3a', '#9a9a9a'], car: ['#8a5a3a', '#6e7a86'], cactus: ['#6fae78', '#ff8fc4'], frog: ['#3f8f4a', '#9dffb0'], terminal: ['#5ec8ff', '#3a3f48'],
   mush_brown: ['#7a4a22', '#e8dcc0'], mush_red: ['#d42e26', '#ffffff'], mush_glow: ['#5ec8ff', '#bfe6ff'],
 };
 const _v = new THREE.Vector3();
