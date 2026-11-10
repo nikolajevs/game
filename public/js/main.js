@@ -1,6 +1,6 @@
 // Клиент игры: вход, сеть, интерполяция, управление, стройка, интерфейс.
 import {
-  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES, ABILITIES,
+  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, BUILD_CATS, BUILD_PAINT, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES, ABILITIES,
 } from '/shared/config.js';
 import { zoneAt, generateMap, tilesHash } from '/shared/worldgen.js';
 import { computeStats, decodeGenome, defaultGenome, encodeGenome } from '/shared/creature.js';
@@ -41,7 +41,7 @@ const S = {
   myId: null, uid: null, tiles: null, you: null, stats: computeStats(defaultGenome()), look: '',
   phase: 0.1, meteor: null, snaps: [], offset: null,
   me: { x: 0, y: 0, face: 0, init: false }, srv: null, srvPrev: null,
-  buildKind: null, lastBuildKind: 'wall_wood', ghost: null,
+  ghost: null,
   structAt: new Map(), dead: false, chatOpen: false,
   lastInput: '', lastInputAt: 0, spitUntil: 0, lastMini: 0,
   aim: { x: 0, y: 0, sky: true }, // точка на земле под курсором
@@ -278,6 +278,7 @@ net.on('welcome', async (m) => {
   world.init(tiles, m.seed, m.uid, S.zones);
   applyStatics(m.statics, null);
   hud.setMap(tiles, S.zones);
+  hud.setBuildIcons(world.structureIcons(STRUCT_ORDER));
   S.ready = true;
   for (const r of S.pendingRes.splice(0)) applyRes(r);
   try {
@@ -403,7 +404,7 @@ function showDeath(m) {
   input.suppressHeld();
   editor.close();
   hud.closeContainer();
-  setBuild(null);
+  setBuildMode(null);
 }
 function hideDeath() {
   S.dead = false;
@@ -448,7 +449,7 @@ function toggleEditor() {
     return;
   }
   if (!S.you || S.you.dead) return;
-  setBuild(null);
+  setBuildMode(null);
   input.enabled = false;
   input.clear();
   editor.open(S.you);
@@ -467,7 +468,7 @@ function togglePaths() {
     return;
   }
   if (!S.you || S.you.dead) return;
-  setBuild(null);
+  setBuildMode(null);
   if (editor.isOpen) editor.close();
   input.enabled = false;
   input.clear();
@@ -502,12 +503,31 @@ function setMarker(m, silent = false) {
 hud.onMarker = (m) => setMarker(m);
 
 // ================= стройка =================
-function setBuild(kind) {
-  S.buildKind = kind;
-  if (kind) S.lastBuildKind = kind;
-  if (!kind) world.setGhost(null);
+// mode: null — стройка закрыта, 'place' — ставим постройку kind, 'repair' и 'demolish' — чиним и сносим свои.
+// cat — открытый раздел меню, last — что было выбрано в каждом разделе, target — постройка под курсором.
+const B = { mode: null, cat: 0, kind: 'wall_wood', last: {}, target: null, cell: '', placedAt: 0, count: 0, countAt: 0 };
+function setBuildMode(mode) {
+  B.mode = mode || null;
+  B.cell = '';
+  if (!B.mode) {
+    world.setGhost(null);
+    hud.setBuildTip(null);
+  }
 }
-hud.onPickBuild = (k) => setBuild(k);
+function pickBuild(kind) {
+  if (!STRUCTURES[kind]) return;
+  B.kind = kind;
+  B.cat = Math.max(0, BUILD_CATS.findIndex((c) => c.items.includes(kind)));
+  B.last[B.cat] = kind;
+  setBuildMode('place');
+}
+function setBuildCat(i) {
+  B.cat = (i + BUILD_CATS.length) % BUILD_CATS.length;
+  pickBuild(B.last[B.cat] || BUILD_CATS[B.cat].items[0]);
+}
+hud.onPickBuild = pickBuild;
+hud.onBuildCat = setBuildCat;
+hud.onBuildTool = setBuildMode;
 hud.onEquip = (item) => net.send({ t: 'equip', item });
 hud.onCloseCont = () => {
   net.send({ t: 'close' });
@@ -544,13 +564,40 @@ function buildCheck(kind, x, y) {
   return '';
 }
 
-// Призрак постройки идёт за курсором; если курсор дальше радиуса стройки — прижимается к краю круга
+// Призрак постройки идёт за курсором; если курсор дальше радиуса стройки — прижимается к краю круга.
+// В режимах ремонта и сноса подсвечивается постройка под курсором.
 function updateBuild() {
-  const active = !!(S.buildKind && S.you && !S.you.dead);
+  const active = !!(B.mode && S.you && !S.you.dead);
   world.setBuildRange(S.me.x, S.me.y, active);
+  B.target = null;
   if (!active) {
     world.setGhost(null);
+    hud.setBuildTip(null);
     S.ghost = null;
+    return;
+  }
+  const now = performance.now();
+  if (now - B.countAt > 500) {
+    B.countAt = now;
+    B.count = 0;
+    for (const o of world.statics.objs.values()) if (o.s.o === S.uid && STRUCTURES[o.s.k]) B.count++;
+  }
+  const tipAt = input.pos.inside && !input.rotating;
+  if (B.mode !== 'place') {
+    S.ghost = null;
+    const t = targetStructure();
+    B.target = t;
+    if (!t) {
+      world.setGhost(null);
+      hud.setBuildTip(null);
+      return;
+    }
+    const mine = t.o === S.uid;
+    const repair = B.mode === 'repair';
+    world.setGhost(t.k, t.x, t.y, !mine ? '#9aa3a0' : repair ? '#ffd166' : '#ff5d5d', { grid: false, solid: true });
+    const what = !mine ? '<span class="bad">✖ Чужая постройка</span>'
+      : repair ? (t.h >= t.m ? '<span class="good">✔ Цела</span>' : '🔧 <b>ЛКМ</b> — починить') : '🧨 <b>ЛКМ</b> — снести';
+    hud.setBuildTip(tipAt ? `${STRUCTURES[t.k].name} · ${t.h}/${t.m}<br>${what}` : null, input.pos.x, input.pos.y);
     return;
   }
   let ax = S.aim.x;
@@ -563,23 +610,36 @@ function updateBuild() {
   }
   const x = Math.floor(ax / TILE) * TILE + TILE / 2;
   const y = Math.floor(ay / TILE) * TILE + TILE / 2;
-  const reason = buildCheck(S.buildKind, x, y);
+  const reason = buildCheck(B.kind, x, y);
   S.ghost = { x, y, reason };
-  world.setGhost(S.buildKind, x, y, !reason);
+  world.setGhost(B.kind, x, y, reason ? '#ff5d5d' : '#6fff8a');
+  hud.setBuildTip(reason && tipAt ? `<span class="bad">✖ ${reason}</span>` : null, input.pos.x, input.pos.y);
+  // ЛКМ зажата: стены и колья ставятся в каждую новую клетку, по которой ведут курсор
+  if (input.held && !reason && BUILD_PAINT.has(B.kind) && B.cell !== `${x},${y}` && now - B.placedAt > 70) placeGhost();
+}
+
+function placeGhost() {
+  B.cell = `${S.ghost.x},${S.ghost.y}`;
+  B.placedAt = performance.now();
+  net.send({ t: 'build', kind: B.kind, x: S.ghost.x, y: S.ghost.y });
 }
 
 input.onLeftDown = () => {
-  if (!S.buildKind) return false;
-  if (S.ghost) {
-    if (S.ghost.reason) hud.toast(S.ghost.reason);
-    else net.send({ t: 'build', kind: S.buildKind, x: S.ghost.x, y: S.ghost.y });
+  if (!B.mode) return false;
+  if (B.mode === 'place') {
+    if (S.ghost?.reason) hud.toast(S.ghost.reason);
+    else if (S.ghost) placeGhost();
+  } else if (B.target) {
+    if (B.target.o !== S.uid) hud.toast('Это чужая постройка');
+    else net.send({ t: B.mode, id: B.target.i });
   }
   return true;
 };
 
-// щелчок ПКМ: в стройке — отмена, иначе плевок кислотой
+// щелчок ПКМ: в стройке — назад (из ремонта и сноса к постройкам, оттуда — выход), иначе плевок кислотой
 input.onRightClick = () => {
-  if (S.buildKind) setBuild(null);
+  if (B.mode && B.mode !== 'place') setBuildMode('place');
+  else if (B.mode) setBuildMode(null);
   else S.spitUntil = performance.now() + 90;
 };
 
@@ -608,7 +668,7 @@ input.onPress = (code) => {
     else if (hud.bigOpen) hud.toggleBigMap(false);
     else if (editor.isOpen) editor.close();
     else if (hud.cont) hud.onCloseCont();
-    else if (S.buildKind) setBuild(null);
+    else if (B.mode) setBuildMode(null);
     return;
   }
   if (S.dead) return;
@@ -628,13 +688,20 @@ input.onPress = (code) => {
   if (code === 'KeyF') return net.send({ t: 'eat' });
   if (code === 'KeyR') return net.send({ t: 'use', item: 'antirad' });
   if (code === 'KeyC') return hud.toggleCraft();
-  if (code === 'KeyB') return setBuild(S.buildKind ? null : S.lastBuildKind);
+  if (code === 'KeyB') return setBuildMode(B.mode ? null : 'place');
+  if (B.mode) {
+    // в стройке: Q/E — разделы, R — ремонт, X — снос (повторное нажатие возвращает к постройкам)
+    if (code === 'KeyQ') return setBuildCat(B.mode === 'place' ? B.cat - 1 : B.cat);
+    if (code === 'KeyE') return setBuildCat(B.mode === 'place' ? B.cat + 1 : B.cat);
+    if (code === 'KeyR') return setBuildMode(B.mode === 'repair' ? 'place' : 'repair');
+    if (code === 'KeyX') return setBuildMode(B.mode === 'demolish' ? 'place' : 'demolish');
+  }
   if (code.startsWith('Digit')) {
     const n = Number(code.slice(5));
-    if (S.buildKind) {
-      // в режиме стройки цифры выбирают постройку
-      const k = STRUCT_ORDER[(n + 9) % 10]; // 1–9, 0 — десятая
-      if (k) setBuild(k);
+    if (B.mode) {
+      // в режиме стройки цифры выбирают постройку открытого раздела
+      const k = BUILD_CATS[B.cat].items[n - 1];
+      if (k) pickBuild(k);
     } else {
       // иначе — оружие из пояса; повторное нажатие убирает его
       const k = hud.belt[n - 1];
@@ -731,11 +798,11 @@ function frame(now) {
 
   // ввод: существо смотрит на курсор, когда бьёт, плюётся, строит или стоит на месте
   const mv = input.moveVector();
-  const attacking = input.enabled && !S.buildKind && (input.mouse.l || now - (input.lastClick || 0) < 90);
-  const spitting = input.enabled && !S.buildKind && (input.keys.KeyQ || now < S.spitUntil);
+  const attacking = input.enabled && !B.mode && (input.mouse.l || now - (input.lastClick || 0) < 90);
+  const spitting = input.enabled && !B.mode && (input.keys.KeyQ || now < S.spitUntil);
   if (!you.dead) {
     const aim = aimAngle();
-    if (attacking || spitting || S.buildKind) S.me.face = aim;
+    if (attacking || spitting || B.mode) S.me.face = aim;
     else if (mv.x || mv.y) S.me.face = angleLerp(S.me.face, Math.atan2(mv.y, mv.x), 1 - Math.exp(-dt * 12));
     else if (input.pos.inside && !input.rotating) S.me.face = angleLerp(S.me.face, aim, 1 - Math.exp(-dt * 6));
   }
@@ -758,7 +825,7 @@ function frame(now) {
   updateBuild();
   updateHint();
   const showCursor = input.enabled && input.pos.inside && !you.dead;
-  world.setAim(S.aim.sky ? null : S.aim, showCursor && !S.buildKind);
+  world.setAim(S.aim.sky ? null : S.aim, showCursor && !B.mode);
   cursorEl.style.display = showCursor ? '' : 'none';
   if (showCursor) cursorEl.style.transform = `translate(${input.pos.x}px, ${input.pos.y}px)`;
   world.myMed = !!you.med;
@@ -781,7 +848,9 @@ function frame(now) {
     setMarker(null, true);
     hud.toast('📍 Вы на месте — метка снята');
   }
-  hud.update(you, S.stats, { buildKind: S.buildKind });
+  hud.update(you, S.stats, {
+    build: B.mode && !you.dead ? { mode: B.mode, kind: B.kind, cat: B.cat, reason: S.ghost?.reason || '', target: B.target, count: B.count, max: PLAYER.maxStructures, uid: S.uid } : null,
+  });
   hud.clock(S.phase);
   if (now - S.lastMini > 100) {
     S.lastMini = now;
@@ -804,11 +873,7 @@ function nearWater(x, y, r) {
 function updateHint() {
   const you = S.you;
   if (you.dead || editor.isOpen) return hud.setHint('');
-  if (S.buildKind) {
-    const def = STRUCTURES[S.buildKind];
-    const why = S.ghost?.reason ? `<br><span style="color:#ff8a80">${S.ghost.reason}</span>` : '';
-    return hud.setHint(`🔨 ${def.name} — <b>ЛКМ</b> поставить, <b>ПКМ</b> или <b>B</b> отмена<br><span class="sub">${def.desc}</span>${why}`);
-  }
+  if (B.mode) return hud.setHint(''); // в стройке всё показывает её меню
   const lines = [];
   const R = S.stats.radius + PLAYER.interactRange;
   let cont = null;

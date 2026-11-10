@@ -57,7 +57,10 @@ export class Input {
       this.pos.inside = true;
       const start = { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, button: e.button, t0: performance.now() };
       if (e.button === 0) {
-        if (this.onLeftDown && this.onLeftDown()) return;
+        if (this.onLeftDown && this.onLeftDown()) {
+          this.held = true; // ЛКМ зажата в режиме стройки: можно вести ряд построек
+          return;
+        }
         this.mouse.l = true;
         this.lastClick = performance.now();
         // режим решается по первому движению: 'rotate' — рывок мышью, 'aim' — обычный удар с прицеливанием
@@ -87,7 +90,10 @@ export class Input {
       if (r.mode === 'rotate') this.look(dx, dy);
     });
     window.addEventListener('mouseup', (e) => {
-      if (e.button === 0) this.mouse.l = false;
+      if (e.button === 0) {
+        this.mouse.l = false;
+        this.held = false;
+      }
       if (this.rot && e.button === this.rot.button) {
         const click = this.rot.button === 2 && this.rot.mode !== 'rotate';
         this.rot = null;
@@ -122,6 +128,7 @@ export class Input {
   clear() {
     for (const k in this.keys) this.keys[k] = false;
     this.mouse.l = false;
+    this.held = false;
     this.rot = null;
   }
 

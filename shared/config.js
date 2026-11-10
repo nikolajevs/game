@@ -177,6 +177,33 @@ export const STRUCTURES = {
   turret: { name: 'Автотурель', cost: { scrap: 40, sulfur: 20, stone: 30, electronics: 15 }, hp: 450, solid: true, mat: 'stone', ability: 'turret', desc: 'Сама стреляет по зверям и чужакам (путь разума)' },
 };
 export const STRUCT_ORDER = ['wall_wood', 'wall_stone', 'door', 'storage', 'campfire', 'spikes', 'nest', 'workbench', 'lab', 'turret'];
+// Меню стройки: разделы и что в них лежит (цифры 1–9 выбирают постройку внутри раздела)
+export const BUILD_CATS = [
+  { id: 'walls', name: 'Стены', icon: '🧱', items: ['wall_wood', 'wall_stone', 'door'] },
+  { id: 'base', name: 'Лагерь', icon: '🏕', items: ['nest', 'campfire', 'storage'] },
+  { id: 'craft', name: 'Мастерские', icon: '🛠', items: ['workbench', 'lab'] },
+  { id: 'defense', name: 'Оборона', icon: '🛡', items: ['spikes', 'turret'] },
+];
+export const BUILD_PAINT = new Set(['wall_wood', 'wall_stone', 'spikes']); // ставятся рядом, если вести мышь с зажатой ЛКМ
+export const DEMOLISH_REFUND = 0.5; // доля ресурсов, которая возвращается за целую постройку
+export const REPAIR_SHARE = 0.5; // полный ремонт разрушенной почти до конца постройки стоит эту долю её цены
+// что вернётся за снос постройки с таким запасом прочности
+export function demolishRefund(kind, hp, maxHp) {
+  const out = {};
+  for (const [k, v] of Object.entries(STRUCTURES[kind].cost)) {
+    const n = Math.floor(v * DEMOLISH_REFUND * (hp / maxHp));
+    if (n > 0) out[k] = n;
+  }
+  return out;
+}
+// сколько стоит починить постройку до конца (пусто — она цела)
+export function repairCost(kind, hp, maxHp) {
+  const out = {};
+  const miss = 1 - hp / maxHp;
+  if (miss <= 0.001) return out;
+  for (const [k, v] of Object.entries(STRUCTURES[kind].cost)) out[k] = Math.max(1, Math.ceil(v * REPAIR_SHARE * miss));
+  return out;
+}
 export const TURRET = { range: 360, cd: 0.7, dmg: 11, speed: 1300 };
 export const STORAGE_CAP = 1500;
 // Множители урона по постройкам в зависимости от типа атаки и материала

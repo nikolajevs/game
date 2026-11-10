@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import {
   TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, TERRAIN_SPEED, isWater, DAY_LENGTH, isNight,
-  ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
+  ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
   NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
   RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
   ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET,
@@ -308,6 +308,7 @@ export class Game {
       case 'charge': return this.tryCharge(p, msg);
       case 'build': return this.onBuild(p, msg);
       case 'demolish': return this.onDemolish(p, msg);
+      case 'repair': return this.onRepair(p, msg);
       case 'evolve': return this.onEvolve(p, msg);
       case 'eat': return this.onEat(p, msg);
       case 'interact': return this.onInteract(p);
@@ -793,11 +794,29 @@ export class Game {
     if (!s || s.cat !== 'struct' || s.owner !== p.uid || p.dead) return;
     if (Math.hypot(s.x - p.x, s.y - p.y) > PLAYER.buildRange + TILE) return this.toast(p, 'Слишком далеко');
     const def = STRUCTURES[s.kind];
-    const frac = 0.5 * (s.hp / s.maxHp);
-    for (const k in def.cost) p.inv[k] += Math.floor(def.cost[k] * frac);
+    const back = demolishRefund(s.kind, s.hp, s.maxHp);
+    for (const k in back) p.inv[k] += back[k];
+    const text = Object.entries(back).map(([k, v]) => `+${v} ${ITEMS[k].icon}`).join('  ');
+    if (text) p.pfx.push({ k: 'gain', x: s.x, y: s.y, text });
     if (s.inv) this.dropContainer(s);
     this.removeStatic(s);
     this.fx.push({ k: 'break', x: s.x, y: s.y, m: def.mat });
+  }
+
+  // ремонт своей постройки до полной прочности: цена — доля её стоимости по утраченному запасу
+  onRepair(p, m) {
+    const s = this.statics.get(Number(m.id));
+    if (!s || s.cat !== 'struct' || s.owner !== p.uid || p.dead) return;
+    if (Math.hypot(s.x - p.x, s.y - p.y) > PLAYER.buildRange + TILE) return this.toast(p, 'Слишком далеко');
+    if (p.combatT > 0) return this.toast(p, 'В бою чинить нельзя');
+    const cost = repairCost(s.kind, s.hp, s.maxHp);
+    if (!Object.keys(cost).length) return this.toast(p, 'Постройка цела');
+    for (const k in cost) if ((p.inv[k] || 0) < cost[k]) return this.toast(p, 'Не хватает ресурсов на ремонт');
+    for (const k in cost) p.inv[k] -= cost[k];
+    s.hp = s.maxHp;
+    this.touch(s);
+    this.fx.push({ k: 'hit', x: s.x, y: s.y, m: STRUCTURES[s.kind].mat, id: s.id });
+    p.pfx.push({ k: 'gain', x: s.x, y: s.y, text: '🔧 Починено' });
   }
 
   onEvolve(p, m) {

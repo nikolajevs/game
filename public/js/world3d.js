@@ -103,6 +103,16 @@ export class WorldView {
     this.ghost.visible = false;
     this.ghost.renderOrder = 5;
     this.scene.add(this.ghost);
+    // рамка клетки под призраком и сетка соседних клеток — видно, куда встанет постройка
+    this.cellFrame = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#9cf0a4', transparent: true, opacity: 0.95, depthTest: false }));
+    this.buildGrid = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending }));
+    for (const l of [this.cellFrame, this.buildGrid]) {
+      l.visible = false;
+      l.frustumCulled = false;
+      l.renderOrder = 4;
+      this.scene.add(l);
+    }
+    this.gridCell = null;
     const ringMat = (color, opacity) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, fog: false });
     this.aimRing = new THREE.Mesh(new THREE.RingGeometry(7, 10, 28), ringMat('#ffffff', 0.6));
     this.rangeRing = new THREE.Mesh(new THREE.RingGeometry(PLAYER.buildRange - 2.5, PLAYER.buildRange, 72), ringMat('#9cf0a4', 0.35));
@@ -641,9 +651,13 @@ export class WorldView {
   }
 
   // ---------- постройка: призрак и выбор точки прицелом ----------
-  setGhost(kind, x, y, valid) {
+  // color — оттенок призрака и рамки клетки; grid — показывать ли сетку вокруг;
+  // solid — подсветка уже стоящей постройки (ремонт, снос): чуть крупнее её самой
+  setGhost(kind, x, y, color = '#6fff8a', { grid = true, solid = false } = {}) {
     if (!kind) {
       this.ghost.visible = false;
+      this.cellFrame.visible = false;
+      this.buildGrid.visible = false;
       return;
     }
     if (this.ghost.userData.kind !== kind) {
@@ -652,8 +666,115 @@ export class WorldView {
     }
     this.ghost.position.set(x, this.ground(x, y) + 0.5, y);
     this.ghost.rotation.y = kind === 'door' ? this.statics.doorRotation({ x, y }) : 0;
-    this.ghost.material.color.set(valid ? '#6fff8a' : '#ff5d5d');
+    this.ghost.scale.setScalar(solid ? 1.05 : 1);
+    this.ghost.material.color.set(color);
+    this.ghost.material.opacity = (solid ? 0.42 : 0.5) + Math.sin(this.time * 5) * 0.08;
     this.ghost.visible = true;
+    this.cellFrame.material.color.set(color);
+    this.cellFrame.visible = true;
+    this.buildGrid.visible = grid;
+    const key = `${x},${y}`;
+    if (this.gridCell === key) return;
+    this.gridCell = key;
+    // линии идут по рельефу: каждая сторона клетки — два отрезка через середину
+    const H = TILE / 2;
+    const gy = (px, py) => Math.max(this.ground(px, py), 0) + 1.2;
+    const line = (out, x0, y0, x1, y1) => {
+      const mx = (x0 + x1) / 2;
+      const my = (y0 + y1) / 2;
+      out.push(x0, gy(x0, y0), y0, mx, gy(mx, my), my, mx, gy(mx, my), my, x1, gy(x1, y1), y1);
+    };
+    const frame = [];
+    line(frame, x - H, y - H, x + H, y - H);
+    line(frame, x + H, y - H, x + H, y + H);
+    line(frame, x + H, y + H, x - H, y + H);
+    line(frame, x - H, y + H, x - H, y - H);
+    this.cellFrame.geometry.setAttribute('position', new THREE.Float32BufferAttribute(frame, 3));
+    const N = 4; // клеток сетки в каждую сторону
+    const pos = [];
+    const col = [];
+    const fade = (px, py) => Math.max(0, 1 - Math.hypot(px - x, py - y) / ((N + 0.5) * TILE)) ** 1.5;
+    const add = (x0, y0, x1, y1) => {
+      const n = pos.length;
+      line(pos, x0, y0, x1, y1);
+      for (let i = n; i < pos.length; i += 3) {
+        const f = fade(pos[i], pos[i + 2]);
+        col.push(0.55 * f, 0.95 * f, 0.62 * f);
+      }
+    };
+    for (let i = -N; i <= N + 1; i++) {
+      for (let j = -N; j <= N; j++) {
+        add(x - H + i * TILE, y - H + j * TILE, x - H + i * TILE, y + H + j * TILE);
+        add(x - H + j * TILE, y - H + i * TILE, x + H + j * TILE, y - H + i * TILE);
+      }
+    }
+    this.buildGrid.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    this.buildGrid.geometry.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  }
+
+  // Иконки построек для меню стройки: настоящие модели, снятые маленькой камерой. { вид: dataURL }
+  structureIcons(kinds, size = 112) {
+    const px = size * 2; // рисуем вдвое крупнее и уменьшаем — так края гладкие
+    const rt = new THREE.WebGLRenderTarget(px, px);
+    const scene = new THREE.Scene();
+    scene.add(new THREE.HemisphereLight('#ffffff', '#5a6a58', 2.4));
+    const sun = new THREE.DirectionalLight('#fff4dc', 2.6);
+    sun.position.set(60, 120, 80);
+    scene.add(sun);
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.statics.sMat);
+    scene.add(mesh);
+    const cam = new THREE.PerspectiveCamera(30, 1, 1, 2000);
+    const r = this.renderer;
+    const prevTarget = r.getRenderTarget();
+    const prevColor = r.getClearColor(new THREE.Color());
+    const prevAlpha = r.getClearAlpha();
+    const buf = new Uint8Array(px * px * 4);
+    const big = document.createElement('canvas');
+    big.width = big.height = px;
+    const bg = big.getContext('2d');
+    const out = {};
+    const box = new THREE.Box3();
+    for (const kind of kinds) {
+      const geo = this.statics.sGeo[kind];
+      if (!geo) continue;
+      mesh.geometry = geo;
+      geo.computeBoundingBox();
+      box.copy(geo.boundingBox);
+      const c = box.getCenter(_v);
+      const rad = box.getSize(_v2).length() / 2;
+      const d = rad / Math.sin((cam.fov * Math.PI) / 360) * 1.02;
+      cam.position.set(c.x + d * 0.62, c.y + d * 0.5, c.z + d * 0.6);
+      cam.lookAt(c);
+      r.setRenderTarget(rt);
+      r.setClearColor(0x000000, 0);
+      r.clear();
+      r.render(scene, cam);
+      r.readRenderTargetPixels(rt, 0, 0, px, px, buf);
+      const img = bg.createImageData(px, px);
+      for (let y = 0; y < px; y++) {
+        const src = (px - 1 - y) * px * 4; // картинка в памяти видеокарты перевёрнута
+        const dst = y * px * 4;
+        for (let x = 0; x < px * 4; x += 4) {
+          const a = buf[src + x + 3];
+          // линейный цвет → sRGB
+          img.data[dst + x] = Math.round(255 * Math.pow(buf[src + x] / 255, 1 / 2.2));
+          img.data[dst + x + 1] = Math.round(255 * Math.pow(buf[src + x + 1] / 255, 1 / 2.2));
+          img.data[dst + x + 2] = Math.round(255 * Math.pow(buf[src + x + 2] / 255, 1 / 2.2));
+          img.data[dst + x + 3] = a;
+        }
+      }
+      bg.putImageData(img, 0, 0);
+      const small = document.createElement('canvas');
+      small.width = small.height = size;
+      const sg = small.getContext('2d');
+      sg.imageSmoothingQuality = 'high';
+      sg.drawImage(big, 0, 0, size, size);
+      out[kind] = small.toDataURL('image/png');
+    }
+    r.setRenderTarget(prevTarget);
+    r.setClearColor(prevColor, prevAlpha);
+    rt.dispose();
+    return out;
   }
 
   // Точка на земле (или воде) под экранной точкой — луч из камеры через курсор.

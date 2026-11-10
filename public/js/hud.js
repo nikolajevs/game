@@ -1,6 +1,6 @@
 // Интерфейс поверх 3D: полоски, инвентарь, пояс с оружием, крафт, мини-карта, чат, хранилище.
 import {
-  ITEMS, ITEM_KEYS, RES_KEYS, STRUCTURES, STRUCT_ORDER, MAP_W, MAP_H, TILE, lightAt,
+  ITEMS, ITEM_KEYS, RES_KEYS, STRUCTURES, BUILD_CATS, repairCost, demolishRefund, MAP_W, MAP_H, TILE, lightAt,
   WEAPONS, WEAPON_ORDER, RECIPES, RECIPE_GROUPS, RAD, SITES, ABILITIES, ABILITY_ORDER, FOOD,
 } from '/shared/config.js';
 
@@ -70,28 +70,14 @@ export class Hud {
     this.marker = null; // метка игрока на карте { x, y }
     this.minimap.addEventListener('click', () => this.toggleBigMap());
     this.initBigMap();
-    this.buildBar = $('buildBar');
     this.contEl = $('container');
     this.craftEl = $('craft');
     this.radFx = $('radFx');
     this.cache = {};
     this.players = [];
     this.zones = [];
-    this.buildSlots = [];
     this.belt = [];
-    STRUCT_ORDER.forEach((k, i) => {
-      const d = STRUCTURES[k];
-      const el = document.createElement('div');
-      el.className = 'bslot';
-      el.title = d.desc;
-      el.innerHTML = `<kbd>${(i + 1) % 10}</kbd><div class="bn">${d.name}</div><div class="bc">${costText(d.cost)}</div>`;
-      el.addEventListener('mousedown', (e) => {
-        e.stopPropagation();
-        this.onPickBuild?.(k);
-      });
-      this.buildBar.appendChild(el);
-      this.buildSlots.push({ k, el });
-    });
+    this.initBuildMenu();
     $('contClose').addEventListener('click', () => this.onCloseCont?.());
     $('craftClose').addEventListener('click', () => this.toggleCraft(false));
   }
@@ -183,7 +169,7 @@ export class Hud {
     }
     this.updateBelt(you, stats);
     this.updateAbilities(you, stats);
-    this.updateBuildBar(you, ctx.buildKind);
+    this.updateBuildMenu(you, ctx.build);
     if (!this.craftEl.classList.contains('hidden')) this.renderCraft(you);
     let status = '';
     if (you.sp) status = '🛡 Защита после появления';
@@ -275,15 +261,140 @@ export class Hud {
       <div class="cdv" style="height:${a.on && a.cd > 0 ? Math.min(100, (a.cd / a.max) * 100) : 0}%"></div></div>`).join('');
   }
 
-  updateBuildBar(you, kind) {
-    this.buildBar.classList.toggle('hidden', !kind);
-    if (!kind) return;
+  // ---------- меню стройки ----------
+  // Шапка: разделы (Q/E) и инструменты — строить, чинить (R), снести (X). Ниже — карточки построек
+  // раздела с моделями-иконками (1–9) и справка: цена «есть/нужно», прочность, почему нельзя поставить.
+  initBuildMenu() {
+    const el = $('buildMenu');
+    this.buildEl = el;
+    this.buildTip = $('buildTip');
+    this.buildIcons = {};
+    el.innerHTML = `
+      <div class="bm-head">
+        <div class="bm-tabs"><kbd>Q</kbd>${BUILD_CATS.map((c, i) => `<div class="bm-tab" data-cat="${i}"><span>${c.icon}</span>${c.name}</div>`).join('')}<kbd>E</kbd></div>
+        <div class="bm-tools">
+          <div class="bm-tool" data-tool="repair" title="Чинить свои постройки"><span>🔧</span>Чинить<kbd>R</kbd></div>
+          <div class="bm-tool" data-tool="demolish" title="Сносить свои постройки"><span>🧨</span>Снести<kbd>X</kbd></div>
+        </div>
+        <div class="bm-count" title="Сколько построек у вас стоит"></div>
+        <div class="bm-close" data-tool="" title="Закрыть — B">✕</div>
+      </div>
+      <div class="bm-body"><div class="bm-cards"></div><div class="bm-info"></div></div>
+      <div class="bm-foot"></div>`;
+    this.bm = {
+      tabs: [...el.querySelectorAll('.bm-tab')], tools: [...el.querySelectorAll('.bm-tool')],
+      cards: el.querySelector('.bm-cards'), info: el.querySelector('.bm-info'), foot: el.querySelector('.bm-foot'), count: el.querySelector('.bm-count'),
+    };
+    el.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      const hit = (sel) => e.target.closest(sel);
+      if (hit('[data-kind]')) this.onPickBuild?.(hit('[data-kind]').dataset.kind);
+      else if (hit('[data-cat]')) this.onBuildCat?.(Number(hit('[data-cat]').dataset.cat));
+      else if (hit('[data-tool]')) this.onBuildTool?.(hit('[data-tool]').dataset.tool || null);
+    });
+  }
+
+  setBuildIcons(icons) {
+    this.buildIcons = icons || {};
+    this.cache.bmCards = null;
+  }
+
+  // подсказка у курсора в режиме стройки (html = null — убрать)
+  setBuildTip(html, x = 0, y = 0) {
+    const el = this.buildTip;
+    if (!html) {
+      if (this.cache.tip) {
+        this.cache.tip = '';
+        el.classList.add('hidden');
+      }
+      return;
+    }
+    if (this.cache.tip !== html) {
+      this.cache.tip = html;
+      el.innerHTML = html;
+      el.classList.remove('hidden');
+    }
+    el.style.transform = `translate(${Math.round(x + 22)}px, ${Math.round(y + 20)}px)`;
+  }
+
+  // b: { mode: 'place' | 'repair' | 'demolish', kind, cat, reason, target, count, max, uid } или null
+  updateBuildMenu(you, b) {
+    const on = !!b;
+    if (this.cache.bmOn !== on) {
+      this.cache.bmOn = on;
+      this.buildEl.classList.toggle('hidden', !on);
+      this.buildEl.parentElement.classList.toggle('building', on);
+    }
+    if (!on) return;
+    const { bm } = this;
     const has = new Set(you.ab || []);
-    for (const { k, el } of this.buildSlots) {
-      el.classList.toggle('on', k === kind);
-      el.classList.toggle('locked', !!STRUCTURES[k].ability && !has.has(STRUCTURES[k].ability));
-      const cost = STRUCTURES[k].cost;
-      el.classList.toggle('poor', Object.entries(cost).some(([r, v]) => (you.inv[r] || 0) < v));
+    const inv = you.inv;
+    const cat = BUILD_CATS[b.cat];
+    const placing = b.mode === 'place';
+    const head = `${b.mode}|${b.cat}|${b.count}`;
+    if (this.cache.bmHead !== head) {
+      this.cache.bmHead = head;
+      bm.tabs.forEach((t, i) => t.classList.toggle('on', placing && i === b.cat));
+      for (const t of bm.tools) t.classList.toggle('on', t.dataset.tool === b.mode);
+      bm.count.innerHTML = `🏠 <b>${b.count}</b>/${b.max}`;
+      bm.count.classList.toggle('full', b.count >= b.max);
+      this.buildEl.dataset.mode = b.mode;
+      bm.foot.innerHTML = placing
+        ? '<span><kbd>ЛКМ</kbd> поставить</span><span>зажать <kbd>ЛКМ</kbd> и вести — ряд стен</span><span><kbd>1</kbd>–<kbd>9</kbd> постройка</span><span><kbd>ПКМ</kbd> / <kbd>B</kbd> выйти</span>'
+        : `<span><kbd>ЛКМ</kbd> ${b.mode === 'repair' ? 'починить' : 'снести'} свою постройку под курсором</span><span><kbd>ПКМ</kbd> назад к стройке</span><span><kbd>B</kbd> выйти</span>`;
+    }
+    // карточки построек раздела
+    const lack = (cost) => Object.entries(cost).some(([r, v]) => (inv[r] || 0) < v);
+    const cards = cat.items.map((k) => `${k}${lack(STRUCTURES[k].cost) ? 'p' : ''}${STRUCTURES[k].ability && !has.has(STRUCTURES[k].ability) ? 'l' : ''}`).join(',') + `|${placing ? b.kind : ''}`;
+    if (this.cache.bmCards !== cards) {
+      this.cache.bmCards = cards;
+      bm.cards.innerHTML = cat.items.map((k, i) => {
+        const d = STRUCTURES[k];
+        const locked = d.ability && !has.has(d.ability);
+        const icon = this.buildIcons[k] ? `<img src="${this.buildIcons[k]}" alt="" draggable="false">` : '<div class="bm-noicon">🔨</div>';
+        return `<div class="bm-card${placing && k === b.kind ? ' on' : ''}${lack(d.cost) ? ' poor' : ''}${locked ? ' locked' : ''}" data-kind="${k}">
+          <kbd>${i + 1}</kbd>${locked ? '<div class="bm-lock">🔒</div>' : ''}${icon}
+          <div class="bm-n">${d.name}</div><div class="bm-c">${costText(d.cost, inv)}</div></div>`;
+      }).join('');
+    }
+    // справка справа
+    const resRows = (cost, gain = false) => Object.entries(cost).map(([r, v]) => {
+      const have = inv[r] || 0;
+      return `<div class="bm-res ${gain || have >= v ? 'ok' : 'poor'}"><span>${ITEMS[r].icon}</span>${ITEMS[r].name}<b>${gain ? `+${v}` : `${have} / ${v}`}</b></div>`;
+    }).join('');
+    let info;
+    if (placing) {
+      const d = STRUCTURES[b.kind];
+      const locked = d.ability && !has.has(d.ability);
+      const state = locked ? `<div class="bm-state bad">🔒 Нужно умение «${ABILITIES[d.ability].name}» — путь разума (P)</div>`
+        : b.reason ? `<div class="bm-state bad">✖ ${b.reason}</div>` : '<div class="bm-state good">✔ Можно ставить</div>';
+      info = `<div class="bm-name">${d.name}</div><div class="bm-desc">${d.desc}</div>
+        <div class="bm-stats"><span>❤ ${d.hp}</span><span>${d.mat === 'stone' ? '🪨 камень' : '🪵 дерево'}</span><span>${d.solid === true ? 'преграда' : d.solid === 'owner' ? 'проход только вам' : 'можно пройти'}</span></div>
+        <div class="bm-reslist">${resRows(d.cost)}</div>${state}`;
+    } else {
+      const repair = b.mode === 'repair';
+      const t = b.target;
+      const title = repair ? '🔧 Ремонт' : '🧨 Снос';
+      if (!t) {
+        info = `<div class="bm-name">${title}</div><div class="bm-desc">${repair
+          ? 'Наведите на свою повреждённую постройку. Ремонт до полной прочности стоит до половины её цены — по тому, сколько прочности утрачено.'
+          : 'Наведите на свою постройку. За снос возвращается до половины ресурсов — по оставшейся прочности.'}</div>`;
+      } else {
+        const d = STRUCTURES[t.k];
+        const mine = t.o === b.uid;
+        const pct = Math.max(0, Math.min(100, Math.round((t.h / t.m) * 100)));
+        const cost = repair ? repairCost(t.k, t.h, t.m) : demolishRefund(t.k, t.h, t.m);
+        const any = Object.keys(cost).length > 0;
+        const body = !mine ? `<div class="bm-state bad">✖ Чужая постройка (${t.on || '?'})</div>`
+          : repair ? (any ? `<div class="bm-reslist">${resRows(cost)}</div>` : '<div class="bm-state good">✔ Постройка цела</div>')
+            : `<div class="bm-reslist">${any ? resRows(cost, true) : ''}</div><div class="bm-state bad">Постройка будет разобрана</div>`;
+        info = `<div class="bm-name">${title}: ${d.name}</div>
+          <div class="bm-hp"><i style="width:${pct}%" class="${pct < 35 ? 'low' : pct < 70 ? 'mid' : ''}"></i><span>${t.h} / ${t.m}</span></div>${body}`;
+      }
+    }
+    if (this.cache.bmInfo !== info) {
+      this.cache.bmInfo = info;
+      bm.info.innerHTML = info;
     }
   }
 
