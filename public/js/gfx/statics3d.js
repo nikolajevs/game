@@ -2,7 +2,7 @@
 // Ресурсов много, поэтому они рисуются через InstancedMesh (пулы).
 import * as THREE from 'three';
 import { Tree, TreePreset } from '/vendor/ez-tree/ez-tree.es.js';
-import { TILE, STRUCTURES } from '/shared/config.js';
+import { TILE, STRUCTURES, RESOURCES } from '/shared/config.js';
 import { G, M, between, mergeParts, rng, shade, taper, glowTexture } from './util.js';
 import { Fire } from './fire.js';
 import { applyRockSurface } from './surfaces.js';
@@ -11,6 +11,7 @@ const _m = new THREE.Matrix4();
 const _c = new THREE.Color();
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const STATIC_CHUNK = 600;
+const BUSH_BERRIES = RESOURCES.bush.total; // ягод (и гроздей на кусте) — как в игровой логике
 // ресурсы рисуются пулами по участкам карты; постройки — отдельными мешами
 const RESOURCE_KINDS = new Set(['tree', 'rock', 'sulfur', 'bush', 'crystal', 'scrap', 'car', 'terminal', 'cactus', 'frog', 'mush_brown', 'mush_red', 'mush_glow']);
 const MUSH = new Set(['mush_brown', 'mush_red', 'mush_glow']);
@@ -285,6 +286,17 @@ function buildStructureGeoms() {
     }
     parts.push({ geom: G.ico1, matrix: M(8, 6, 6, 0, 0, 0, 8, 6.5, 7), color: '#7a5a34' });
     out.remains = mergeParts(parts);
+  }
+
+  // брошенные вещи (окно инвентаря): холщовый мешок с завязанной горловиной и выглядывающим предметом
+  {
+    const parts = [];
+    parts.push({ geom: G.ico1, matrix: M(0, 6.2, 0, 0, 0, 0, 8.5, 7, 8), color: '#9c8458' });
+    parts.push({ geom: G.ico1, matrix: M(1.5, 4.5, 3, 0, 0, 0, 6, 4.5, 5.5), color: '#8a7349' });
+    parts.push({ geom: G.cyl6, matrix: M(0, 12.6, 0, 0, 0, 0, 2.6, 3, 2.6), color: '#7a6540' });
+    parts.push({ geom: G.cyl6, matrix: M(0, 11.1, 0, 0, 0, 0, 3.1, 0.9, 3.1), color: '#4a3a22' }); // верёвка
+    parts.push({ geom: G.ico1, matrix: M(-8, 2.2, 4, 0, 0, 0, 2.4, 2, 2.4), color: '#c9b488' });
+    out.pile = mergeParts(parts);
   }
 
   // ящик с добычей: армейский зелёный, с полосой и защёлками
@@ -746,19 +758,20 @@ export class StaticsView {
         const rad = (5.5 + r() * 2.5) * size;
         blobs.push({ x: Math.cos(a) * d, y: rad * 0.8 + r() * 2, z: Math.sin(a) * d, rx: rad, ry: rad * 0.85, rz: rad, ry0: r() * 6 });
       }
-      // ягоды гроздьями: точка на верхней/боковой стороне облачка и 2–3 ягоды рядом
+      // ягоды: ровно BUSH_BERRIES гроздей (столько ягод и даёт куст), в каждой 3 ягоды рядом на
+      // верхней/боковой стороне облачка листвы; g — номер грозди, она исчезает целиком вместе с ягодой
       const berries = [];
       const red = r() < 0.5;
-      for (let g = 0; berries.length < 12; g++) {
-        const b = blobs[g % blobs.length];
-        const a = r() * Math.PI * 2;
-        const el = 0.1 + r() * 0.9;
+      for (let g = 0; g < BUSH_BERRIES; g++) {
+        const b = blobs[(g * 2 + 1) % blobs.length];
+        const a = (g / BUSH_BERRIES) * Math.PI * 2 + r() * 1.2;
+        const el = 0.2 + r() * 0.8;
         const dir = new THREE.Vector3(Math.cos(el) * Math.cos(a), Math.sin(el), Math.cos(el) * Math.sin(a));
         const c = new THREE.Vector3(b.x + dir.x * b.rx * 0.97, b.y + dir.y * b.ry * 0.97, b.z + dir.z * b.rz * 0.97);
-        const count = 2 + Math.floor(r() * 2);
-        for (let k = 0; k < count && berries.length < 12; k++) {
+        for (let k = 0; k < 3; k++) {
           berries.push({
-            x: c.x + (r() - 0.5) * 2.6, y: c.y + (r() - 0.5) * 2, z: c.z + (r() - 0.5) * 2.6, sz: 1.5 + r() * 0.5,
+            g,
+            x: c.x + (r() - 0.5) * 2.8, y: c.y + (r() - 0.5) * 2.2, z: c.z + (r() - 0.5) * 2.8, sz: 1.9 + r() * 0.6,
             color: new THREE.Color(red ? '#c8324b' : '#3b5bd9').offsetHSL((r() - 0.5) * 0.03, 0, (r() - 0.5) * 0.12),
           });
         }
@@ -788,11 +801,11 @@ export class StaticsView {
         push(pools.blob, `${s.i}:leaf${i}`, M(s.x + b.x, gy + b.y, s.y + b.z, 0, b.ry0, 0, b.rx, b.ry, b.rz), color);
       });
     }
-    // ягоды: чем меньше «здоровья», тем меньше ягод
-    const left = Math.ceil(berries.length * (s.h / (s.m || 1)));
+    // ягоды: чем меньше «здоровья», тем меньше гроздей (по одной на каждую неснятую ягоду)
+    const left = Math.ceil(BUSH_BERRIES * (s.h / (s.m || 1)) - 1e-6);
     berries.forEach((b, i) => {
       const key = `${s.i}:berry${i}`;
-      if (i < left) {
+      if (b.g < left) {
         pools.berry.set(key, M(s.x + b.x, gy + b.y, s.y + b.z, 0, 0, 0, b.sz), b.color);
         if (!o.parts.some((p) => p[1] === key)) o.parts.push([pools.berry, key]);
       } else {
@@ -855,7 +868,7 @@ export class StaticsView {
       o.extra = { fire };
       o.light = 'fire';
     }
-    if (s.k === 'remains' || s.k === 'crate') grp.rotation.y = (s.i * 1.7) % (Math.PI * 2);
+    if (s.k === 'remains' || s.k === 'crate' || s.k === 'pile') grp.rotation.y = (s.i * 1.7) % (Math.PI * 2);
     o.mesh = grp;
     this.group.add(grp);
   }

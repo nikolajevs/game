@@ -320,6 +320,7 @@ export class Game {
       case 'equip': return this.onEquip(p, msg);
       case 'craft': return this.onCraft(p, msg);
       case 'use': return this.onUse(p, msg);
+      case 'drop': return this.onDrop(p, msg);
       case 'learn': return this.onLearn(p, msg);
       case 'resetPath': return this.onResetPath(p);
       case 'research': return this.onResearch(p, msg);
@@ -678,6 +679,38 @@ export class Game {
     p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `−${RAD.antirad} ☢` });
   }
 
+  // Выбросить вещи из окна инвентаря: падают кучкой чуть впереди персонажа, подобрать можно на E
+  // (как останки, но кучка зовётся «брошено» и выглядит мешком). Уже лежащая рядом кучка
+  // принимает новые вещи и продлевает себе жизнь, а не плодит ещё одну.
+  onDrop(p, m) {
+    if (p.dead || !ITEMS[m.item]) return;
+    const item = m.item;
+    const have = p.inv[item] || 0;
+    const n = Math.min(have, m.n === 'all' ? have : Math.floor(Number(m.n)));
+    if (!(n > 0)) return;
+    p.inv[item] -= n;
+    if (p.weapon === item && p.inv[item] <= 0) p.weapon = null; // выбросили оружие из рук
+    const reach = p.stats.radius + 14;
+    const x = p.x + Math.cos(p.angle) * reach;
+    const y = p.y + Math.sin(p.angle) * reach;
+    let pile = null;
+    for (const s of this.grid.query(x, y, 48)) {
+      if (s.kind === 'pile' && Math.hypot(s.x - x, s.y - y) <= 30) {
+        pile = s;
+        break;
+      }
+    }
+    if (pile) {
+      pile.inv[item] = (pile.inv[item] || 0) + n;
+      pile.expires = this.time + PLAYER.remainsLife;
+      for (const q of this.players.values()) if (q.openCont === pile.id) this.sendCont(q, pile);
+    } else {
+      pile = this.addRemains(x, y, { ...emptyInv(), [item]: n }, 0, p.name);
+      pile.kind = 'pile';
+    }
+    p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `−${n} ${ITEMS[item].icon}` });
+  }
+
   onJoin(client, msg) {
     if (client.player) return;
     const token = typeof msg.token === 'string' && /^[a-f0-9]{32}$/.test(msg.token) ? msg.token : null;
@@ -987,7 +1020,8 @@ export class Game {
 
   sendCont(p, s) {
     let title;
-    if (s.cat === 'remains') title = `Останки: ${s.ownerName}`;
+    if (s.kind === 'pile') title = `Брошено: ${s.ownerName}`;
+    else if (s.cat === 'remains') title = `Останки: ${s.ownerName}`;
     else if (s.cat === 'crate') title = CRATE.name;
     else title = `${STRUCTURES[s.kind].name}${s.ownerName ? ` (${s.ownerName})` : ''}`;
     this.send(p.client, { t: 'cont', id: s.id, title, inv: s.inv, dna: s.dna || 0, remains: this.isLootBox(s), cap: STORAGE_CAP });
@@ -1606,11 +1640,20 @@ export class Game {
   gather(p, s, dmg, w = null) {
     const def = RESOURCES[s.kind];
     let rate = def.rate || 0;
-    if (s.kind === 'bush' && p.stats.diet === 'herb') rate *= 2;
-    if (w && w.gather && w.gather[def.give]) rate *= w.gather[def.give];
+    let speed = 1; // у узлов с запасом (total) скорость сбора меняет число ударов, но не общий запас
+    if (s.kind === 'bush' && p.stats.diet === 'herb') {
+      rate *= 2;
+      speed *= 2;
+    }
+    if (w && w.gather && w.gather[def.give]) {
+      rate *= w.gather[def.give];
+      speed *= w.gather[def.give];
+    }
     const before = s.hp;
-    s.hp = Math.max(0, s.hp - (def.fixed ?? dmg));
-    const amount = def.fixed ? 1 : Math.floor((s.maxHp - s.hp) * rate) - Math.floor((s.maxHp - before) * rate);
+    s.hp = Math.max(0, s.hp - (def.fixed ?? dmg * (def.total ? speed : 1)));
+    // запас делится поровну между ударами по доле снятой прочности (1e-6 — защита от ошибок округления)
+    const stock = (hp) => Math.floor(((s.maxHp - hp) / s.maxHp) * def.total + 1e-6);
+    const amount = def.fixed ? 1 : def.total ? stock(s.hp) - stock(before) : Math.floor((s.maxHp - s.hp) * rate) - Math.floor((s.maxHp - before) * rate);
     let text = '';
     if (amount > 0) {
       p.inv[def.give] += amount;

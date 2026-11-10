@@ -1,7 +1,7 @@
 // Интерфейс поверх 3D: полоски, инвентарь, пояс с оружием, крафт, мини-карта, чат, хранилище.
 import {
   ITEMS, ITEM_KEYS, RES_KEYS, STRUCTURES, BUILD_CATS, buildCost, repairCost, demolishRefund, MAP_W, MAP_H, TILE, lightAt,
-  WEAPONS, WEAPON_ORDER, RECIPES, CRAFT_TABS, CRAFT_MAX, USES, TRIPS, RAD, SITES, ABILITIES, ABILITY_ORDER, FOOD,
+  WEAPONS, WEAPON_ORDER, RECIPES, CRAFT_TABS, CRAFT_MAX, USES, TRIPS, RAD, SITES, ABILITIES, ABILITY_ORDER, FOOD, RESOURCES, NPCS,
 } from '/shared/config.js';
 
 const MINI_SPAN = 4800; // сколько единиц мира видно на мини-карте
@@ -16,6 +16,35 @@ const RECIPE_DESC = {
   antirad: `Снимает ${RAD.antirad} ед. радиации (R)`,
   elixir: `Возвращает ${USES.elixir.mana} маны и ${USES.elixir.hp} здоровья (T)`,
 };
+
+// Вкладки окна инвентаря (I): что в них попадает
+const INV_TABS = [
+  { id: 'all', icon: '🎒', name: 'Всё', test: () => true },
+  { id: 'food', icon: '🍖', name: 'Еда', test: (k) => !!FOOD[k] },
+  { id: 'mats', icon: '🪵', name: 'Материалы', test: (k) => ITEMS[k].kind === 'res' && !FOOD[k] },
+  { id: 'supplies', icon: '🧴', name: 'Припасы', test: (k) => ITEMS[k].kind === 'ammo' || ITEMS[k].kind === 'use' },
+  { id: 'weapons', icon: '⚔', name: 'Оружие', test: (k) => ITEMS[k].kind === 'weapon' },
+];
+
+const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+const joinNames = (names, max = 6) => (names.length > max ? `${names.slice(0, max).join(', ')} и ещё ${names.length - max}` : names.join(', '));
+
+// Откуда берётся предмет и на что идёт — считаем из конфига, а не пишем руками:
+// текст не разойдётся с игрой, когда поменяются рецепты, постройки или добыча.
+function itemLines(k) {
+  const lines = [];
+  const nodes = Object.values(RESOURCES).filter((r) => r.give === k).map((r) => lower(r.name));
+  const mobs = Object.values(NPCS).filter((n) => n.loot && n.loot[k]).map((n) => lower(n.name));
+  if (nodes.length) lines.push(['Где взять', joinNames(nodes)]);
+  if (mobs.length) lines.push(['Падает с', joinNames(mobs)]);
+  const crafts = Object.keys(RECIPES).filter((r) => RECIPES[r].cost[k]).map((r) => lower(ITEMS[r].name));
+  if (crafts.length) lines.push(['Для крафта', joinNames(crafts)]);
+  const builds = Object.keys(STRUCTURES).filter((s) => STRUCTURES[s].cost[k] || STRUCTURES[s].parts?.[k]).map((s) => lower(STRUCTURES[s].name));
+  if (builds.length) lines.push(['Для построек', joinNames(builds)]);
+  const guns = Object.keys(WEAPONS).filter((w) => WEAPONS[w].ammo === k).map((w) => lower(ITEMS[w].name));
+  if (guns.length) lines.push(['Заряд для', joinNames(guns)]);
+  return lines;
+}
 
 function costText(cost, inv) {
   return Object.entries(cost).map(([k, v]) => {
@@ -35,6 +64,14 @@ export class Hud {
     this.spiritVal = $('spiritVal');
     this.invEl = $('inv');
     this.invChips = {};
+    // кнопка над сеткой ресурсов открывает окно инвентаря
+    const openInv = document.createElement('button');
+    openInv.className = 'inv-open';
+    openInv.innerHTML = '<span>🎒 Инвентарь</span><kbd>I</kbd>';
+    openInv.title = 'Все вещи, описания и действия — I';
+    openInv.addEventListener('mousedown', (e) => e.stopPropagation());
+    openInv.addEventListener('click', () => this.toggleInv());
+    this.invEl.appendChild(openInv);
     for (const k of RES_KEYS) {
       const c = document.createElement('div');
       c.className = 'chip';
@@ -73,6 +110,7 @@ export class Hud {
     this.initBigMap();
     this.contEl = $('container');
     this.craftEl = $('craft');
+    this.invWin = $('invWin');
     this.radFx = $('radFx');
     this.cache = {};
     this.players = [];
@@ -82,6 +120,7 @@ export class Hud {
     $('contClose').addEventListener('click', () => this.onCloseCont?.());
     $('craftClose').addEventListener('click', () => this.toggleCraft(false));
     this.initCraft();
+    this.initInv();
   }
 
   show() {
@@ -174,6 +213,7 @@ export class Hud {
     this.updateAbilities(you, stats);
     this.updateBuildMenu(you, ctx.build);
     if (!this.craftEl.classList.contains('hidden')) this.renderCraft(you);
+    if (!this.invWin.classList.contains('hidden')) this.renderInv(you, stats);
     let status = '';
     if (you.sp) status = '🛡 Защита после появления';
     else if (you.cb) status = '⚔ В бою — мутировать нельзя';
@@ -414,7 +454,143 @@ export class Hud {
     const show = on ?? this.craftEl.classList.contains('hidden');
     this.craftEl.classList.toggle('hidden', !show);
     this.cache.craft = null;
+    if (show) this.invWin.classList.add('hidden'); // два окна по центру не открываем разом
     return show;
+  }
+
+  // ---------- инвентарь (I) ----------
+  toggleInv(on) {
+    const show = on ?? this.invWin.classList.contains('hidden');
+    this.invWin.classList.toggle('hidden', !show);
+    this.cache.invWin = null;
+    if (show) this.toggleCraft(false);
+    return show;
+  }
+
+  // Окно инвентаря: вкладки, карточки вещей и справка по выбранной (откуда берётся, на что идёт,
+  // что даёт) с действиями — съесть, применить, взять в руки, выбросить. Окно не блокирует игру.
+  initInv() {
+    this.invTab = 'all';
+    this.invSel = null;
+    this.invYou = null;
+    this.invStats = null;
+    this.invWin.addEventListener('mousedown', (e) => e.stopPropagation());
+    $('invClose').addEventListener('click', () => this.toggleInv(false));
+    $('invTabs').addEventListener('click', (e) => {
+      const t = e.target.closest('[data-tab]');
+      if (!t) return;
+      this.invTab = t.dataset.tab;
+      this.cache.invWin = null;
+      if (this.invYou) this.renderInv(this.invYou, this.invStats);
+    });
+    const grid = $('invGrid');
+    grid.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-item]');
+      if (!c) return;
+      this.invSel = c.dataset.item;
+      this.cache.invWin = null;
+      if (this.invYou) this.renderInv(this.invYou, this.invStats);
+    });
+    // двойной щелчок — главное действие вещи
+    grid.addEventListener('dblclick', (e) => {
+      const c = e.target.closest('[data-item]');
+      if (!c) return;
+      const act = this.invMainAction(c.dataset.item);
+      if (act) this.invAct(act, c.dataset.item);
+    });
+    $('invInfo').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-act]');
+      if (!b || b.disabled) return;
+      this.invAct(b.dataset.act, this.invSel, b.dataset.n === 'all' ? 'all' : Number(b.dataset.n));
+    });
+  }
+
+  // что делает двойной щелчок по вещи ('' — ничего)
+  invMainAction(k) {
+    if (FOOD[k]) return 'eat';
+    if (USES[k]) return 'use';
+    if (WEAPONS[k]) return 'equip';
+    return '';
+  }
+
+  invAct(act, k, n = 1) {
+    if (!k) return;
+    if (act === 'eat') this.send({ t: 'eat', item: k });
+    else if (act === 'use') this.send({ t: 'use', item: k });
+    else if (act === 'equip') this.send({ t: 'equip', item: this.invYou?.wp === k ? null : k });
+    else if (act === 'drop') this.send({ t: 'drop', item: k, n });
+  }
+
+  renderInv(you, stats) {
+    this.invYou = you;
+    this.invStats = stats;
+    const diet = stats?.diet || 'omni';
+    const sig = `${ITEM_KEYS.map((k) => you.inv[k] || 0).join(',')}|${you.wp || ''}|${diet}|${this.invTab}|${this.invSel}`;
+    if (this.cache.invWin === sig) return;
+    this.cache.invWin = sig;
+    const have = (k) => you.inv[k] || 0;
+    const owned = ITEM_KEYS.filter((k) => have(k) > 0);
+    const tab = INV_TABS.find((t) => t.id === this.invTab) || INV_TABS[0];
+    const shown = owned.filter(tab.test);
+    if (!shown.includes(this.invSel)) this.invSel = shown[0] || null;
+    const sel = this.invSel;
+    $('invSum').textContent = `Вещей: ${owned.reduce((a, k) => a + have(k), 0)} · видов: ${owned.length}`;
+    $('invTabs').innerHTML = INV_TABS.map((t) => {
+      const n = owned.filter(t.test).length;
+      return `<div class="cr-tab${t === tab ? ' on' : ''}" data-tab="${t.id}"><span>${t.icon}</span>${t.name}${n ? ` <small>${n}</small>` : ''}</div>`;
+    }).join('');
+    $('invGrid').innerHTML = shown.length
+      ? shown.map((k) => `<div class="cr-card${k === sel ? ' on' : ''}" data-item="${k}">
+        <div class="cr-have">${have(k)}</div>${you.wp === k ? '<div class="inv-eq">в руках</div>' : ''}
+        <div class="cr-ic">${ITEMS[k].icon}</div><div class="cr-n">${ITEMS[k].name}</div></div>`).join('')
+      : `<div class="inv-empty">${owned.length ? 'В этой вкладке пусто.' : 'Рюкзак пуст.<br>Добывайте ягоды, дерево и камень — ЛКМ по кустам, деревьям и валунам.'}</div>`;
+    const info = $('invInfo');
+    if (!sel) {
+      info.innerHTML = '<div class="bm-desc">Выберите вещь слева — здесь появятся описание и действия.</div>';
+      return;
+    }
+    const item = ITEMS[sel];
+    const w = WEAPONS[sel];
+    const f = FOOD[sel];
+    const chips = [];
+    if (f) {
+      chips.push(`🍖 +${Math.round(f.food * f.mult[diet])} сытости`);
+      if (f.water) chips.push(`💧 +${f.water} воды`);
+      if (f.trip) chips.push(`${TRIPS[f.trip].icon} трип ${TRIPS[f.trip].time} с`);
+      if (f.hal) chips.push(`💠 галлюцинации ${f.hal.t} с`);
+      if (f.spirit) chips.push(`✨ +${f.spirit} силы духа`);
+      if (f.mana) chips.push(`✦ +${f.mana} маны`);
+      if (f.rad) chips.push(`☢ +${f.rad} радиации`);
+    }
+    if (w) {
+      chips.push(w.type === 'melee' ? '⚔ ближний бой' : w.type === 'throw' ? '💥 метательное' : '🎯 дальний бой');
+      chips.push(`урон ${w.type === 'melee' ? '+' : ''}${w.dmg}${w.pellets ? `×${w.pellets}` : ''}`);
+      chips.push(`удар раз в ${w.cd} с`);
+      if (w.ammo) chips.push(`заряд: ${ITEMS[w.ammo].icon} ${lower(ITEMS[w.ammo].name)}`);
+    } else if (item.kind === 'ammo') chips.push('🎒 боеприпас');
+    else if (item.kind === 'use') chips.push('🧴 расходник');
+    const desc = w ? w.desc : RECIPE_DESC[sel] || (f?.trip ? TRIPS[f.trip].bonus : '') || '';
+    const lines = itemLines(sel).map(([t, v]) => `<div><b>${t}:</b> ${v}</div>`).join('');
+    const n = have(sel);
+    const main = this.invMainAction(sel);
+    const hold = you.wp === sel;
+    const mainBtn = main === 'eat' ? '<button class="primary" data-act="eat">Съесть</button>'
+      : main === 'use' ? `<button class="primary" data-act="use">Применить (${USES[sel].key})</button>`
+        : main === 'equip' ? `<button class="primary" data-act="equip" ${stats?.canHold === false ? 'disabled' : ''}>${hold ? 'Убрать из рук' : 'Взять в руки'}</button>` : '';
+    const eatNote = f && !f.trip && !f.hal ? '<div class="inv-hint">Обычную еду съедает и клавиша <kbd>F</kbd></div>' : f ? '<div class="inv-hint">Только по щелчку: клавиша <kbd>F</kbd> такое не ест</div>' : '';
+    info.innerHTML = `
+      <div class="cr-big">${item.icon}</div>
+      <div class="bm-name">${item.name} <span class="muted small">× ${n}</span></div>
+      ${desc ? `<div class="bm-desc">${desc}</div>` : ''}
+      ${chips.length ? `<div class="bm-stats">${chips.map((c) => `<span>${c}</span>`).join('')}</div>` : ''}
+      ${lines ? `<div class="inv-lines">${lines}</div>` : ''}
+      ${eatNote}
+      ${mainBtn ? `<div class="cr-actions">${mainBtn}</div>` : ''}
+      <div class="inv-drop"><span>Выбросить:</span>
+        <button data-act="drop" data-n="1">1</button>
+        ${n > 10 ? '<button data-act="drop" data-n="10">10</button>' : ''}
+        <button data-act="drop" data-n="all">всё</button>
+        <span class="inv-hint">кучка лежит на земле — поднять на <kbd>E</kbd></span></div>`;
   }
 
   // Окно крафта: вкладки, сетка карточек и справка по выбранному рецепту.

@@ -670,6 +670,7 @@ input.onPress = (code) => {
     else if (hud.bigOpen) hud.toggleBigMap(false);
     else if (editor.isOpen) editor.close();
     else if (hud.cont) hud.onCloseCont();
+    else if (!hud.invWin.classList.contains('hidden')) hud.toggleInv(false);
     else if (!hud.craftEl.classList.contains('hidden')) hud.toggleCraft(false);
     else if (B.mode) setBuildMode(null);
     return;
@@ -699,6 +700,7 @@ input.onPress = (code) => {
   if (code === 'KeyR') return net.send({ t: 'use', item: 'antirad' });
   if (code === 'KeyT') return net.send({ t: 'use', item: 'elixir' });
   if (code === 'KeyC') return hud.toggleCraft();
+  if (code === 'KeyI') return hud.toggleInv();
   if (code === 'KeyB') return setBuildMode(B.mode ? null : 'place');
   if (code.startsWith('Digit')) {
     const n = Number(code.slice(5));
@@ -892,11 +894,11 @@ function updateHint() {
   let cont = null;
   for (const o of world.statics.objs.values()) {
     const s = o.s;
-    if (s.k !== 'storage' && s.k !== 'remains' && s.k !== 'crate') continue;
+    if (s.k !== 'storage' && s.k !== 'remains' && s.k !== 'crate' && s.k !== 'pile') continue;
     if (Math.abs(s.x - S.me.x) > R + 30 || Math.abs(s.y - S.me.y) > R + 30) continue;
     if (Math.hypot(s.x - S.me.x, s.y - S.me.y) - (s.k === 'storage' ? 20 : 16) <= R) cont = s;
   }
-  const contLabel = { remains: `обыскать останки (${cont?.on || '?'})`, crate: 'открыть ящик с добычей', storage: 'открыть хранилище' };
+  const contLabel = { remains: `обыскать останки (${cont?.on || '?'})`, pile: `подобрать брошенное (${cont?.on || '?'})`, crate: 'открыть ящик с добычей', storage: 'открыть хранилище' };
   if (hud.cont) lines.push('<b>E</b> — закрыть');
   else if (cont) lines.push(`<b>E</b> — ${contLabel[cont.k]}`);
   else if (nearWater(S.me.x, S.me.y, S.stats.radius + 26) && you.w < 99) lines.push('<b>E</b> — пить');
