@@ -289,12 +289,21 @@ export class WorldView {
       v.dd = !!e.dd;
       const ground = this.ground(x, y);
       const gy = this.standY(x, y, v.creature.tpl.hb);
-      v.creature.group.position.set(x, e.dd ? Math.max(ground, 0) : gy, y);
+      // пловец держится у поверхности: иначе всё тело уходит под воду и его не видно
+      const swimming = !e.dd && v.creature.swimY !== undefined && ground < -v.creature.tpl.hb * 0.6;
+      const wantY = e.dd ? Math.max(ground, 0) : swimming ? v.creature.swimY : gy;
+      // вход в воду и выход из неё — плавно, а не скачком
+      if (swimming !== v.swimming) v.easeY = 0.7;
+      v.swimming = swimming;
+      v.easeY = Math.max(0, (v.easeY || 0) - dt);
+      if (v.cy === undefined || e.dd || Math.abs(wantY - v.cy) > 60 || v.easeY <= 0) v.cy = wantY;
+      else v.cy += (wantY - v.cy) * (1 - Math.exp(-dt * 7));
+      v.creature.group.position.set(x, v.cy, y);
       v.creature.group.rotation.y = -a;
       v.creature.setWeapon(e.k === 'p' && !e.dd ? e.w || null : null);
       v.creature.update(dt, {
         speed: e.dd ? 0 : v.speed, charging: !!e.ch, warning: warns, night: this.night,
-        swim: ground < -v.creature.tpl.hb * 0.6, dead: !!e.dd,
+        swim: swimming, dead: !!e.dd,
       });
       // шаги: звук по типу почвы
       if (v.speed > 34) {

@@ -203,6 +203,9 @@ export class Human3D {
     this.size = 1 + P.size * 0.1;
     this.R = 16 + P.size * 5;
     this.tpl = { hb: 26 * this.size }; // высота пояса — для плавания и камеры
+    // Клипы плавания сделаны от поверхности воды: в них тело лежит у нуля модели, а не стоит на нём.
+    // Поэтому на глубине модель держим у самой воды (чуть выше — чтобы спина и голова были над волнами).
+    this.swimY = 3.5 * this.size;
     this.labelHeight = 47 * this.size;
     this.ready = false;
     this.pending = { weapon: null };
