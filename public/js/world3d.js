@@ -1,6 +1,6 @@
 // 3D-сцена игры: рельеф, объекты, существа с сервера, эффекты, камера.
 import * as THREE from 'three';
-import { MAP_H, MAP_W, NPCS, PLAYER, T, TILE, RESOURCES, RES_CHUNK, ABILITIES } from '/shared/config.js';
+import { MAP_H, MAP_W, NPCS, PLAYER, T, TILE, RESOURCES, RES_CHUNK, ABILITIES, JUMP } from '/shared/config.js';
 import { Terrain } from './gfx/terrain.js';
 import { Sky } from './gfx/sky.js';
 import { StaticsView } from './gfx/statics3d.js';
@@ -235,6 +235,34 @@ export class WorldView {
     return v;
   }
 
+  // звук шага по почве под ногами
+  stepSound(x, y) {
+    const tx = Math.max(0, Math.min(MAP_W - 1, Math.floor(x / TILE)));
+    const ty = Math.max(0, Math.min(MAP_H - 1, Math.floor(y / TILE)));
+    const tile = this.terrain.tiles[ty * MAP_W + tx];
+    return tile === T.ROCK || tile === T.CITY ? 'stepRock' : tile === T.SAND ? 'stepSand' : 'stepGrass';
+  }
+
+  // Прыжок своего существа сразу по нажатию, не дожидаясь сервера. false — прыгнуть нельзя:
+  // нет существа, оно мертво, плывёт, уже в воздухе или ещё не отошло от приземления.
+  jump(id, me) {
+    const v = this.ents.get(id);
+    if (!v || !v.e || v.e.dd || v.swimming || v.jt > 0 || v.sq > 0.5) return false;
+    this.startJump(v, v.x, v.y, me, true);
+    return true;
+  }
+
+  startJump(v, x, y, me, isMe) {
+    v.jt = JUMP.time;
+    this.effects.burst(x, Math.max(this.ground(x, y), 0) + 2, y, '#b9ad8a', 4, { speed: 36, size: 2, life: 0.32, gravity: -6 });
+    this.audio?.playAt(this.stepSound(x, y), x, y, me.x, me.y, { volume: isMe ? 0.42 : 0.2, range: 520, yaw: this.listenerYaw, rate: 1.18 });
+  }
+
+  landJump(v, x, y, me, isMe) {
+    this.effects.burst(x, Math.max(this.ground(x, y), 0) + 2, y, '#b9ad8a', 7, { speed: 52, size: 2.4, life: 0.4, gravity: -8 });
+    this.audio?.playAt(this.stepSound(x, y), x, y, me.x, me.y, { volume: isMe ? 0.6 : 0.3, range: 560, yaw: this.listenerYaw, rate: 0.82 });
+  }
+
   // ближайшее к точке существо/игрок (для эффектов без id)
   nearestEnt(x, y, maxD) {
     let best = null;
@@ -321,21 +349,41 @@ export class WorldView {
       v.easeY = Math.max(0, (v.easeY || 0) - dt);
       if (v.cy === undefined || e.dd || Math.abs(wantY - v.cy) > 60 || v.easeY <= 0) v.cy = wantY;
       else v.cy += (wantY - v.cy) * (1 - Math.exp(-dt * 7));
-      v.creature.group.position.set(x, v.cy, y);
+      // прыжок (пробел): дуга над землёй, растяжка в полёте, сжатие при приземлении. Чисто зрелищный:
+      // свой стартует сразу по нажатию (jump), чужой — по флагу jp с сервера
+      if (e.jp && !v.jp && !(v.jt > 0) && !e.dd && !swimming) this.startJump(v, x, y, me, isMe);
+      v.jp = e.jp;
+      if (e.dd || swimming) v.jt = 0;
+      let hop = 0;
+      let squash = 1;
+      if (v.jt > 0) {
+        v.jt -= dt;
+        const k = Math.min(1, Math.max(0, 1 - v.jt / JUMP.time));
+        hop = 4 * JUMP.height * k * (1 - k);
+        squash = 1 + Math.sin(k * Math.PI) * 0.06;
+        if (v.jt <= 0) {
+          v.sq = 1;
+          this.landJump(v, x, y, me, isMe);
+        }
+      }
+      if (v.sq > 0) {
+        v.sq = Math.max(0, v.sq - dt / 0.16);
+        squash -= 0.12 * v.sq;
+      }
+      v.hop = hop;
+      v.creature.group.position.set(x, v.cy + hop, y);
+      if (e.k === 'p') v.creature.root.scale.y = squash;
       v.creature.group.rotation.y = -a;
       v.creature.setWeapon(e.k === 'p' && !e.dd ? e.w || null : null);
       v.creature.update(dt, {
         speed: e.dd ? 0 : v.speed, charging: !!e.ch, warning: warns, night: this.night,
         swim: swimming, dead: !!e.dd,
       });
-      // шаги: звук по типу почвы
-      if (v.speed > 34) {
+      // шаги: звук по типу почвы (в прыжке ноги землю не касаются)
+      if (v.speed > 34 && !(v.jt > 0)) {
         v.stepTimer -= dt;
         if (v.stepTimer <= 0) {
-          const tx = Math.max(0, Math.min(MAP_W - 1, Math.floor(x / TILE)));
-          const ty = Math.max(0, Math.min(MAP_H - 1, Math.floor(y / TILE)));
-          const tile = this.terrain.tiles[ty * MAP_W + tx];
-          const step = tile === T.ROCK || tile === T.CITY ? 'stepRock' : tile === T.SAND ? 'stepSand' : 'stepGrass';
+          const step = this.stepSound(x, y);
           this.audio?.playAt(step, x, y, me.x, me.y, { volume: isMe ? 0.52 : 0.26, range: 520, yaw, rate: v.speed > 135 ? 1.08 : 0.96 });
           v.stepTimer = Math.max(0.3, Math.min(0.54, 0.58 - v.speed * 0.00135));
         }
@@ -871,7 +919,7 @@ export class WorldView {
         if (!e || v.isMe || e.dd) continue;
         const cr = v.creature;
         const top = Math.max(20, (cr.labelHeight ?? cr.tpl.hb * 2) - 6);
-        const bottom = v.cy ?? v.gy;
+        const bottom = (v.cy ?? v.gy) + (v.hop || 0); // в прыжке цель выше земли
         for (let i = 0; i < 5; i++) {
           _v2.set(v.x, bottom + (top * i) / 4, v.y).sub(o);
           const t = _v2.dot(dir);
@@ -1005,7 +1053,7 @@ export class WorldView {
         if (v.label.style.display !== 'none') v.label.style.display = 'none';
         continue;
       }
-      _v.set(v.x, v.gy + (v.creature.labelHeight ?? v.creature.tpl.hb + v.creature.R * 1.3) + 10, v.y);
+      _v.set(v.x, v.gy + (v.hop || 0) + (v.creature.labelHeight ?? v.creature.tpl.hb + v.creature.R * 1.3) + 10, v.y);
       const dist = _v.distanceTo(this.camera.position);
       _v.project(this.camera);
       if (_v.z > 1 || dist > far) {

@@ -5,7 +5,7 @@ import {
   ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, CRAFT_MAX, USES, TRIALS, TRIPS, TRIP_MAX, buildCost, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
   NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
   RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
-  ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET,
+  ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET, JUMP,
 } from '../shared/config.js';
 import {
   computeStats, decodeGenome, encodeGenome, evolveCostWith, sanitizeGenome, defaultGenome, complexity, cloneGenome,
@@ -307,6 +307,7 @@ export class Game {
     switch (msg.t) {
       case 'in': return this.onInput(p, msg);
       case 'charge': return this.tryCharge(p, msg);
+      case 'jump': return this.onJump(p);
       case 'build': return this.onBuild(p, msg);
       case 'demolish': return this.onDemolish(p, msg);
       case 'repair': return this.onRepair(p, msg);
@@ -766,7 +767,7 @@ export class Game {
       hp: 100, food: 80, water: 80, stamina: 100, dna: Math.max(0, Math.floor(prof.dna || 0)), inv: cleanInv(prof.inv),
       input: idleInput(),
       cd: { melee: 0, spit: 0, charge: 0 },
-      combatT: 0, atkT: 0, hitT: 0, slowT: 0, spikeT: 0, drinkT: 0, eatT: 0, lastChat: -10,
+      combatT: 0, atkT: 0, hitT: 0, slowT: 0, spikeT: 0, drinkT: 0, eatT: 0, jumpT: 0, lastChat: -10,
       charging: 0, chargeDir: 0, chargeHit: null,
       spawnProtect: PLAYER.spawnProtect, dead: false, openCont: null, nearFire: false,
       resLoaded: new Set(), rcx: null, rcy: null,
@@ -852,6 +853,14 @@ export class Game {
     p.input.spit = !!m.b;
     if (Number.isFinite(m.ang) && p.charging <= 0) p.angle = m.ang;
     if (Number.isFinite(m.ad)) p.aimD = clamp(m.ad, 0, 2000);
+  }
+
+  // Прыжок (пробел): чисто зрелищный — положение (x, y) и бой не меняются, сервер только отмечает
+  // «в воздухе» на JUMP.time секунд, чтобы подскок видели все. В воздухе заново не прыгнуть;
+  // оглушённый, мёртвый и плывущий в глубокой воде не прыгают.
+  onJump(p) {
+    if (p.dead || p.jumpT > 0 || p.stunT > 0 || this.tileAt(p.x, p.y) === T.DEEP) return;
+    p.jumpT = JUMP.time;
   }
 
   tryCharge(p, m) {
@@ -1135,6 +1144,7 @@ export class Game {
     p.slowT = Math.max(0, p.slowT - dt);
     p.drinkT = Math.max(0, p.drinkT - dt);
     p.eatT = Math.max(0, p.eatT - dt);
+    p.jumpT = Math.max(0, p.jumpT - dt);
     p.warnT = Math.max(0, p.warnT - dt);
     p.spawnProtect = Math.max(0, p.spawnProtect - dt);
     if (p.weapon && !ABILITIES[p.weapon] && !(p.inv[p.weapon] > 0)) p.weapon = null; // оружие выложили или потратили
@@ -1763,6 +1773,7 @@ export class Game {
     t.hexT = 0;
     t.stunT = 0;
     if (t.type === 'player') {
+      t.jumpT = 0; // мёртвый не в прыжке (updatePlayer его не считает, флаг завис бы до возрождения)
       this.endTrial(t, '🔮 Вы погибли в трипе — испытание духа не пройдено.');
       t.trip = { a: 0, p: 0, t: 0 };
       t.halT = 0;
@@ -2190,6 +2201,7 @@ export class Game {
       i: p.id, k: 'p', x: Math.round(p.x), y: Math.round(p.y), a: Math.round(p.angle * 100) / 100,
       h: Math.ceil(p.hp), mh: p.stats.maxHp, n: p.name, c: p.color, g: p.look, ap: p.ap, dd: p.dead ? 1 : undefined,
       at: p.atkT > 0 ? 1 : 0, hf: p.hitT > 0 ? 1 : 0, ch: p.charging > 0 ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0,
+      jp: p.jumpT > 0 ? 1 : undefined,
       w: p.weapon || undefined,
       sh: p.shieldT > 0 ? 1 : undefined, hx: p.hexT > 0 ? 1 : undefined, st: p.stunT > 0 ? 1 : undefined,
       pa: p.path || undefined,

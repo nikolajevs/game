@@ -722,9 +722,14 @@ input.onPress = (code) => {
     else if (s) hud.toast('Сносить можно только свои постройки');
     return;
   }
-  if (code === 'Space' && S.stats.charge && input.enabled) {
-    S.me.face = aimAngle();
-    net.send({ t: 'charge', ang: Math.round(S.me.face * 100) / 100 });
+  if (code === 'Space' && input.enabled) {
+    // прыжок: свой подскок сразу, сервер лишь рассылает флаг, чтобы его видели другие
+    if (world.jump(S.myId, S.me)) net.send({ t: 'jump' });
+    // таран (мутация «рога») по-прежнему на пробеле — теперь он идёт вместе с прыжком
+    if (S.stats.charge) {
+      S.me.face = aimAngle();
+      net.send({ t: 'charge', ang: Math.round(S.me.face * 100) / 100 });
+    }
   }
 };
 input.onRelease = (code) => {
