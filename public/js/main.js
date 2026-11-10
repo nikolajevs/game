@@ -668,6 +668,7 @@ input.onPress = (code) => {
     else if (hud.bigOpen) hud.toggleBigMap(false);
     else if (editor.isOpen) editor.close();
     else if (hud.cont) hud.onCloseCont();
+    else if (!hud.craftEl.classList.contains('hidden')) hud.toggleCraft(false);
     else if (B.mode) setBuildMode(null);
     return;
   }
@@ -680,15 +681,6 @@ input.onPress = (code) => {
   if (code === 'Enter') return openChat();
   if (code === 'Tab') return hud.togglePlayers(true);
   if (code === 'KeyH') return $('helpBox').classList.toggle('hidden');
-  if (code === 'KeyE') {
-    if (hud.cont) hud.onCloseCont();
-    else net.send({ t: 'interact' });
-    return;
-  }
-  if (code === 'KeyF') return net.send({ t: 'eat' });
-  if (code === 'KeyR') return net.send({ t: 'use', item: 'antirad' });
-  if (code === 'KeyC') return hud.toggleCraft();
-  if (code === 'KeyB') return setBuildMode(B.mode ? null : 'place');
   if (B.mode) {
     // в стройке: Q/E — разделы, R — ремонт, X — снос (повторное нажатие возвращает к постройкам)
     if (code === 'KeyQ') return setBuildCat(B.mode === 'place' ? B.cat - 1 : B.cat);
@@ -696,6 +688,16 @@ input.onPress = (code) => {
     if (code === 'KeyR') return setBuildMode(B.mode === 'repair' ? 'place' : 'repair');
     if (code === 'KeyX') return setBuildMode(B.mode === 'demolish' ? 'place' : 'demolish');
   }
+  if (code === 'KeyE') {
+    if (hud.cont) hud.onCloseCont();
+    else net.send({ t: 'interact' });
+    return;
+  }
+  if (code === 'KeyF') return net.send({ t: 'eat' });
+  if (code === 'KeyR') return net.send({ t: 'use', item: 'antirad' });
+  if (code === 'KeyT') return net.send({ t: 'use', item: 'elixir' });
+  if (code === 'KeyC') return hud.toggleCraft();
+  if (code === 'KeyB') return setBuildMode(B.mode ? null : 'place');
   if (code.startsWith('Digit')) {
     const n = Number(code.slice(5));
     if (B.mode) {

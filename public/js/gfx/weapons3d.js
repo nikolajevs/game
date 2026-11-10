@@ -45,6 +45,18 @@ export function weaponGeometry(kind) {
       p.push({ geom: G.box, matrix: M(12, 0, 0, 0, 0, 0, 16, 3, 0.8), color: BONE });
       p.push({ geom: G.cone5, matrix: M(21.5, 0, 0, 0, 0, X, 1.6, 4, 0.5), color: BONE });
       break;
+    case 'dagger':
+      rod(p, -3, 3, 1.1, '#3a2030');
+      p.push({ geom: G.box, matrix: M(3.5, 0, 0, 0, 0, 0, 1.2, 1.2, 5), color: '#c77dff' });
+      p.push({ geom: G.box, matrix: M(9, 0, 0, 0, 0, 0, 10, 2.6, 0.7), color: BONE });
+      p.push({ geom: G.cone5, matrix: M(15.5, 0, 0, 0, 0, X, 1.4, 3.5, 0.5), color: BONE });
+      break;
+    case 'staff':
+      rod(p, -14, 26, 1, WOOD);
+      p.push({ geom: G.octa, matrix: M(30, 0, 0, 0, 0.6, 0, 3.6, 3.6, 3.6), color: '#c77dff' });
+      p.push({ geom: G.cone5, matrix: M(27, 2.6, 0, 0, 0, 0.5, 0.8, 5, 0.8), color: BONE });
+      p.push({ geom: G.cone5, matrix: M(27, -2.6, 0, 0, 0, Math.PI - 0.5, 0.8, 5, 0.8), color: BONE });
+      break;
     case 'pickaxe':
       rod(p, -3, 16, 1.1, WOOD);
       p.push({ geom: G.cone5, matrix: M(15, 5, 0, 0, 0, 0.25, 1.6, 9, 1.6), color: METAL });

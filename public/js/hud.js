@@ -1,7 +1,7 @@
 // Интерфейс поверх 3D: полоски, инвентарь, пояс с оружием, крафт, мини-карта, чат, хранилище.
 import {
   ITEMS, ITEM_KEYS, RES_KEYS, STRUCTURES, BUILD_CATS, repairCost, demolishRefund, MAP_W, MAP_H, TILE, lightAt,
-  WEAPONS, WEAPON_ORDER, RECIPES, RECIPE_GROUPS, RAD, SITES, ABILITIES, ABILITY_ORDER, FOOD,
+  WEAPONS, WEAPON_ORDER, RECIPES, CRAFT_TABS, CRAFT_MAX, USES, RAD, SITES, ABILITIES, ABILITY_ORDER, FOOD,
 } from '/shared/config.js';
 
 const MINI_SPAN = 4800; // сколько единиц мира видно на мини-карте
@@ -14,6 +14,7 @@ const RECIPE_DESC = {
   arrows: 'Для лука и арбалета',
   bullets: 'Для самопала и дробовика',
   antirad: `Снимает ${RAD.antirad} ед. радиации (R)`,
+  elixir: `Возвращает ${USES.elixir.mana} маны и ${USES.elixir.hp} здоровья (T)`,
 };
 
 function costText(cost, inv) {
@@ -80,6 +81,7 @@ export class Hud {
     this.initBuildMenu();
     $('contClose').addEventListener('click', () => this.onCloseCont?.());
     $('craftClose').addEventListener('click', () => this.toggleCraft(false));
+    this.initCraft();
   }
 
   show() {
@@ -230,7 +232,8 @@ export class Hud {
       el.className = `wslot${you.wp === k ? ' on' : ''}${stats.canHold ? '' : ' off'}`;
       el.title = `${ITEMS[k].name}: ${w.desc}`;
       let ammo = '';
-      if (w.type === 'ranged') ammo = `${you.inv[w.ammo] || 0}${ITEMS[w.ammo].icon}`;
+      if (w.mana) ammo = `${w.mana}✦`;
+      else if (w.type === 'ranged') ammo = `${you.inv[w.ammo] || 0}${ITEMS[w.ammo].icon}`;
       else if (w.type === 'throw') ammo = `×${you.inv[k]}`;
       el.innerHTML = `<kbd>${i + 1}</kbd><div class="wi">${ITEMS[k].icon}</div><div class="wn">${ITEMS[k].name}</div><div class="wa">${ammo}</div>`;
       el.addEventListener('mousedown', (e) => {
@@ -253,6 +256,7 @@ export class Hud {
       { key: 'F', ic: '🍖', nm: 'Есть', cd: 0, max: 1, on: you.inv.berries + you.inv.meat > 0 },
       { key: 'R', ic: '💊', nm: `Антирад ${you.inv.antirad || ''}`, cd: 0, max: 1, on: you.inv.antirad > 0 },
     ];
+    if (you.inv.elixir > 0) list.push({ key: 'T', ic: ITEMS.elixir.icon, nm: `Эликсир ${you.inv.elixir}`, cd: 0, max: 1, on: true });
     const sig = list.map((a) => `${a.on}${a.ic}${a.nm}${Math.ceil(a.cd * 10)}`).join('|');
     if (this.cache.ab === sig) return;
     this.cache.ab = sig;
@@ -406,41 +410,109 @@ export class Hud {
     return show;
   }
 
+  // Окно крафта: вкладки, сетка карточек и справка по выбранному рецепту.
+  // Базовые вкладки видны всем; «Технологии» — только пути разума, «Ритуалы» — только пути духа.
+  initCraft() {
+    this.craftTab = 'weapons';
+    this.craftSel = 'club';
+    const el = this.craftEl;
+    el.addEventListener('mousedown', (e) => e.stopPropagation());
+    $('craftTabs').addEventListener('click', (e) => {
+      const t = e.target.closest('[data-tab]');
+      if (!t) return;
+      this.craftTab = t.dataset.tab;
+      this.craftSel = CRAFT_TABS.find((c) => c.id === this.craftTab).items[0];
+      this.cache.craft = null;
+    });
+    const grid = $('craftGrid');
+    grid.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-item]');
+      if (!c) return;
+      this.craftSel = c.dataset.item;
+      this.cache.craft = null;
+    });
+    grid.addEventListener('dblclick', (e) => {
+      const c = e.target.closest('[data-item]');
+      if (c) this.send({ t: 'craft', item: c.dataset.item });
+    });
+    $('craftInfo').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-n]');
+      if (b && !b.disabled) this.send({ t: 'craft', item: this.craftSel, n: Number(b.dataset.n) });
+    });
+  }
+
+  // почему рецепт сейчас не создать ('' — можно)
+  craftBlock(you, k) {
+    const rec = RECIPES[k];
+    if (rec.ability && !(you.ab || []).includes(rec.ability)) return `Нужно умение «${ABILITIES[rec.ability].name}» (P)`;
+    if (rec.bench && !you.bench) return 'Подойдите к верстаку';
+    if (rec.lab && !you.lab) return 'Подойдите к лаборатории';
+    if (rec.fire && !you.fire) return 'Ритуал проводят у костра';
+    if (Object.entries(rec.cost).some(([r, v]) => (you.inv[r] || 0) < v)) return 'Не хватает ресурсов';
+    return '';
+  }
+
   renderCraft(you) {
-    const sig = `${ITEM_KEYS.map((k) => you.inv[k] || 0).join(',')}|${you.bench}|${you.lab}|${(you.ab || []).join(',')}`;
+    const sig = `${ITEM_KEYS.map((k) => you.inv[k] || 0).join(',')}|${you.bench}|${you.lab}|${you.fire}|${(you.ab || []).join(',')}|${you.pa}|${this.craftTab}|${this.craftSel}`;
     if (this.cache.craft === sig) return;
     this.cache.craft = sig;
-    const body = $('craftBody');
-    body.innerHTML = '';
-    for (const [title, items] of RECIPE_GROUPS) {
-      const h = document.createElement('div');
-      h.className = 'craft-group';
-      h.textContent = title;
-      body.appendChild(h);
-      for (const k of items) {
-        const rec = RECIPES[k];
-        const poor = Object.entries(rec.cost).some(([r, v]) => (you.inv[r] || 0) < v);
-        const needBench = rec.bench && !you.bench;
-        const needLab = rec.lab && !you.lab;
-        const needAb = rec.ability && !(you.ab || []).includes(rec.ability);
-        const row = document.createElement('div');
-        row.className = 'crow2';
-        const w = WEAPONS[k];
-        const desc = w ? w.desc : RECIPE_DESC[k] || '';
-        const stat = w ? (w.type === 'melee' ? `+${w.dmg} урона` : w.type === 'throw' ? `${w.dmg} урона, взрыв` : `${w.dmg}${w.pellets ? `×${w.pellets}` : ''} урона`) : '';
-        const have = you.inv[k] ? ` <span class="muted">(есть ${you.inv[k]})</span>` : '';
-        row.innerHTML = `<div class="ci">${ITEMS[k].icon}</div>
-          <div class="cn"><b>${ITEMS[k].name}${rec.out > 1 ? ` ×${rec.out}` : ''}</b>${have}<div class="cd">${desc}${stat ? ` · ${stat}` : ''}${rec.bench ? ' · <span class="bench">нужен верстак</span>' : ''}${rec.lab ? ' · <span class="bench">нужна лаборатория</span>' : ''}${needAb ? ` · <span class="bench">умение «${ABILITIES[rec.ability].name}»</span>` : ''}</div></div>
-          <div class="cc">${costText(rec.cost, you.inv)}</div>`;
-        const b = document.createElement('button');
-        b.textContent = 'Создать';
-        b.disabled = poor || needBench || needLab || needAb;
-        b.title = needAb ? 'Нужно умение пути разума' : needBench ? 'Подойдите к верстаку' : needLab ? 'Подойдите к лаборатории' : poor ? 'Не хватает ресурсов' : '';
-        b.addEventListener('click', () => this.send({ t: 'craft', item: k }));
-        row.appendChild(b);
-        body.appendChild(row);
-      }
+    const tabs = CRAFT_TABS.filter((t) => !t.path || t.path === you.pa);
+    let tab = tabs.find((t) => t.id === this.craftTab);
+    if (!tab) {
+      tab = tabs[0];
+      this.craftTab = tab.id;
     }
+    if (!tab.items.includes(this.craftSel)) this.craftSel = tab.items[0];
+    const sel = this.craftSel;
+    this.craftEl.dataset.path = tab.path || '';
+    $('craftTabs').innerHTML = tabs.map((t) => `<div class="cr-tab${t === tab ? ' on' : ''}${t.path ? ` path-${t.path}` : ''}" data-tab="${t.id}"><span>${t.icon}</span>${t.name}</div>`).join('');
+    // мастерские пути: что из них сейчас рядом
+    const st = you.pa === 'mind' ? [['🔨', 'Верстак', you.bench], ['🔬', 'Лаборатория', you.lab]] : you.pa === 'spirit' ? [['🔥', 'Костёр', you.fire]] : [];
+    $('craftStations').innerHTML = st.map(([ic, nm, on]) => `<div class="cr-st${on ? ' on' : ''}" title="${on ? 'Рядом' : 'Не рядом — подойдите или постройте (B)'}">${ic} ${nm}</div>`).join('');
+    $('craftGrid').innerHTML = tab.items.map((k) => {
+      const rec = RECIPES[k];
+      const why = this.craftBlock(you, k);
+      const locked = rec.ability && !(you.ab || []).includes(rec.ability);
+      return `<div class="cr-card${k === sel ? ' on' : ''}${why ? ' no' : ''}${locked ? ' locked' : ''}" data-item="${k}">
+        ${you.inv[k] ? `<div class="cr-have">${you.inv[k]}</div>` : ''}${locked ? '<div class="bm-lock">🔒</div>' : ''}
+        <div class="cr-ic">${ITEMS[k].icon}</div><div class="cr-n">${ITEMS[k].name}${rec.out > 1 ? ` ×${rec.out}` : ''}</div>
+        <div class="bm-c">${costText(rec.cost, you.inv)}</div></div>`;
+    }).join('');
+    // справка
+    const rec = RECIPES[sel];
+    const w = WEAPONS[sel];
+    const chips = [];
+    if (w) {
+      chips.push(w.type === 'melee' ? '⚔ ближний бой' : w.type === 'throw' ? '💥 метательное' : '🎯 дальний бой');
+      chips.push(`урон ${w.type === 'melee' ? '+' : ''}${w.dmg}${w.pellets ? `×${w.pellets}` : ''}`);
+      chips.push(`удар раз в ${w.cd} с`);
+      if (w.ammo) chips.push(`заряд: ${ITEMS[w.ammo].icon} ${ITEMS[w.ammo].name.toLowerCase()}`);
+      if (w.mana) chips.push(`${w.mana} ✦ маны за выстрел`);
+    } else chips.push(ITEMS[sel].kind === 'ammo' ? '🎒 боеприпас' : '🧴 расходник');
+    const need = [];
+    if (rec.bench) need.push(['🔨 Верстак рядом', you.bench]);
+    if (rec.lab) need.push(['🔬 Лаборатория рядом', you.lab]);
+    if (rec.fire) need.push(['🔥 Костёр рядом', you.fire]);
+    if (rec.ability) need.push([`${ABILITIES[rec.ability].icon} Умение «${ABILITIES[rec.ability].name}»`, (you.ab || []).includes(rec.ability)]);
+    const why = this.craftBlock(you, sel);
+    let max = CRAFT_MAX;
+    for (const [r, v] of Object.entries(rec.cost)) max = Math.min(max, Math.floor((you.inv[r] || 0) / v));
+    const many = !w && max > 1; // оружие делают по одному, припасы — пачкой
+    $('craftInfo').innerHTML = `
+      <div class="cr-big">${ITEMS[sel].icon}</div>
+      <div class="bm-name">${ITEMS[sel].name}${rec.out > 1 ? ` ×${rec.out}` : ''}</div>
+      <div class="bm-desc">${w ? w.desc : RECIPE_DESC[sel] || ''}</div>
+      <div class="bm-stats">${chips.map((c) => `<span>${c}</span>`).join('')}</div>
+      ${need.length ? `<div class="cr-need">${need.map(([t, ok]) => `<div class="${ok ? 'ok' : 'poor'}">${ok ? '✔' : '✖'} ${t}</div>`).join('')}</div>` : ''}
+      <div class="bm-reslist">${Object.entries(rec.cost).map(([r, v]) => {
+    const have = you.inv[r] || 0;
+    return `<div class="bm-res ${have >= v ? 'ok' : 'poor'}"><span>${ITEMS[r].icon}</span>${ITEMS[r].name}<b>${have} / ${v}</b></div>`;
+  }).join('')}</div>
+      <div class="cr-actions">
+        <button class="primary" data-n="1" ${why ? 'disabled' : ''}>Создать</button>
+        ${many ? `<button data-n="${max}">×${max}</button>` : ''}
+      </div>
+      <div class="bm-state ${why ? 'bad' : 'good'}">${why ? `✖ ${why}` : `✔ Можно создать${you.inv[sel] ? ` · у вас ${you.inv[sel]}` : ''}`}</div>`;
   }
 
   clock(phase) {

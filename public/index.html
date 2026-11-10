@@ -87,9 +87,14 @@
 </div>
 
 <div id="craft" class="panel hidden">
-  <div class="cont-head"><span>🔨 Крафт <span class="muted small">(C — закрыть)</span></span><button id="craftClose" title="Закрыть (C)">✕</button></div>
-  <div class="muted small">Огнестрел, патроны и взрывчатка — только у верстака.</div>
-  <div id="craftBody"></div>
+  <div class="cr-head">
+    <div class="cr-title">⚒ Крафт</div>
+    <div class="cr-tabs" id="craftTabs"></div>
+    <div class="cr-stations" id="craftStations"></div>
+    <div class="bm-close" id="craftClose" title="Закрыть — C">✕</div>
+  </div>
+  <div class="cr-body"><div class="cr-grid" id="craftGrid"></div><div class="cr-info" id="craftInfo"></div></div>
+  <div class="cr-foot"><span>щелчок — выбрать</span><span>двойной щелчок — создать</span><span><kbd>C</kbd> / <kbd>Esc</kbd> закрыть</span></div>
 </div>
 
 <div id="container" class="panel hidden">

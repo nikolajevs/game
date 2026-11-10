@@ -56,6 +56,7 @@ export const ITEMS = {
   bullets: { name: 'Патроны', icon: '🔸', kind: 'ammo' },
   cell: { name: 'Энергоячейка', icon: '🔋', kind: 'ammo' },
   antirad: { name: 'Антирад', icon: '💊', kind: 'use' },
+  elixir: { name: 'Эликсир духа', icon: '⚗️', kind: 'use' }, // ритуал пути духа: мана и немного здоровья
   club: { name: 'Дубина', icon: '🏏', kind: 'weapon' },
   spear: { name: 'Копьё', icon: '🔱', kind: 'weapon' },
   axe: { name: 'Каменный топор', icon: '🪓', kind: 'weapon' },
@@ -68,6 +69,8 @@ export const ITEMS = {
   shotgun: { name: 'Дробовик', icon: '💥', kind: 'weapon' },
   bomb: { name: 'Взрывпакет', icon: '🧨', kind: 'weapon' },
   laser: { name: 'Лазерная винтовка', icon: '🔦', kind: 'weapon' },
+  dagger: { name: 'Ритуальный кинжал', icon: '🔪', kind: 'weapon' },
+  staff: { name: 'Посох духа', icon: '🪄', kind: 'weapon' },
 };
 export const ITEM_KEYS = Object.keys(ITEMS);
 export const RES_KEYS = ITEM_KEYS.filter((k) => ITEMS[k].kind === 'res');
@@ -87,9 +90,12 @@ export const WEAPONS = {
   pistol: { type: 'ranged', tier: 3, ammo: 'bullets', proj: 'bullet', dmg: 30, speed: 1300, life: 0.75, cd: 0.4, spread: 0.04, desc: 'Быстрая стрельба' },
   shotgun: { type: 'ranged', tier: 3, ammo: 'bullets', proj: 'bullet', dmg: 10, pellets: 7, speed: 1100, life: 0.4, cd: 1.15, spread: 0.3, desc: 'Сокрушителен вблизи' },
   bomb: { type: 'throw', tier: 3, proj: 'bomb', dmg: 70, structDmg: 450, radius: 100, speed: 420, life: 1.3, cd: 1.0, desc: 'Бросок, взрыв рушит стены' },
+  // оружие пути духа: кинжал лечит владельца, посох стреляет за ману (mana) без боеприпасов
+  dagger: { type: 'melee', tier: 2, dmg: 13, reach: 6, cd: 0.36, leech: 0.3, desc: 'Быстрый; каждый удар возвращает 30% урона здоровьем' },
+  staff: { type: 'ranged', tier: 3, mana: 7, proj: 'force', dmg: 22, speed: 900, life: 0.6, cd: 0.6, kb: 120, desc: 'Сгустки силы за ману, боеприпасы не нужны' },
   laser: { type: 'ranged', tier: 4, ammo: 'cell', proj: 'laser', dmg: 34, speed: 2400, life: 0.42, cd: 0.38, desc: 'Луч: быстрый, точный и мощный' },
 };
-export const WEAPON_ORDER = ['club', 'spear', 'axe', 'sling', 'blade', 'pickaxe', 'bow', 'crossbow', 'pistol', 'shotgun', 'bomb', 'laser'];
+export const WEAPON_ORDER = ['club', 'spear', 'axe', 'sling', 'blade', 'pickaxe', 'bow', 'crossbow', 'pistol', 'shotgun', 'bomb', 'laser', 'dagger', 'staff'];
 // урон снарядов по постройкам (доля урона по материалу)
 export const PROJ_STRUCT = {
   acid: { wood: 0.6, stone: 0.3 },
@@ -104,7 +110,9 @@ export const PROJ_STRUCT = {
 export const BOMB_STRUCT = { wood: 1, stone: 0.7 };
 
 // ---- Крафт ----
-// bench: нужен верстак рядом
+// Без поля path рецепт базовый — доступен всем. path: 'mind' — технологии пути разума,
+// path: 'spirit' — ритуалы пути духа: чужие и ещё не выбранные пути в меню крафта даже не видны.
+// bench — нужен верстак рядом, lab — лаборатория, fire — костёр; ability — изученное умение.
 export const RECIPES = {
   club: { cost: { wood: 15 } },
   spear: { cost: { wood: 25 } },
@@ -116,21 +124,31 @@ export const RECIPES = {
   crossbow: { cost: { wood: 35, bone: 10, scrap: 8 } },
   arrows: { cost: { wood: 4, stone: 2 }, out: 5 },
   antirad: { cost: { berries: 4, bone: 2 }, out: 1 },
-  bullets: { cost: { scrap: 1, sulfur: 3 }, out: 4, bench: true },
-  pistol: { cost: { scrap: 25, wood: 10 }, bench: true },
-  shotgun: { cost: { scrap: 45, wood: 15 }, bench: true },
-  bomb: { cost: { sulfur: 20, scrap: 6, wood: 5 }, bench: true },
-  // технологии пути разума: нужна лаборатория рядом и изученное умение
-  laser: { cost: { scrap: 40, sulfur: 10, crystal: 3, electronics: 12 }, lab: true, ability: 'laser' },
-  cell: { cost: { scrap: 3, sulfur: 2, electronics: 1 }, out: 6, lab: true, ability: 'laser' },
+  // технологии пути разума
+  bullets: { cost: { scrap: 1, sulfur: 3 }, out: 4, bench: true, path: 'mind' },
+  pistol: { cost: { scrap: 25, wood: 10 }, bench: true, path: 'mind' },
+  shotgun: { cost: { scrap: 45, wood: 15 }, bench: true, path: 'mind' },
+  bomb: { cost: { sulfur: 20, scrap: 6, wood: 5 }, bench: true, path: 'mind' },
+  laser: { cost: { scrap: 40, sulfur: 10, crystal: 3, electronics: 12 }, lab: true, ability: 'laser', path: 'mind' },
+  cell: { cost: { scrap: 3, sulfur: 2, electronics: 1 }, out: 6, lab: true, ability: 'laser', path: 'mind' },
+  // ритуалы пути духа
+  elixir: { cost: { amanita: 1, berries: 4 }, out: 1, fire: true, path: 'spirit' },
+  dagger: { cost: { bone: 14, crystal: 1 }, path: 'spirit' },
+  staff: { cost: { wood: 30, bone: 8, crystal: 2 }, fire: true, path: 'spirit' },
 };
-export const RECIPE_GROUPS = [
-  ['Ближний бой', ['club', 'spear', 'axe', 'blade', 'pickaxe']],
-  ['Дальний бой', ['sling', 'bow', 'crossbow']],
-  ['Боеприпасы и расходники', ['arrows', 'antirad', 'bullets']],
-  ['Огнестрел и взрывчатка', ['pistol', 'shotgun', 'bomb']],
-  ['Технологии (путь разума)', ['laser', 'cell']],
+// Вкладки меню крафта. Вкладка с path видна только тем, кто выбрал этот путь.
+export const CRAFT_TABS = [
+  { id: 'weapons', name: 'Оружие', icon: '⚔️', items: ['club', 'spear', 'axe', 'blade', 'pickaxe', 'sling', 'bow', 'crossbow'] },
+  { id: 'supplies', name: 'Припасы', icon: '🎒', items: ['arrows', 'antirad'] },
+  { id: 'tech', path: 'mind', name: 'Технологии', icon: '⚙️', items: ['bullets', 'pistol', 'shotgun', 'bomb', 'cell', 'laser'] },
+  { id: 'ritual', path: 'spirit', name: 'Ритуалы', icon: '🔮', items: ['elixir', 'dagger', 'staff'] },
 ];
+export const CRAFT_MAX = 10; // столько раз подряд можно создать одним нажатием
+// Расходники: что даёт применение (antirad — клавиша R, elixir — T)
+export const USES = {
+  antirad: { key: 'R' },
+  elixir: { key: 'T', mana: 50, hp: 20 },
+};
 export const BENCH_RANGE = 130;
 
 // r — радиус для ударов, cr — радиус столкновения (0 = проходимо)

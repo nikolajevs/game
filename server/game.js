@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import {
   TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, TERRAIN_SPEED, isWater, DAY_LENGTH, isNight,
-  ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
+  ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, CRAFT_MAX, USES, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
   NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
   RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
   ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET,
@@ -582,12 +582,18 @@ export class Game {
     if (p.dead) return;
     const rec = RECIPES[m.item];
     if (!rec) return;
+    // технологии и ритуалы — только своему пути
+    if (rec.path && p.path !== rec.path) return this.toast(p, `Это умеет только ${PATHS[rec.path].name.toLowerCase()}`);
     if (rec.bench && !this.nearBench(p)) return this.toast(p, 'Нужен верстак рядом');
     if (rec.ability && !p.abil.has(rec.ability)) return this.toast(p, `Нужно умение «${ABILITIES[rec.ability].name}» (путь разума)`);
     if (rec.lab && !this.nearLab(p)) return this.toast(p, 'Нужна лаборатория рядом');
-    for (const k in rec.cost) if ((p.inv[k] || 0) < rec.cost[k]) return this.toast(p, 'Не хватает ресурсов');
-    for (const k in rec.cost) p.inv[k] -= rec.cost[k];
-    const out = rec.out || 1;
+    if (rec.fire && !p.nearFire) return this.toast(p, 'Ритуал проводят у костра');
+    // сколько раз подряд: не больше, чем хватает ресурсов
+    let times = clamp(Math.floor(Number(m.n) || 1), 1, CRAFT_MAX);
+    for (const k in rec.cost) times = Math.min(times, Math.floor((p.inv[k] || 0) / rec.cost[k]));
+    if (times < 1) return this.toast(p, 'Не хватает ресурсов');
+    for (const k in rec.cost) p.inv[k] -= rec.cost[k] * times;
+    const out = (rec.out || 1) * times;
     p.inv[m.item] += out;
     p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${out} ${ITEMS[m.item].icon} ${ITEMS[m.item].name}` });
     // новое оружие сразу в лапы, если они свободны
@@ -595,7 +601,16 @@ export class Game {
   }
 
   onUse(p, m) {
-    if (p.dead || m.item !== 'antirad') return;
+    if (p.dead) return;
+    if (m.item === 'elixir') {
+      if (!(p.inv.elixir > 0)) return this.toast(p, 'Нет эликсира духа — его варят у костра на пути духа (C)');
+      p.inv.elixir--;
+      p.mana = Math.min(p.maxMana, p.mana + USES.elixir.mana);
+      p.hp = Math.min(p.stats.maxHp, p.hp + USES.elixir.hp);
+      p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${USES.elixir.mana} ✦  +${USES.elixir.hp} ❤` });
+      return;
+    }
+    if (m.item !== 'antirad') return;
     if (!(p.inv.antirad > 0)) return this.toast(p, 'Нет антирада — создайте его в меню крафта (C)');
     p.inv.antirad--;
     p.rad = Math.max(0, p.rad - RAD.antirad);
@@ -1400,6 +1415,22 @@ export class Game {
       this.melee(p, st.meleeDmg + (w ? w.dmg : 0), w);
       return;
     }
+    if (w.mana) {
+      // посох духа: вместо боеприпасов — мана
+      if (p.mana < w.mana) {
+        p.cd.melee = 0.4;
+        if (p.warnT <= 0) {
+          p.warnT = 2;
+          this.toast(p, 'Не хватает маны');
+        }
+        return;
+      }
+      p.mana -= w.mana;
+      p.cd.melee = w.cd;
+      p.atkT = 0.2;
+      this.fireWeapon(p, w);
+      return;
+    }
     if (w.type === 'ranged' && !(p.inv[w.ammo] > 0)) {
       p.cd.melee = 0.4;
       if (p.warnT <= 0) {
@@ -1458,7 +1489,8 @@ export class Game {
       const d = Math.hypot(dx, dy) || 0.01;
       if (d - t.stats.radius > reach) continue;
       if (d > st.radius + t.stats.radius * 0.5 && (dx * ca + dy * sa) / d < 0.4) continue;
-      this.damageCreature(t, dmg, a, 'melee');
+      const dealt = this.damageCreature(t, dmg, a, 'melee');
+      if (w && w.leech && dealt > 0 && !a.dead) a.hp = Math.min(a.stats.maxHp, a.hp + dealt * w.leech); // ритуальный кинжал пьёт жизнь
       t.kbx += (dx / d) * 140;
       t.kby += (dy / d) * 140;
       hitCreature = true;
