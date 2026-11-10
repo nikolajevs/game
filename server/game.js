@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import {
   TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, TERRAIN_SPEED, isWater, DAY_LENGTH, isNight,
-  ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, CRAFT_MAX, USES, TRIALS, buildCost, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
+  ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, CRAFT_MAX, USES, TRIALS, TRIPS, TRIP_MAX, buildCost, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
   NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
   RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
   ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET,
@@ -409,8 +409,7 @@ export class Game {
     const miss = T_.items.filter((k) => !(p.inv[k] > 0));
     if (miss.length) return this.toast(p, `Не хватает: ${miss.map((k) => ITEMS[k].name.toLowerCase()).join(', ')}`);
     for (const k of T_.items) p.inv[k]--;
-    p.halT = T_.time;
-    p.halS = 1;
+    for (const k in p.trip) p.trip[k] = T_.time; // все три трипа разом — со всеми их бонусами
     const ids = [];
     for (let i = 0; i < T_.guides; i++) {
       for (let tries = 0; tries < 40; tries++) {
@@ -744,6 +743,7 @@ export class Game {
       mana: 0, maxMana: MANA.base, abcd: {}, aimD: 300,
       shieldHp: 0, shieldT: 0, hexT: 0, hexSrc: null, stunT: 0, altars: new Map(), medT: 0, meditating: false, medWarnT: 0,
       halT: 0, halS: 0, // галлюцинации от грибов
+      trip: { a: 0, p: 0, t: 0 }, // трипы от мухомора, пейотля и жабы: сколько секунд осталось
       kills: prof.kills || 0, pfx: [], weapon: null, rad: clamp(Number(prof.rad) || 0, 0, 100), radHere: 0, warnT: 0,
     };
     this.applyGenome(p);
@@ -922,7 +922,7 @@ export class Game {
     let item = FOOD[m.item] && p.inv[m.item] > 0 ? m.item : null;
     if (!item) {
       // сам по себе (F) ест только обычную еду, грибы-галлюциногены — лишь по прямому выбору
-      const opts = Object.keys(FOOD).filter((k) => p.inv[k] > 0 && !FOOD[k].hal).sort((a, b) => FOOD[b].mult[diet] - FOOD[a].mult[diet]);
+      const opts = Object.keys(FOOD).filter((k) => p.inv[k] > 0 && !FOOD[k].hal && !FOOD[k].trip).sort((a, b) => FOOD[b].mult[diet] - FOOD[a].mult[diet]);
       item = opts[0];
     }
     if (!item) return this.toast(p, 'Нечего есть — соберите ягоды или добудьте мясо');
@@ -934,6 +934,16 @@ export class Game {
     p.water = Math.min(100, p.water + f.water);
     p.hp = Math.min(p.stats.maxHp, p.hp + 3);
     let extra = '';
+    if (f.trip) {
+      // у мухомора, пейотля и жабы свои видения и свой бонус на время трипа
+      const tr = TRIPS[f.trip];
+      p.trip[f.trip] = Math.min(TRIP_MAX, Math.max(0, p.trip[f.trip]) + tr.time);
+      if (f.spirit && p.path !== 'mind') {
+        p.spirit += f.spirit;
+        extra += `  +${f.spirit} ✨`;
+      }
+      this.toast(p, tr.start);
+    }
     if (f.hal) {
       // галлюцинации: время складывается (до 3 минут), сила — по самому сильному грибу
       p.halT = Math.min(180, (p.halT > 0 ? p.halT : 0) + f.hal.t);
@@ -944,10 +954,7 @@ export class Game {
       }
       if (f.mana && p.path === 'spirit') p.mana = Math.min(p.maxMana, p.mana + f.mana);
       if (f.rad) p.rad = Math.min(100, p.rad + f.rad);
-      if (f.wind) p.windT = f.wind;
-      if (f.numb) p.numbT = f.numb;
-      this.toast(p, f.wind ? '🌵 Второе дыхание: бег не отнимает сил' : f.numb ? '🐸 Тело немеет: удары почти не чувствуются'
-        : f.hal.s >= 1 ? '💠 Реальность трескается и сияет…' : '🍄 Мир начинает плыть…');
+      this.toast(p, f.hal.s >= 1 ? '💠 Реальность трескается и сияет…' : '🍄 Мир начинает плыть…');
     }
     p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${Math.round(food)} 🍖${f.water ? `  +${f.water} 💧` : ''}${extra}` });
   }
@@ -1099,8 +1106,7 @@ export class Game {
     if (p.weapon && !ABILITIES[p.weapon] && !(p.inv[p.weapon] > 0)) p.weapon = null; // оружие выложили или потратили
     for (const id in p.abcd) if (p.abcd[id] > 0) p.abcd[id] = Math.max(0, p.abcd[id] - dt);
     p.medWarnT = Math.max(0, p.medWarnT - dt);
-    if (p.windT > 0) p.windT -= dt;
-    if (p.numbT > 0) p.numbT -= dt;
+    for (const k in p.trip) if (p.trip[k] > 0) p.trip[k] = Math.max(0, p.trip[k] - dt);
     if (p.trial && this.time > p.trial.until) this.endTrial(p, '🔮 Трип кончился, проводники растаяли. Испытание духа не пройдено — соберите гриб, кактус и жабу заново.');
     if (p.halT > 0) {
       p.halT -= dt;
@@ -1158,7 +1164,7 @@ export class Game {
     }
     if (sprinting) {
       speed *= PLAYER.sprintMul;
-      if (!(p.windT > 0)) p.stamina = Math.max(0, p.stamina - PLAYER.staminaUse * dt); // пейотль: бег даром
+      if (!(p.trip.p > 0)) p.stamina = Math.max(0, p.stamina - PLAYER.staminaUse * dt); // пейотль: бег даром
     } else {
       p.stamina = Math.min(100, p.stamina + PLAYER.staminaRegen * dt);
     }
@@ -1481,7 +1487,7 @@ export class Game {
     if (!w || w.type === 'melee') {
       p.cd.melee = w ? w.cd : st.attackCd;
       p.atkT = 0.25;
-      this.melee(p, st.meleeDmg + (w ? w.dmg : 0), w);
+      this.melee(p, (st.meleeDmg + (w ? w.dmg : 0)) * (p.trip.a > 0 ? TRIPS.a.might : 1), w); // мухомор даёт силу
       return;
     }
     if (w.mana) {
@@ -1636,7 +1642,7 @@ export class Game {
     if (t.type === 'player' && t.spawnProtect > 0 && !silent) return 0;
     if (t.owner && (!src || src.id !== t.owner)) return 0; // проводника ранит только тот, чьё это испытание
     if (!silent) amount *= 1 - t.stats.defense;
-    if (!silent && t.numbT > 0) amount *= 0.6; // онемение от жабы
+    if (!silent && t.trip && t.trip.t > 0) amount *= TRIPS.t.numb; // онемение от жабы
     if (!silent && t.hexT > 0) amount *= t.hexVuln || 1.25;
     // щит духа поглощает урон первым
     if (!silent && t.shieldT > 0 && t.shieldHp > 0) {
@@ -1681,7 +1687,7 @@ export class Game {
           o.trial.left--;
           if (o.trial.left <= 0) {
             o.trial = null;
-            o.halT = Math.min(o.halT, 12);
+            for (const k in o.trip) o.trip[k] = Math.min(o.trip[k], 12); // трип быстро отпускает
             if (!o.path) this.setPath(o, 'spirit');
           } else this.toast(o, `🔮 Проводник повержен. Осталось: ${o.trial.left}`);
         }
@@ -1715,6 +1721,7 @@ export class Game {
     t.stunT = 0;
     if (t.type === 'player') {
       this.endTrial(t, '🔮 Вы погибли в трипе — испытание духа не пройдено.');
+      t.trip = { a: 0, p: 0, t: 0 };
       t.halT = 0;
       t.halS = 0;
     }
@@ -2170,7 +2177,7 @@ export class Game {
       acd: Object.fromEntries(Object.entries(p.abcd).filter(([, v]) => v > 0).map(([k, v]) => [k, round1(v)])),
       lab: this.nearLab(p) ? 1 : 0, med: p.meditating ? 1 : 0, sh: p.shieldT > 0 ? Math.ceil(p.shieldHp) : 0,
       hal: p.halT > 0 ? round1(p.halT) : 0, hs: p.halS,
-      wd: p.windT > 0 ? Math.ceil(p.windT) : 0, nb: p.numbT > 0 ? Math.ceil(p.numbT) : 0,
+      tp: p.trip.a > 0 || p.trip.p > 0 || p.trip.t > 0 ? [round1(p.trip.a), round1(p.trip.p), round1(p.trip.t)] : null,
       tr: p.trial ? [p.trial.left, Math.ceil(p.trial.until - this.time)] : null,
     };
   }

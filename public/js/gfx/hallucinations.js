@@ -1,6 +1,10 @@
-// Галлюцинации от грибов — только у того, кто их съел (сервер про видения не знает):
-// мир плывёт и переливается (шейдер поверх кадра), вокруг бродят призрачные существа,
-// кружат радужные огоньки, а от сильных грибов в небе открываются огромные глаза.
+// Видения — только у того, кто съел гриб, кактус или жабу (сервер знает лишь, сколько трипу осталось).
+// Шейдер поверх кадра рисует четыре разных трипа, и они складываются:
+//   сияющие поганки — мир плывёт и переливается, в небе открываются огромные глаза;
+//   мухомор — всё светится изнутри, радуга, северное сияние и искры;
+//   пейотль — плывут стены и горизонт, закатные краски пустыни;
+//   сияющая жаба — калейдоскоп и неоновые фракталы.
+// Вокруг бродят призрачные существа и кружат радужные огоньки.
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -11,14 +15,18 @@ import { Creature3D } from './creature3d.js';
 import { glowTexture } from './util.js';
 
 const TripShader = {
-  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uStrength: { value: 0 } },
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uStrength: { value: 0 }, uA: { value: 0 }, uP: { value: 0 }, uT: { value: 0 }, uAspect: { value: 1.6 } },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
     void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
     uniform float uTime;
-    uniform float uStrength;
+    uniform float uStrength; // сияющие поганки: общий «плывущий» трип
+    uniform float uA; // мухомор: сияние, радуга, северное сияние, искры
+    uniform float uP; // пейотль: плывут стены и горизонт, закатные краски
+    uniform float uT; // жаба: калейдоскоп и фракталы
+    uniform float uAspect;
     varying vec2 vUv;
     // поворот цвета вокруг серой оси — плавная смена оттенков
     vec3 hueShift(vec3 c, float a) {
@@ -26,20 +34,60 @@ const TripShader = {
       float ca = cos(a);
       return c * ca + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - ca);
     }
+    vec3 pal(float t) { return 0.5 + 0.5 * cos(6.2831 * (t + vec3(0.0, 0.33, 0.67))); }
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+    }
+    float fbm(vec2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      for (int i = 0; i < 4; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; }
+      return v;
+    }
+    mat2 rot2(float a) { return mat2(cos(a), -sin(a), sin(a), cos(a)); }
     void main() {
       float s = uStrength;
       vec2 c = vUv - 0.5;
       float r = length(c);
-      // «дыхание» и закручивание к центру
+      // общий трип: «дыхание» и закручивание к центру
       float ang = s * 0.32 * sin(uTime * 0.55) * (1.0 - r);
-      mat2 rot = mat2(cos(ang), -sin(ang), sin(ang), cos(ang));
-      c = rot * c * (1.0 + 0.045 * s * sin(uTime * 1.25));
-      vec2 uv = c + 0.5;
-      // волны по экрану
+      vec2 q = rot2(ang) * c * (1.0 + 0.045 * s * sin(uTime * 1.25));
+      vec2 uv = q + 0.5;
       uv.x += s * 0.011 * sin(uv.y * 17.0 + uTime * 2.1);
       uv.y += s * 0.011 * sin(uv.x * 13.0 + uTime * 1.7);
+
+      // ---- пейотль: стены гнутся, горизонт дышит, верх кадра оплывает вниз ----
+      if (uP > 0.001) {
+        uv.x += uP * 0.06 * sin(uv.y * 5.0 + uTime * 0.9) + uP * 0.018 * sin(uv.y * 23.0 - uTime * 2.3);
+        uv.y += uP * 0.045 * sin(uv.x * 4.0 + uTime * 0.7);
+        float drip = fbm(vec2(uv.x * 7.0, uTime * 0.15));
+        uv.y += uP * 0.09 * drip * smoothstep(0.15, 1.0, uv.y) * (0.6 + 0.4 * sin(uTime * 0.8 + uv.x * 9.0));
+        uv += uP * 0.006 * vec2(noise(uv * 40.0 + uTime * 3.0) - 0.5, noise(uv * 40.0 - uTime * 3.0) - 0.5); // марево
+      }
+      // ---- жаба: мир складывается в калейдоскоп (середина остаётся читаемой) ----
+      if (uT > 0.001) {
+        vec2 k = uv - 0.5;
+        float rad = length(k);
+        float seg = 6.2831 / 8.0;
+        float a2 = abs(mod(atan(k.y, k.x) + uTime * 0.1, seg) - seg * 0.5);
+        vec2 kuv = 0.5 + rad * vec2(cos(a2), sin(a2)) * (1.0 + 0.08 * sin(uTime * 1.3));
+        uv = mix(uv, kuv, uT * 0.72 * smoothstep(0.1, 0.45, rad));
+      }
+      // ---- мухомор: мир мягко дышит и покачивается ----
+      if (uA > 0.001) {
+        vec2 k = (uv - 0.5) * (1.0 + 0.035 * uA * sin(uTime * 1.1));
+        k = rot2(uA * 0.22 * sin(uTime * 0.4) * (0.6 - length(k))) * k;
+        uv = k + 0.5;
+        uv += uA * 0.006 * vec2(sin(uv.y * 14.0 + uTime * 1.6), cos(uv.x * 12.0 + uTime * 1.3));
+      }
+      uv = clamp(uv, 0.002, 0.998);
+
       // цветные края (хроматическая аберрация)
-      vec2 off = c * 0.016 * s * (1.0 + 0.6 * sin(uTime * 2.3));
+      vec2 off = c * (0.016 * s * (1.0 + 0.6 * sin(uTime * 2.3)) + 0.012 * uA + 0.008 * uT);
       vec3 col;
       col.r = texture2D(tDiffuse, uv + off).r;
       col.g = texture2D(tDiffuse, uv).g;
@@ -51,9 +99,68 @@ const TripShader = {
       col = mix(col, hueShift(col, uTime * 0.7 + r * 7.0 * s), 0.6 * s);
       float l = dot(col, vec3(0.299, 0.587, 0.114));
       col = mix(vec3(l), col, 1.0 + 0.7 * s);
-      // пульсирующая радужная кайма
       vec3 tint = 0.5 + 0.5 * cos(uTime * 0.9 + vec3(0.0, 2.1, 4.2));
       col += tint * smoothstep(0.32, 0.85, r) * s * 0.4;
+
+      // ---- мухомор: всё светится изнутри, каждый предмет — своим цветом ----
+      if (uA > 0.001) {
+        vec3 gl = vec3(0.0);
+        for (int i = 0; i < 8; i++) {
+          float a = float(i) * 0.7854 + uTime * 0.2;
+          gl += texture2D(tDiffuse, uv + vec2(cos(a), sin(a) * uAspect) * 0.016).rgb;
+        }
+        gl /= 8.0;
+        col = mix(col, max(col, gl * 1.35), 0.7 * uA); // мягкий ореол
+        float la = dot(col, vec3(0.299, 0.587, 0.114));
+        vec3 rb = pal(la * 1.3 + r * 0.8 - uTime * 0.12); // радуга по яркости и удалению от центра
+        col = mix(col, col * (0.3 + 2.0 * rb), 0.8 * uA);
+        col = mix(vec3(dot(col, vec3(0.299, 0.587, 0.114))), col, 1.0 + 1.3 * uA);
+        // северное сияние в верхней части кадра
+        float au = fbm(vec2(vUv.x * 3.0 + uTime * 0.1, vUv.y * 1.5 - uTime * 0.05));
+        float band = smoothstep(0.38, 0.7, au) * smoothstep(0.25, 0.95, vUv.y);
+        col += pal(vUv.x * 0.6 + uTime * 0.05 + au) * band * 0.95 * uA;
+        // мерцающие искры
+        vec2 g = vUv * vec2(34.0 * uAspect, 34.0);
+        vec2 gi = floor(g);
+        float h = hash(gi);
+        float tw = pow(max(0.0, sin(uTime * (2.0 + h * 4.0) + h * 40.0)), 12.0);
+        float d = length(fract(g) - 0.5 - 0.3 * (vec2(hash(gi + 1.3), hash(gi + 2.7)) - 0.5));
+        col += pal(h + uTime * 0.1) * tw * smoothstep(0.2, 0.0, d) * step(0.55, h) * uA * 2.2;
+        // радужные лепестки по краям
+        float pa = atan(c.y, c.x);
+        col += pal(uTime * 0.07 + pa / 6.2831 * 3.0) * smoothstep(0.3, 0.75, r) * 0.45 * uA * (0.6 + 0.4 * sin(pa * 8.0 + uTime));
+      }
+      // ---- пейотль: закат пустыни — бирюзовые тени, оранжево-розовый свет, бегущие узоры ----
+      if (uP > 0.001) {
+        float lp = dot(col, vec3(0.299, 0.587, 0.114));
+        // три ступени: бирюзовые тени → малиновые полутона → золотой свет (без серой середины)
+        float w = clamp(lp * 1.25 - 0.08 + 0.22 * sin(uTime * 0.5 + vUv.y * 5.0 + vUv.x * 3.0), 0.0, 1.0);
+        vec3 des = w < 0.5 ? mix(vec3(0.0, 0.45, 0.6), vec3(0.95, 0.15, 0.55), w * 2.0) : mix(vec3(0.95, 0.15, 0.55), vec3(1.0, 0.8, 0.2), w * 2.0 - 1.0);
+        col = mix(col, des * (0.25 + lp * 1.7), 0.8 * uP);
+        float st = sin((uv.y + 0.08 * sin(uv.x * 6.0 + uTime)) * 70.0 - uTime * 2.0);
+        col += vec3(1.0, 0.75, 0.35) * smoothstep(0.75, 1.0, st) * 0.3 * uP;
+        float zz = abs(fract((uv.x + uv.y * 0.5) * 9.0 + uTime * 0.12) - 0.5); // зубчатый орнамент
+        col += vec3(0.2, 0.9, 0.85) * smoothstep(0.03, 0.0, abs(zz - 0.25)) * 0.35 * uP * smoothstep(0.15, 0.6, r);
+      }
+      // ---- жаба: неоновый фрактал проступает на предметах и свободно растёт по краям ----
+      if (uT > 0.001) {
+        vec2 z = (vUv - 0.5) * vec2(uAspect, 1.0) * 2.2 * (1.0 + 0.25 * sin(uTime * 0.3));
+        z = rot2(uTime * 0.07) * z;
+        vec2 cc = vec2(0.72 + 0.06 * sin(uTime * 0.23), 0.55 + 0.06 * cos(uTime * 0.31));
+        float acc = 0.0;
+        float pl = 0.0;
+        for (int i = 0; i < 9; i++) {
+          z = abs(z) / max(dot(z, z), 0.0005) - cc;
+          float m = length(z);
+          acc += exp(-2.6 * abs(m - pl));
+          pl = m;
+        }
+        acc /= 9.0;
+        vec3 fr = pal(acc * 3.0 + uTime * 0.1 + r) * smoothstep(0.2, 0.8, acc) * 1.6 * vec3(0.7, 1.2, 1.05);
+        col = mix(col, (col + 0.12) * (0.45 + fr * 2.0), 0.75 * uT);
+        col += fr * 0.7 * uT * smoothstep(0.1, 0.55, r);
+        col = mix(col, col * vec3(0.78, 1.15, 0.96), 0.4 * uT);
+      }
       gl_FragColor = vec4(max(col, 0.0), 1.0);
     }`,
 };
@@ -74,7 +181,8 @@ export class Hallucinations {
     this.scene = scene;
     this.camera = camera;
     this.ground = ground;
-    this.s = 0; // текущая (сглаженная) сила
+    this.s = 0; // текущая (сглаженная) сила общего трипа
+    this.k = { a: 0, p: 0, t: 0 }; // сглаженная сила трипов: мухомор, пейотль, жаба
     this.t = 0;
     this.composer = null;
     this.phantoms = [];
@@ -99,19 +207,28 @@ export class Hallucinations {
   }
 
   // target — сила галлюцинаций с сервера (0..1), оставшееся время — для плавного угасания
-  update(dt, strength, left, target) {
-    const goal = left > 0 ? strength * Math.min(1, left / 6) : 0;
-    this.s += (goal - this.s) * (1 - Math.exp(-dt * (goal > this.s ? 0.8 : 1.5)));
-    if (this.s < 0.003 && goal === 0) this.s = 0;
+  // trip — [мухомор, пейотль, жаба]: сколько секунд осталось каждому трипу (или null)
+  update(dt, strength, left, target, trip = null) {
+    const ease = (cur, goal) => {
+      const v = cur + (goal - cur) * (1 - Math.exp(-dt * (goal > cur ? 0.8 : 1.5)));
+      return v < 0.003 && goal === 0 ? 0 : v;
+    };
+    this.s = ease(this.s, left > 0 ? strength * Math.min(1, left / 6) : 0);
+    const many = trip ? trip.filter((v) => v > 0).length : 0;
+    ['a', 'p', 't'].forEach((key, i) => {
+      const sec = trip ? trip[i] : 0;
+      // несколько трипов сразу (испытание духа) — каждый чуть слабее, иначе мир не разобрать
+      this.k[key] = ease(this.k[key], sec > 0 ? Math.min(1, sec / 6) * (many > 1 ? 0.72 : 1) : 0);
+    });
     this.t += dt;
-    const s = this.s;
-    this.updateMotes(dt, s, target);
-    this.updatePhantoms(dt, s, target);
-    this.updateEyes(dt, s, target);
+    const { a, p, t } = this.k;
+    this.updateMotes(dt, Math.max(this.s, a, t * 0.5), target);
+    this.updatePhantoms(dt, Math.max(this.s, a * 0.8, p * 0.4, t * 0.4), target);
+    this.updateEyes(dt, this.s, target);
   }
 
   get active() {
-    return this.s > 0.01;
+    return this.s > 0.01 || this.k.a > 0.01 || this.k.p > 0.01 || this.k.t > 0.01;
   }
 
   // рисует кадр через шейдер галлюцинаций; false — если видений нет (рисуем как обычно)
@@ -135,6 +252,10 @@ export class Hallucinations {
     }
     this.trip.uniforms.uTime.value = this.t;
     this.trip.uniforms.uStrength.value = this.s;
+    this.trip.uniforms.uA.value = this.k.a;
+    this.trip.uniforms.uP.value = this.k.p;
+    this.trip.uniforms.uT.value = this.k.t;
+    this.trip.uniforms.uAspect.value = size.x / Math.max(1, size.y);
     this.composer.render();
     return true;
   }

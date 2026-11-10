@@ -889,7 +889,7 @@ export class WorldView {
     }
     this.rings = this.rings.filter((r) => r.t < r.life);
     this.effects.update(dt, this.camera, w, h);
-    this.visions.update(dt, this.hal.s, this.hal.t, this.camTarget);
+    this.visions.update(dt, this.hal.s, this.hal.t, this.camTarget, this.hal.trip);
     if (!this.visions.render()) this.renderer.render(this.scene, this.camera);
     this.updateLabels(w, h);
   }

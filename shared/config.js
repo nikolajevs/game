@@ -180,6 +180,15 @@ export const RESOURCES = {
   frog: { name: 'Сияющая жаба', r: 11, cr: 0, hp: 30, give: 'toad', fixed: 15, respawn: 240 },
 };
 
+// Три трипа: у каждого свои видения (их рисует клиент) и свой бонус, пока трип длится.
+// a — мухомор: сияющий радужный мир и сила; p — пейотль: плывущие стены и второе дыхание;
+// t — сияющая жаба: фракталы и онемение.
+export const TRIPS = {
+  a: { name: 'Мухоморный трип', icon: '🍄', time: 60, might: 1.4, bonus: 'сила: урон в ближнем бою +40%', start: '🍄 Мир вспыхивает красками, в руках просыпается сила…' },
+  p: { name: 'Пейотлевый трип', icon: '🌵', time: 60, wind: true, bonus: 'второе дыхание: бег не отнимает сил', start: '🌵 Стены и горизонт поплыли, а ноги не знают усталости…' },
+  t: { name: 'Жабий трип', icon: '🐸', time: 60, numb: 0.6, bonus: 'онемение: урон по вам меньше на 40%', start: '🐸 Всё рассыпается на узоры, тело немеет и не чувствует ударов…' },
+};
+export const TRIP_MAX = 180; // трип от нескольких порций складывается до этого предела
 // Пища: сколько насыщает и множитель по типу рта
 export const FOOD = {
   berries: { food: 8, water: 4, mult: { herb: 2, carn: 0.4, omni: 1 } },
@@ -187,11 +196,10 @@ export const FOOD = {
   mushroom: { food: 10, water: 2, mult: { herb: 1, carn: 1, omni: 1 } },
   // галлюциногены: F их не ест — только щелчком по ним в инвентаре.
   // hal — сколько секунд и насколько сильно «плывёт» мир; spirit — сила духа (кроме пути разума)
-  amanita: { food: 4, water: 0, mult: { herb: 1, carn: 1, omni: 1 }, hal: { t: 45, s: 0.6 }, spirit: 2 },
+  amanita: { food: 4, water: 0, mult: { herb: 1, carn: 1, omni: 1 }, trip: 'a', spirit: 2 },
   glowcap: { food: 3, water: 2, mult: { herb: 1, carn: 1, omni: 1 }, hal: { t: 60, s: 1 }, spirit: 3, mana: 40, rad: 8 },
-  // у каждого своё действие: кактус — второе дыхание (бег не тратит силы), жаба — онемение (меньше урона)
-  peyote: { food: 3, water: 8, mult: { herb: 1, carn: 1, omni: 1 }, hal: { t: 30, s: 0.35 }, spirit: 1, wind: 60 },
-  toad: { food: 2, water: 0, mult: { herb: 1, carn: 1, omni: 1 }, hal: { t: 20, s: 0.3 }, spirit: 1, numb: 45 },
+  peyote: { food: 3, water: 8, mult: { herb: 1, carn: 1, omni: 1 }, trip: 'p', spirit: 1 },
+  toad: { food: 2, water: 0, mult: { herb: 1, carn: 1, omni: 1 }, trip: 't', spirit: 1 },
 };
 
 // Постройки занимают одну клетку TILE x TILE
