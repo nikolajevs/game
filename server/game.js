@@ -6,7 +6,7 @@ import {
   NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
   RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
   ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET,
-  PARTS, MUT_SCHOOLS, DASH, VOICE, FRIENDS_MAX, INVITE_LIFE,
+  PARTS, MUT_SCHOOLS, DASH, VOICE, FRIENDS_MAX, INVITE_LIFE, GUARD_RESPAWN,
 } from '../shared/config.js';
 import { stepVertical, platformTop, airborne, JUMP_SPEED, PLAT_MARGIN, JUMP_BUFFER } from '../shared/vertical.js';
 import {
@@ -1988,6 +1988,7 @@ export class Game {
     if (t.type === 'npc') {
       if (!this.npcs.has(t.id)) return;
       this.npcs.delete(t.id);
+      if (t.zone !== undefined && !t.owner && this.zones[t.zone]) this.queueGuard(t); // убитый страж места вернётся не сразу
       const def = NPCS[t.kind];
       this.fx.push({ k: 'die', x: t.x, y: t.y, c: t.color, r: t.stats.radius, id: t.id, f: def.faction });
       if (t.owner) {
@@ -2327,9 +2328,21 @@ export class Game {
     return null;
   }
 
+  // Убитый страж места встаёт в очередь возрождений и вернётся через GUARD_RESPAWN секунд (хозяин места —
+  // позже), а не сразу, как только игрок отойдёт: иначе место нельзя было бы по-настоящему зачистить.
+  queueGuard(n) {
+    const boss = NPCS[n.kind].behavior === 'territorial';
+    const base = boss ? GUARD_RESPAWN.boss : GUARD_RESPAWN.normal;
+    this.respawnQueue.push({ guard: n.zone, kind: n.kind, at: this.time + base * (0.8 + Math.random() * 0.4) });
+  }
+
   maintainNpcs(night) {
     const counts = Object.fromEntries(Object.keys(NPCS).map((k) => [k, 0]));
     const guards = new Map(); // "место:вид" -> сколько живо
+    const waiting = new Map(); // "место:вид" -> сколько ждёт возрождения в очереди (они в счёт идут как живые)
+    for (const r of this.respawnQueue) {
+      if (r.guard !== undefined) waiting.set(`${r.guard}:${r.kind}`, (waiting.get(`${r.guard}:${r.kind}`) || 0) + 1);
+    }
     const hunters = []; // ночные охотники, вышедшие к игрокам
     for (const n of this.npcs.values()) {
       if (n.zone !== undefined) {
@@ -2340,7 +2353,7 @@ export class Game {
     }
     for (const z of this.zones) {
       for (const [kind, want] of Object.entries(SITES[z.kind].guards)) {
-        if ((guards.get(`${z.id}:${kind}`) || 0) < want) this.spawnGuard(z, kind, false);
+        if ((guards.get(`${z.id}:${kind}`) || 0) + (waiting.get(`${z.id}:${kind}`) || 0) < want) this.spawnGuard(z, kind, false);
       }
     }
     // звери вне особых мест: недостачу добираем понемногу
@@ -2459,6 +2472,15 @@ export class Game {
       if (r.crate !== undefined) {
         const z = this.zones[r.crate];
         if (z && !this.spawnCrate(z)) {
+          r.at = this.time + 20;
+          keep.push(r);
+        }
+        continue;
+      }
+      if (r.guard !== undefined) {
+        // страж места: вернуться может, только если рядом нет игроков, иначе пробуем ещё раз через 20 с
+        const z = this.zones[r.guard];
+        if (z && !this.spawnGuard(z, r.kind, false)) {
           r.at = this.time + 20;
           keep.push(r);
         }
