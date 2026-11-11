@@ -20,3 +20,7 @@ OpenGameArt (https://opengameart.org), опубликованы как CC0:
 github.com/nikitapage10/models (модели Quaternius, сжатие meshopt) и
 github.com/NeuralDrifter/Retro_FPS_GCS-assets (модели с OpenGameArt). В игре они перекрашены,
 а анимации оставлены как есть.
+
+Добавлено позже:
+- wolf.glb — «Снежный волк»: Wolf из набора Quaternius Ultimate Animated Animals (CC0 1.0)
+«Снежный зверь» — та же модель, что у утробника (glutton.glb), перекрашенная в игре.

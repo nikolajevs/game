@@ -2,7 +2,7 @@
 // Ресурсов много, поэтому они рисуются через InstancedMesh (пулы).
 import * as THREE from 'three';
 import { Tree, TreePreset } from '/vendor/ez-tree/ez-tree.es.js';
-import { TILE, STRUCTURES, RESOURCES } from '/shared/config.js';
+import { TILE, STRUCTURES, RESOURCES, isCold } from '/shared/config.js';
 import { G, M, between, mergeParts, rng, shade, taper, glowTexture } from './util.js';
 import { Fire } from './fire.js';
 import { applyRockSurface } from './surfaces.js';
@@ -684,7 +684,9 @@ export class StaticsView {
     const pools = o.pools;
     const r = rng(s.v || 0.5);
     const gy = this.ground(s.x, s.y);
-    const pine = (s.v || 0.5) < 0.55;
+    // в зимнем биоме — только ели, и хвоя у них под снегом
+    const snowy = isCold(this.terrain.tile(Math.floor(s.x / TILE), Math.floor(s.y / TILE)));
+    const pine = snowy || (s.v || 0.5) < 0.55;
     const model = pine ? TREE_MODELS.pine : TREE_MODELS.oak;
     const giant = r() < 0.018;
     const sc = giant ? 1.75 + r() * 0.55 : 0.85 + r() * 0.45;
@@ -708,7 +710,18 @@ export class StaticsView {
       leavesColor = _c.setHSL(autumn ? 0.08 + r() * 0.06 : 0.25 + r() * 0.05, autumn ? 0.68 : 0.46, 0.68 + r() * 0.08).clone();
     }
     push(pine ? pools.pineBark : pools.oakBark, `${s.i}:bark`, matrix, barkColor);
-    push(pine ? pools.pineLeaves : pools.oakLeaves, `${s.i}:leaves`, matrix, leavesColor);
+    if (snowy) {
+      // заснеженная ель: вместо зелёной хвои — ярусы снежных лап (хвоя из текстуры в белый не красится)
+      const h = 68 * sc;
+      const tiers = 4;
+      for (let i = 0; i < tiers; i++) {
+        const k = i / (tiers - 1);
+        const rad = h * (0.3 - 0.2 * k) * (0.9 + r() * 0.2);
+        const th = h * 0.32;
+        const tone = 0.86 + r() * 0.1;
+        push(pools.pine, `${s.i}:snow${i}`, M(s.x, gy + h * (0.3 + 0.2 * i) + th / 2, s.y, 0, r() * 3, 0, rad, th, rad), _c.setRGB(tone * 0.93, tone * 0.97, tone).clone());
+      }
+    } else push(pine ? pools.pineLeaves : pools.oakLeaves, `${s.i}:leaves`, matrix, leavesColor);
   }
 
   addRock(o) {

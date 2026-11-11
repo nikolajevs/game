@@ -1,6 +1,8 @@
 // 3D-сцена игры: рельеф, объекты, существа с сервера, эффекты, камера.
 import * as THREE from 'three';
-import { MAP_H, MAP_W, NPCS, PLAYER, T, TILE, RESOURCES, RES_CHUNK, ABILITIES, JUMP } from '/shared/config.js';
+import { MAP_H, MAP_W, NPCS, PLAYER, T, TILE, RESOURCES, RES_CHUNK, ABILITIES, WEAPONS, JUMP } from '/shared/config.js';
+
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 import { Terrain } from './gfx/terrain.js';
 import { Sky } from './gfx/sky.js';
 import { StaticsView } from './gfx/statics3d.js';
@@ -10,6 +12,7 @@ import { Effects } from './gfx/effects.js';
 import { Decor } from './gfx/decor.js';
 import { ZonesView } from './gfx/zones3d.js';
 import { CityView } from './gfx/city3d.js';
+import { Snowfall } from './gfx/snow.js';
 import { Hallucinations } from './gfx/hallucinations.js';
 import { TargetMark } from './gfx/target.js';
 import { G, M, mergeParts, glowTexture } from './gfx/util.js';
@@ -97,6 +100,7 @@ export class WorldView {
     this.visions = new Hallucinations(this.renderer, this.scene, this.camera, (x, z) => this.ground(x, z));
     this.zonesView = new ZonesView(this.scene, this.terrain, zones);
     this.cityView = new CityView(this.scene, this.terrain, tiles);
+    this.snow = this.snow || new Snowfall(this.scene);
     this.decor = new Decor(this.terrain, tiles, seed);
     this.scene.add(this.decor.group);
     this.statics = new StaticsView(this.scene, this.terrain);
@@ -221,6 +225,7 @@ export class WorldView {
       nm.style.color = def.behavior === 'passive' ? '#e8e0c8' : def.faction === 'tech' ? '#ffd27a' : '#ffb4a8';
     }
     el.appendChild(nm);
+    v.nm = nm;
     const bar = document.createElement('div');
     bar.className = 'hp';
     const fill = document.createElement('i');
@@ -235,12 +240,17 @@ export class WorldView {
     return v;
   }
 
-  // звук шага по почве под ногами
-  stepSound(x, y) {
+  // Звук шага по почве под ногами: у каждой свой — трава, камень и асфальт, лёд, песок, снег, плеск по воде.
+  // step — имя звука, pitch — высота тона, wet — по воде (тише)
+  stepInfo(x, y) {
     const tx = Math.max(0, Math.min(MAP_W - 1, Math.floor(x / TILE)));
     const ty = Math.max(0, Math.min(MAP_H - 1, Math.floor(y / TILE)));
     const tile = this.terrain.tiles[ty * MAP_W + tx];
-    return tile === T.ROCK || tile === T.CITY ? 'stepRock' : tile === T.SAND ? 'stepSand' : 'stepGrass';
+    const wet = tile === T.SHALLOW || tile === T.DEEP;
+    const snowy = tile === T.SNOW || tile === T.TAIGA;
+    const step = wet ? 'splash' : tile === T.ROCK || tile === T.CITY || tile === T.WALL || tile === T.ICE ? 'stepRock' : tile === T.SAND ? 'stepSand' : snowy ? 'stepSnow' : 'stepGrass';
+    const pitch = tile === T.SAND ? 0.8 : snowy ? 1.12 : tile === T.ICE ? 1.25 : tile === T.FOREST ? 0.9 : 1;
+    return { step, pitch, wet };
   }
 
   // Прыжок своего существа сразу по нажатию, не дожидаясь сервера. false — прыгнуть нельзя:
@@ -255,12 +265,14 @@ export class WorldView {
   startJump(v, x, y, me, isMe) {
     v.jt = JUMP.time;
     this.effects.burst(x, Math.max(this.ground(x, y), 0) + 2, y, '#b9ad8a', 4, { speed: 36, size: 2, life: 0.32, gravity: -6 });
-    this.audio?.playAt(this.stepSound(x, y), x, y, me.x, me.y, { volume: isMe ? 0.42 : 0.2, range: 520, yaw: this.listenerYaw, rate: 1.18 });
+    const { step, pitch } = this.stepInfo(x, y);
+    this.audio?.playAt(step, x, y, me.x, me.y, { volume: isMe ? 0.42 : 0.2, range: 520, yaw: this.listenerYaw, rate: 1.18 * pitch });
   }
 
   landJump(v, x, y, me, isMe) {
     this.effects.burst(x, Math.max(this.ground(x, y), 0) + 2, y, '#b9ad8a', 7, { speed: 52, size: 2.4, life: 0.4, gravity: -8 });
-    this.audio?.playAt(this.stepSound(x, y), x, y, me.x, me.y, { volume: isMe ? 0.6 : 0.3, range: 560, yaw: this.listenerYaw, rate: 0.82 });
+    const { step, pitch } = this.stepInfo(x, y);
+    this.audio?.playAt(step, x, y, me.x, me.y, { volume: isMe ? 0.6 : 0.3, range: 560, yaw: this.listenerYaw, rate: 0.82 * pitch });
   }
 
   // ближайшее к точке существо/игрок (для эффектов без id)
@@ -325,12 +337,23 @@ export class WorldView {
       const warns = !isMe && (!!e.wu || (e.k === 'p' && !!e.ch));
       if (e.at && !v.at) {
         v.creature.attack(!!v.warning, e.at === 2);
-        this.audio?.playAt('swing', x, y, me.x, me.y, { volume: isMe ? 0.34 : 0.22, range: 650, yaw, rate: 0.94 });
+        if (e.k === 'p') {
+          const wt = WEAPONS[e.w]?.type;
+          if (!e.w) this.audio?.playAt('swingFist', x, y, me.x, me.y, { volume: isMe ? 0.5 : 0.32, range: 600, yaw, rate: 1.25 });
+          else if (wt === 'melee') this.audio?.playAt('swing', x, y, me.x, me.y, { volume: isMe ? 0.34 : 0.22, range: 650, yaw, rate: e.w === 'club' || e.w === 'axe' || e.w === 'pickaxe' ? 0.8 : e.w === 'dagger' ? 1.2 : 0.96 });
+        } else if (e.at !== 2) {
+          // чудовище бьёт: звери рвут, машины лязгают
+          const tech = NPCS[e.t]?.faction === 'tech';
+          this.audio?.playAt(tech ? 'metalHit' : 'swing', x, y, me.x, me.y, { volume: 0.26, range: 650, yaw, rate: tech ? 0.8 : 0.85 });
+        }
       }
       if (warns && !v.warning) {
         const colossus = (NPCS[e.t]?.windup || 0) >= 0.5; // тяжёлый замах великанов слышно издалека
-        this.audio?.playAt('danger', x, y, me.x, me.y, {
-          volume: colossus ? 0.48 : 0.34, range: colossus ? 900 : 700, yaw, rate: colossus ? 0.78 : 1.18,
+        const def = NPCS[e.t];
+        // замах: мутанты рычат (чем крупнее — тем ниже), духи воют, машины подают сигнал, игрок-таран — колокол
+        const voice = !def ? 'danger' : def.faction === 'tech' ? 'alarm' : def.fly ? 'wail' : 'growl';
+        this.audio?.playAt(voice, x, y, me.x, me.y, {
+          volume: colossus ? 0.6 : 0.42, range: colossus ? 900 : 700, yaw, rate: colossus ? 0.78 : 1.18, arg: def ? clamp(22 / def.r, 0.55, 1.5) : 1,
         });
       }
       v.at = e.at;
@@ -383,8 +406,8 @@ export class WorldView {
       if (v.speed > 34 && !(v.jt > 0)) {
         v.stepTimer -= dt;
         if (v.stepTimer <= 0) {
-          const step = this.stepSound(x, y);
-          this.audio?.playAt(step, x, y, me.x, me.y, { volume: isMe ? 0.52 : 0.26, range: 520, yaw, rate: v.speed > 135 ? 1.08 : 0.96 });
+          const { step, pitch, wet } = this.stepInfo(x, y);
+          this.audio?.playAt(step, x, y, me.x, me.y, { volume: (isMe ? 0.52 : 0.26) * (wet ? 0.8 : 1), range: 520, yaw, rate: (v.speed > 135 ? 1.08 : 0.96) * pitch });
           v.stepTimer = Math.max(0.3, Math.min(0.54, 0.58 - v.speed * 0.00135));
         }
       } else {
@@ -451,24 +474,32 @@ export class WorldView {
     for (const f of list) {
       const gy = this.ground(f.x, f.y);
       switch (f.k) {
-        case 'dmg':
-          snd('hit', f, { volume: 0.48, range: 620 });
+        case 'dmg': {
+          // по машинам удар звенит металлом, по живым — глухой
+          const who = this.nearestEnt(f.x, f.y, 50);
+          const metal = who?.e?.k === 'n' && NPCS[who.e.t]?.faction === 'tech';
+          snd(metal ? 'metalHit' : f.n >= 25 ? 'heavyHit' : 'hit', f, { volume: 0.48, range: 620, rate: metal ? 1.1 : 1 });
           fx.text(f.x, gy + 34, f.y, `-${f.n}`, f.c);
           fx.burst(f.x, gy + 20, f.y, '#c0392b', 6, { speed: 70 });
           break;
+        }
         case 'hit': {
           const m = f.m;
-          const sound = m === 'tree' || m === 'wood' ? 'woodHit'
-            : m === 'rock' || m === 'stone' || m === 'sulfur' || m === 'scrap' || m === 'car' || m === 'terminal' ? 'stoneHit'
-              : m === 'crystal' ? 'crystalHit' : 'softHit';
-          snd(sound, f, { volume: 0.44, range: 620, rate: m === 'scrap' || m === 'car' || m === 'terminal' ? 1.25 : 1 });
+          const sound = m === 'tree' ? 'chop' : m === 'wood' ? 'woodHit'
+            : m === 'scrap' || m === 'car' || m === 'terminal' ? 'metalHit'
+              : m === 'rock' || m === 'stone' || m === 'sulfur' ? 'stoneHit'
+                : m === 'crystal' ? 'crystalHit' : 'softHit';
+          snd(sound, f, { volume: 0.44, range: 620, rate: m === 'car' ? 0.8 : m === 'terminal' ? 1.3 : m === 'sulfur' ? 1.15 : 1 });
           for (const c of HIT_COLORS[f.m] || ['#cccccc']) fx.burst(f.x, gy + 18, f.y, c, 5, { speed: 70 });
           if (f.id) this.statics.hit(f.id);
           break;
         }
         case 'gain': {
-          const sound = f.text?.includes('🍖') ? 'bite' : f.text?.includes('💧') ? 'drink' : 'pickup';
-          snd(sound, f, { volume: 0.36, range: 460, rate: sound === 'bite' ? 0.82 : sound === 'drink' ? 1.16 : 1 });
+          // еда хрустит, вода булькает, знания и сила духа звенят, добыча с чудовищ шуршит
+          const t = f.text || '';
+          const sound = t.includes('🍖') ? 'crunch' : t.includes('💧') ? 'gulp' : t.includes('📘') || t.includes('✨') ? 'rise'
+            : t.includes('🔧') ? 'craft' : t.includes('☣') ? 'slime' : t.includes('🦴') || t.includes('⚙️') ? 'loot' : 'pickup';
+          snd(sound, f, { volume: sound === 'rise' ? 0.22 : 0.36, range: 460, rate: sound === 'slime' ? 1.5 : 1 });
           fx.text(f.x, gy + 44, f.y, f.text, '#c8f7c5', 'gain');
           break;
         }
@@ -477,15 +508,18 @@ export class WorldView {
           if (body && body.creature.die) body.dying = 2.6; // тело остаётся и доигрывает смерть
           if (f.f === 'tech') {
             // машина: искры и дым
-            snd('stoneHit', f, { volume: 0.6, range: 800, rate: 0.8 });
+            snd('robotDie', f, { volume: 0.5, range: 900 });
+            snd('metalHit', f, { volume: 0.6, range: 800, rate: 0.7 });
             fx.burst(f.x, gy + 20, f.y, '#ffd166', 26, { speed: 170, size: 2.2, life: 0.7 });
             fx.burst(f.x, gy + 20, f.y, '#3a3a3a', 12, { speed: 40, size: 5, life: 1.4, gravity: -30 });
           } else if (f.f === 'spirit') {
             snd('softBreak', f, { volume: 0.52, range: 700 });
+            snd('slime', f, { volume: 0.45, range: 700, rate: 0.7 });
             fx.burst(f.x, gy + 15, f.y, '#7a1016', 24, { speed: 120, size: 3.2, life: 0.9 });
             fx.burst(f.x, gy + 15, f.y, f.c || '#ffffff', 8, { speed: 80 });
           } else {
             snd('softBreak', f, { volume: 0.52, range: 700 });
+            snd('playerDie', f, { volume: 0.5, range: 900 });
             fx.burst(f.x, gy + 15, f.y, f.c || '#ffffff', 28, { speed: 130, size: 3.5, life: 1 });
             fx.burst(f.x, gy + 15, f.y, '#ffffff', 8, { speed: 90 });
           }
@@ -493,16 +527,18 @@ export class WorldView {
         }
         case 'evolve':
           snd('evolve', f, { volume: 0.56, range: 700 });
+          snd('slime', f, { volume: 0.5, range: 700, rate: 0.85 });
           fx.burst(f.x, gy + 10, f.y, '#b98cff', 34, { speed: 70, up: 1.6, gravity: 40, life: 1.4 });
           fx.burst(f.x, gy + 10, f.y, f.c || '#ffffff', 18, { speed: 50, up: 2, gravity: 30, life: 1.2 });
           break;
         case 'spit':
-          snd('swing', f, { volume: 0.24, range: 540, rate: 1.18 });
+          snd('slime', f, { volume: 0.34, range: 540, rate: 1.9 });
           this.nearestEnt(f.x, f.y, 40)?.creature.spit?.();
           fx.burst(f.x, gy + 18, f.y, '#8dff5a', 4, { speed: 40, size: 1.8 });
           break;
         case 'splash':
           snd('softHit', f, { volume: 0.4, range: 520, rate: 0.92 });
+          snd('sizzle', f, { volume: 0.5, range: 520 });
           fx.burst(f.x, gy + 15, f.y, '#8dff5a', 14, { speed: 90, size: 2.2 });
           break;
         case 'thud':
@@ -510,19 +546,41 @@ export class WorldView {
           fx.burst(f.x, gy + 8, f.y, '#b5a585', 16, { speed: 100, size: 3 });
           if (Math.hypot(f.x - myX, f.y - myY) < 300) this.shake = Math.max(this.shake, 4);
           break;
+        case 'dash':
+          // рывок на реактивных ускорителях
+          snd('thruster', f, { volume: 0.6, range: 800, rate: 1.3 });
+          fx.burst(f.x, gy + 16, f.y, '#5ec8ff', 18, { speed: 130, size: 2.4, life: 0.35, gravity: 0 });
+          fx.burst(f.x, gy + 6, f.y, '#c9d2da', 10, { speed: 70, size: 3, life: 0.5 });
+          break;
+        case 'zap':
+          // разрядник: удар током
+          snd('zap', f, { volume: 0.5, range: 600 });
+          fx.burst(f.x, gy + 24, f.y, '#bff8ff', 16, { speed: 170, size: 2, life: 0.25, gravity: 0 });
+          break;
         case 'break':
-          snd(f.m === 'wood' ? 'woodBreak' : f.m === 'stone' ? 'stoneHit' : 'softBreak', f, { volume: 0.62, range: 700 });
+          snd(f.m === 'wood' ? 'woodBreak' : f.m === 'stone' ? 'stoneHit' : 'softBreak', f, { volume: 0.62, range: 700, rate: f.m === 'stone' ? 0.75 : 1 });
+          if (f.m === 'wood') snd('creak', f, { volume: 0.5, range: 700 });
           for (const c of HIT_COLORS[f.m] || ['#cccccc']) fx.burst(f.x, gy + 20, f.y, c, 18, { speed: 150, size: 4, life: 1.1 });
           break;
         case 'meteor':
-          snd('heavyHit', f, { volume: 0.74, range: 1150, rate: 0.74 });
+          snd('blast', f, { volume: 0.9, range: 2400, rate: 0.6 });
+          snd('rumble', f, { volume: 0.9, range: 3000, rate: 0.7 });
           this.meteorImpact(f.x, f.y, myX, myY);
           break;
         case 'shot':
-          // отдельных звуков выстрела нет: пуля — резкий тяжёлый удар, тетива и праща — свист
-          if (f.m === 'bullet') snd('heavyHit', f, { volume: 0.7, range: 1000, rate: 1.45 });
-          else if (f.m === 'bomb') snd('swing', f, { volume: 0.3, range: 600, rate: 0.8 });
-          else snd('swing', f, { volume: 0.32, range: 650, rate: 1.3 });
+          // у каждого оружия свой голос (f.w — чем стреляли)
+          if (f.m === 'bullet') {
+            const heavy = f.w === 'shotgun';
+            // хлопок выстрела: короткий взрыв повыше тоном; дробовик — ниже и с раскатом, турель и Каратель — суше
+            snd('gunshot', f, { volume: heavy ? 0.85 : f.w === 'pistol' ? 0.6 : 0.42, range: heavy ? 1500 : 1200, rate: heavy ? 1.25 : f.w === 'pistol' ? 2.1 : 2.7 });
+            snd('heavyHit', f, { volume: heavy ? 0.6 : 0.4, range: 900, rate: heavy ? 0.9 : 1.45 });
+            if (heavy) snd('rumble', f, { volume: 0.4, range: 1200, rate: 1.6 });
+          } else if (f.m === 'laser') snd(f.w === 'laser' ? 'laser' : 'laserRetro', f, { volume: 0.4, range: 900, rate: f.w === 'laser' ? 1 : 1.15 });
+          else if (f.m === 'arrow') snd('twang', f, { volume: f.w === 'crossbow' ? 0.6 : 0.45, range: 600, rate: 1 });
+          else if (f.m === 'force') snd('staff', f, { volume: 0.3, range: 700, rate: 0.7 });
+          else if (f.m === 'drain') snd('wail', f, { volume: 0.4, range: 700 });
+          else if (f.m === 'bomb') snd('swingFist', f, { volume: 0.5, range: 600, rate: 0.7 });
+          else snd('swingFist', f, { volume: 0.5, range: 650, rate: 1.6 });
           if (f.m === 'bullet') {
             fx.burst(f.x, gy + 18, f.y, '#ffe066', 6, { speed: 60, size: 2.2, life: 0.18, gravity: 0 });
             fx.burst(f.x, gy + 18, f.y, '#9a9a9a', 4, { speed: 25, size: 3, life: 0.6, gravity: -20 });
@@ -530,37 +588,45 @@ export class WorldView {
           }
           break;
         case 'impact':
-          snd('softHit', f, { volume: 0.32, range: 520, rate: f.m === 'bullet' || f.m === 'laser' ? 1.3 : 1 });
+          if (f.m === 'laser') snd('zap', f, { volume: 0.2, range: 520, rate: 1.4 });
+          else if (f.m === 'arrow') snd('woodHit', f, { volume: 0.3, range: 520, rate: 1.5 });
+          else if (f.m === 'hex') snd('curse', f, { volume: 0.35, range: 600 });
+          else if (MAGIC.has(f.m)) snd('phaserDown', f, { volume: 0.22, range: 560, rate: 0.8 });
+          else snd('softHit', f, { volume: 0.32, range: 520, rate: f.m === 'bullet' ? 1.3 : 1 });
           fx.burst(f.x, gy + 16, f.y, IMPACT_COLORS[f.m] || '#b5a585', MAGIC.has(f.m) ? 14 : 5, { speed: MAGIC.has(f.m) ? 110 : 70, size: MAGIC.has(f.m) ? 2.6 : 1.8, life: 0.45 });
           if (f.m === 'force') this.ring(f.x, f.y, '#cfeaff', 70, 0.35);
           break;
         case 'cast':
-          snd('swing', f, { volume: 0.3, range: 600, rate: 1.35 });
+          // заклинания: телекинез — толчок, огненный шар — рёв пламени, вампиризм — вой, порча — зловещий спуск
+          if (f.m === 'fireball') snd('thruster', f, { volume: 0.5, range: 700, rate: 0.8 });
+          else if (f.m === 'drain') snd('wail', f, { volume: 0.45, range: 700 });
+          else if (f.m === 'hex') snd('curse', f, { volume: 0.4, range: 700, rate: 0.9 });
+          else snd('phaseJump', f, { volume: 0.35, range: 650, rate: 0.85 });
           fx.burst(f.x, gy + 26, f.y, PROJ_GLOW[ABILITIES[f.m]?.proj]?.[0] || '#c77dff', 8, { speed: 60, size: 2.2, life: 0.35, gravity: 0 });
           break;
         case 'blink':
-          snd('evolve', f, { volume: 0.4, range: 800, rate: f.to ? 1.6 : 1.3 });
+          snd(f.to ? 'phaserDown' : 'phaserUp', f, { volume: 0.42, range: 800 });
           fx.burst(f.x, gy + 22, f.y, '#c77dff', 28, { speed: 130, size: 3, life: 0.6, up: 1.2, gravity: 0 });
           fx.burst(f.x, gy + 22, f.y, '#ffffff', 10, { speed: 80, size: 2, life: 0.4, gravity: 0 });
           this.ring(f.x, f.y, '#c77dff', 60, 0.4);
           break;
         case 'emp':
-          snd('crystalHit', f, { volume: 0.7, range: 1000, rate: 1.5 });
-          snd('heavyHit', f, { volume: 0.5, range: 900, rate: 1.2 });
+          snd('laserBig', f, { volume: 0.6, range: 1000, rate: 0.8 });
+          snd('zap', f, { volume: 0.45, range: 900, rate: 0.7 });
           this.ring(f.x, f.y, '#5ec8ff', f.r || 230, 0.55);
           fx.burst(f.x, gy + 20, f.y, '#bff8ff', 40, { speed: 260, size: 2.4, life: 0.5, gravity: 0, up: 0.1 });
           if (Math.hypot(f.x - myX, f.y - myY) < 400) this.shake = Math.max(this.shake, 3);
           break;
         case 'shield':
-          snd('crystalHit', f, { volume: 0.55, range: 700, rate: 1.3 });
+          snd('forceField', f, { volume: 0.55, range: 700 });
           fx.burst(f.x, gy + 24, f.y, '#ffd98a', 24, { speed: 90, size: 2.6, life: 0.7, gravity: 0, up: 1 });
           break;
         case 'absorb':
-          snd('crystalHit', f, { volume: 0.3, range: 500, rate: 1.8 });
+          snd('forceField', f, { volume: 0.3, range: 500, rate: 1.9 });
           fx.burst(f.x, gy + 24, f.y, '#ffe9a8', 10, { speed: 80, size: 2, life: 0.35, gravity: 0 });
           break;
         case 'learn':
-          snd('evolve', f, { volume: 0.5, range: 700, rate: 1.15 });
+          snd('powerUp', f, { volume: 0.45, range: 700 });
           fx.burst(f.x, gy + 10, f.y, f.c || '#c77dff', 36, { speed: 70, up: 1.8, gravity: 30, life: 1.4 });
           fx.burst(f.x, gy + 10, f.y, '#ffffff', 12, { speed: 50, up: 2, gravity: 20, life: 1.1 });
           break;
@@ -572,13 +638,13 @@ export class WorldView {
             const y = f.y + (f.y2 - f.y) * k;
             fx.burst(x, this.ground(x, y) + 22, y, i % 2 ? '#8a0f3a' : '#d01845', 3, { speed: 25, size: 2.4, life: 0.5, gravity: 0 });
           }
-          snd('softHit', f, { volume: 0.4, range: 600, rate: 0.7 });
+          snd('slime', f, { volume: 0.4, range: 600, rate: 0.6 });
           break;
         }
         case 'boom': {
           if (f.m === 'fireball') {
             // огненный шар: вспышка пламени без воронки
-            snd('heavyHit', f, { volume: 0.7, range: 1000, rate: 0.9 });
+            snd('blast', f, { volume: 0.7, range: 1100, rate: 1.35 });
             fx.burst(f.x, gy + 14, f.y, '#ff8a2a', 34, { speed: 170, size: 4.5, life: 0.7, up: 1 });
             fx.burst(f.x, gy + 14, f.y, '#ffe066', 18, { speed: 120, size: 3.5, life: 0.45 });
             fx.burst(f.x, gy + 14, f.y, '#4a3a30', 14, { speed: 60, size: 6, life: 1.2, gravity: -40 });
@@ -586,8 +652,9 @@ export class WorldView {
             if (Math.hypot(f.x - myX, f.y - myY) < 250) this.shake = Math.max(this.shake, 3);
             break;
           }
-          snd('heavyHit', f, { volume: 0.9, range: 1300, rate: 0.62 });
-          snd('woodBreak', f, { volume: 0.6, range: 900, rate: 0.7 });
+          snd('blast', f, { volume: 0.95, range: 1600, rate: 0.9 });
+          snd('rumble', f, { volume: 0.7, range: 1800 });
+          snd('woodBreak', f, { volume: 0.5, range: 900, rate: 0.7 });
           fx.burst(f.x, gy + 10, f.y, '#ff8a2a', 45, { speed: 220, size: 5, life: 0.9 });
           fx.burst(f.x, gy + 10, f.y, '#ffe066', 20, { speed: 160, size: 4, life: 0.5 });
           fx.burst(f.x, gy + 10, f.y, '#3a3a3a', 30, { speed: 120, size: 7, life: 1.6, gravity: -30 });
@@ -1008,6 +1075,7 @@ export class WorldView {
     this.terrain.update(this.time, this.camTarget, env.far);
     this.zonesView.update(dt, this.camTarget, env.far);
     this.cityView.update(this.camTarget, env.far);
+    this.snow.update(dt, this.time, this.terrain.winterAt(this.camTarget.x, this.camTarget.z), this.camTarget);
     this.statics.update(dt, this.camera.position, this.night, this.camTarget);
     this.updateMeteor(dt);
     this.updateMarker();
@@ -1062,6 +1130,16 @@ export class WorldView {
       }
       v.label.style.display = '';
       v.label.style.transform = `translate(${(_v.x * 0.5 + 0.5) * w}px, ${(-_v.y * 0.5 + 0.5) * h}px) translate(-50%, -100%)`;
+      // игрок: друг — голубым с рукопожатием, говорящий в микрофон — со значком
+      if (e.k === 'p') {
+        const tag = `${this.friends?.has(e.u) ? 'f' : ''}${e.tk ? 't' : ''}`;
+        if (v.tag !== tag) {
+          v.tag = tag;
+          const friend = tag.includes('f');
+          v.nm.textContent = `${friend ? '🤝 ' : ''}${e.n}${e.tk ? ' 🔊' : ''}`;
+          v.nm.style.color = friend ? '#7fe0ff' : '#ffffff';
+        }
+      }
       v.hpBar.style.display = damaged || targeted ? '' : 'none';
       if (e.h !== v.lastHp) {
         v.lastHp = e.h;

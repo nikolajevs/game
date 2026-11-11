@@ -18,9 +18,16 @@ export const NPC_WAKE_R = 2600; // звери дальше от всех игр�
 
 // Типы клеток карты
 // CITY — асфальт и бетон мёртвого города, WALL — уцелевшие стены его домов (сквозь них не пройти)
-export const T = { DEEP: 0, SHALLOW: 1, SAND: 2, GRASS: 3, FOREST: 4, ROCK: 5, CITY: 6, WALL: 7 };
-export const TERRAIN_NAMES = ['Глубина', 'Мелководье', 'Песок', 'Луг', 'Лес', 'Скалы', 'Мёртвый город', 'Руины домов'];
-export const TERRAIN_SPEED = [0.45, 0.7, 0.95, 1, 0.92, 0.95, 1, 1];
+// SNOW, TAIGA и ICE — зимний биом по северному и южному краям карты: снежные поля, заснеженный лес и лёд на замёрзшем мелководье
+export const T = { DEEP: 0, SHALLOW: 1, SAND: 2, GRASS: 3, FOREST: 4, ROCK: 5, CITY: 6, WALL: 7, SNOW: 8, TAIGA: 9, ICE: 10 };
+export const TERRAIN_NAMES = ['Глубина', 'Мелководье', 'Песок', 'Луг', 'Лес', 'Скалы', 'Мёртвый город', 'Руины домов', 'Снега', 'Тайга', 'Лёд'];
+export const TERRAIN_SPEED = [0.45, 0.7, 0.95, 1, 0.92, 0.95, 1, 1, 0.86, 0.82, 1.08]; // в сугробах вязнешь, по льду скользишь
+export const isCold = (t) => t === T.SNOW || t === T.TAIGA || t === T.ICE;
+// Зима лежит по северному и южному краям карты: band — ширина полосы в клетках, edge — размах рваной границы
+export const WINTER = { band: 260, edge: 100 };
+// Холод: в зимнем биоме копится (ночью быстрее), у костра и вне снегов спадает.
+// Выше slowAt — замедление и нет лечения, на 100 — урон. Меховая куртка почти снимает холод.
+export const COLD = { rate: 1.0, night: 1.5, coat: 0.12, warm: 14, decay: 5, slowAt: 55, slow: 0.82, dmg: 3 };
 // Мёртвый город: один на острове, с воронкой ядерного взрыва в центре. Размеры — в клетках.
 export const CITY = { r: 62, crater: 9, block: 14, street: 3 };
 export const isWater = (t) => t === T.DEEP || t === T.SHALLOW;
@@ -48,6 +55,8 @@ export const ITEMS = {
   peyote: { name: 'Пейотль', icon: '🌵', kind: 'res' }, // кактус с пляжей и скал: второе дыхание
   toad: { name: 'Сияющая жаба', icon: '🐸', kind: 'res' }, // ловится у воды: онемение
   bone: { name: 'Кости', icon: '🦴', kind: 'res' },
+  fur: { name: 'Шкуры', icon: '🐺', kind: 'res' }, // со снежных волков и снежного зверя
+  coat: { name: 'Меховая куртка', icon: '🧥', kind: 'res' }, // пока лежит в инвентаре — греет: холод почти не копится
   scrap: { name: 'Металлолом', icon: '⚙️', kind: 'res' },
   electronics: { name: 'Электроника', icon: '🔌', kind: 'res' }, // платы и провода из мёртвого города и роботов
   // три части верстака для испытания пути разума: лежат в ящиках рудников, города и руин
@@ -130,6 +139,7 @@ export const RECIPES = {
   crossbow: { cost: { wood: 35, bone: 10, scrap: 8 } },
   arrows: { cost: { wood: 4, stone: 2 }, out: 5 },
   antirad: { cost: { berries: 4, bone: 2 }, out: 1 },
+  coat: { cost: { fur: 8, bone: 3 } },
   // технологии пути разума
   bullets: { cost: { scrap: 1, sulfur: 3 }, out: 4, bench: true, path: 'mind' },
   // trial — этим рецептом у алтаря выбора проходят испытание разума: его видно и без пути
@@ -146,7 +156,7 @@ export const RECIPES = {
 // Вкладки меню крафта. Вкладка с path видна только тем, кто выбрал этот путь.
 export const CRAFT_TABS = [
   { id: 'weapons', name: 'Оружие', icon: '⚔️', items: ['club', 'spear', 'axe', 'blade', 'pickaxe', 'sling', 'bow', 'crossbow'] },
-  { id: 'supplies', name: 'Припасы', icon: '🎒', items: ['arrows', 'antirad'] },
+  { id: 'supplies', name: 'Припасы', icon: '🎒', items: ['arrows', 'antirad', 'coat'] },
   { id: 'trial', trial: true, name: 'Испытание разума', icon: '⚖️', items: ['pistol'] }, // только без пути и у алтаря выбора
   { id: 'tech', path: 'mind', name: 'Технологии', icon: '⚙️', items: ['bullets', 'pistol', 'shotgun', 'bomb', 'cell', 'laser'] },
   { id: 'ritual', path: 'spirit', name: 'Ритуалы', icon: '🔮', items: ['elixir', 'dagger', 'staff'] },
@@ -205,18 +215,18 @@ export const FOOD = {
 };
 
 // Постройки занимают одну клетку TILE x TILE
-// solid: true — блокирует всех, 'owner' — пропускает только владельца
+// solid: true — блокирует всех, 'owner' — пропускает только владельца и его друзей
 export const STRUCTURES = {
   wall_wood: { name: 'Стена из ветвей', cost: { wood: 20 }, hp: 300, solid: true, mat: 'wood', desc: 'Дешёвая, но слабая' },
   wall_stone: { name: 'Каменная стена', cost: { stone: 25, wood: 5 }, hp: 900, solid: true, mat: 'stone', desc: 'Крепкая защита базы' },
-  door: { name: 'Дверь', cost: { wood: 30 }, hp: 350, solid: 'owner', mat: 'wood', desc: 'Проходима только для вас' },
+  door: { name: 'Дверь', cost: { wood: 30 }, hp: 350, solid: 'owner', mat: 'wood', desc: 'Проходима для вас и ваших друзей' },
   storage: { name: 'Хранилище', cost: { wood: 30, stone: 10 }, hp: 400, solid: true, mat: 'wood', storage: true, desc: 'Хранит ресурсы. Открыть — E' },
   campfire: { name: 'Костёр', cost: { wood: 15, stone: 5 }, hp: 200, solid: false, mat: 'stone', desc: 'Свет ночью и лечение рядом' },
-  spikes: { name: 'Колья', cost: { wood: 25, stone: 5 }, hp: 250, solid: false, mat: 'wood', touchDmg: 12, desc: 'Ранят чужаков' },
+  spikes: { name: 'Колья', cost: { wood: 25, stone: 5 }, hp: 250, solid: false, mat: 'wood', touchDmg: 12, desc: 'Ранят чужаков (друзей не трогают)' },
   nest: { name: 'Палатка', cost: { wood: 35, bone: 3 }, hp: 400, solid: false, mat: 'wood', desc: 'Точка возрождения (одна на игрока)' }, // ключ nest — ради старых сохранений
   workbench: { name: 'Верстак', cost: { wood: 50, stone: 30, scrap: 15 }, parts: { vise: 1, toolkit: 1, drive: 1 }, hp: 500, solid: true, mat: 'wood', desc: 'Огнестрел, патроны и взрывчатка. Тем, кто не на пути разума, нужны три части верстака' },
   lab: { name: 'Лаборатория', cost: { wood: 60, stone: 40, scrap: 30 }, hp: 550, solid: true, mat: 'stone', desc: 'Данные → знания, опыты; лазеры и энергоячейки' },
-  turret: { name: 'Автотурель', cost: { scrap: 40, sulfur: 20, stone: 30, electronics: 15 }, hp: 450, solid: true, mat: 'stone', ability: 'turret', desc: 'Сама стреляет по зверям и чужакам (путь разума)' },
+  turret: { name: 'Автотурель', cost: { scrap: 40, sulfur: 20, stone: 30, electronics: 15 }, hp: 450, solid: true, mat: 'stone', ability: 'turret', desc: 'Сама стреляет по зверям и чужакам, друзей не трогает (путь разума)' },
 };
 export const STRUCT_ORDER = ['wall_wood', 'wall_stone', 'door', 'storage', 'campfire', 'spikes', 'nest', 'workbench', 'lab', 'turret'];
 // Меню стройки: разделы и что в них лежит (цифры 1–9 выбирают постройку внутри раздела)
@@ -334,25 +344,67 @@ export const MOUTHS = {
   omni: { name: 'Всеядная пасть', icon: '🍽️', desc: '+2 к урону. Любая пища усваивается нормально.' },
   carn: { name: 'Челюсти хищника', icon: '🦷', desc: '+5 к урону. Мясо насыщает сильнее, ягоды — слабо.' },
 };
+// Две школы мутаций. tech — импланты и аугментации из железа погибшей цивилизации,
+// spirit — дары плоти: тело, перерождённое мутагеном и духами леса.
+// path — чей это путь: только он доводит мутации школы до третьего уровня («предела»).
+// item — что кроме мутагена уходит на уровень (индекс — номер уровня).
+// res — резонанс: бонус за сумму уровней в школе (need — сколько уровней нужно).
+export const MUT_SCHOOLS = {
+  tech: {
+    name: 'Импланты', full: 'Технологические мутации', icon: '⚙️', color: '#5ec8ff', path: 'mind',
+    desc: 'Железо мёртвого города, вживлённое в тело: сервоприводы, броня, оптика и нейросети.',
+    item: [null, { scrap: 5 }, { scrap: 12 }, { electronics: 6 }],
+    res: [
+      { need: 4, name: 'Синхронизация', desc: 'оружие бьёт на 10% сильнее' },
+      { need: 8, name: 'Киборг', desc: 'оружие +20%, умения пути перезаряжаются на 15% быстрее' },
+    ],
+  },
+  spirit: {
+    name: 'Дары плоти', full: 'Духовные мутации', icon: '🔮', color: '#c77dff', path: 'spirit',
+    desc: 'Тело, перерождённое мутагеном и духами леса: когти, рога, шипы, яд и живая плоть.',
+    item: [null, null, { bone: 6 }, { crystal: 3 }],
+    res: [
+      { need: 4, name: 'Зов крови', desc: 'когти, кислота и таран бьют на 15% сильнее' },
+      { need: 8, name: 'Зверь чащи', desc: 'когти, кислота и таран +30%, +25 здоровья' },
+    ],
+  },
+};
+export const SCHOOL_KEYS = Object.keys(MUT_SCHOOLS);
+// apex — что даёт третий уровень («предел») сверх обычного роста
 export const PARTS = {
-  legs: { name: 'Жилистые ноги', icon: '🦵', max: 3, desc: 'Скорость передвижения' },
-  claws: { name: 'Когти', icon: '🐾', max: 3, desc: 'Урон кулаком и быстрая добыча' },
-  armor: { name: 'Костяные пластины', icon: '🛡️', max: 3, desc: 'Здоровье и снижение урона, но медленнее' },
-  spikes: { name: 'Шипы', icon: '🌵', max: 3, desc: 'Отражают часть урона тем, кто бьёт вплотную' },
-  eyes: { name: 'Лишние глаза', icon: '👁️', max: 3, desc: 'Дальность обзора (и ночного зрения)' },
-  horns: { name: 'Рога', icon: '🦏', max: 3, desc: 'Таран [Пробел]: рывок с уроном, ломает постройки' },
-  acid: { name: 'Кислотная железа', icon: '🧪', max: 3, desc: 'Плевок кислотой [Q], замедляет цель' },
-  fins: { name: 'Жабры и перепонки', icon: '🐟', max: 2, desc: 'Быстрое плавание' },
-  glow: { name: 'Свечение', icon: '✨', max: 1, desc: 'Кожа светится в темноте (вас тоже видно!)' },
-  stomach: { name: 'Желудок мутанта', icon: '🫙', max: 2, desc: 'Голод и жажда растут медленнее' },
-  size: { name: 'Гигантизм', icon: '🦍', max: 3, desc: 'Больше здоровья и урона, но крупнее и медленнее' },
-  radres: { name: 'Радиорезистентность', icon: '☢️', max: 3, desc: 'Радиация копится медленнее (−30% за уровень)' },
+  // ---- импланты ----
+  legs: { school: 'tech', name: 'Сервоприводы ног', icon: '🦿', max: 3, desc: 'Скорость передвижения', apex: 'бег тратит вдвое меньше сил' },
+  armor: { school: 'tech', name: 'Бронепластины', icon: '🛡️', max: 3, desc: 'Здоровье и защита, но медленнее', apex: 'пули, стрелы и лучи бьют по вам на 20% слабее' },
+  eyes: { school: 'tech', name: 'Оптический имплант', icon: '👁️', max: 3, desc: 'Дальность обзора (и ночного зрения)', apex: 'целеуказатель: стрелковое оружие +15% урона' },
+  radres: { school: 'tech', name: 'Фильтр радиации', icon: '☢️', max: 3, desc: 'Радиация копится медленнее (−30% за уровень)', apex: 'облучение спадает вдвое быстрее и не мешает лечиться до 50' },
+  arm: { school: 'tech', name: 'Гидравлика рук', icon: '💪', max: 3, desc: 'Оружие ближнего боя +10% урона, постройки ломаются на 25% быстрее', apex: 'удары отбрасывают вдвое дальше' },
+  reflex: { school: 'tech', name: 'Нейроускоритель', icon: '🧠', max: 3, desc: 'Удары и выстрелы на 8% чаще за уровень', apex: 'ещё −6%: всего на 30% чаще' },
+  battery: { school: 'tech', name: 'Энергоядро', icon: '🔋', max: 3, desc: 'Силы восстанавливаются на 30% быстрее за уровень', apex: 'умения пути перезаряжаются на 20% быстрее' },
+  jets: { school: 'tech', name: 'Реактивные ускорители', icon: '🚀', max: 3, desc: 'Рывок к курсору [Z]: дальше и чаще с каждым уровнем', apex: 'в конце рывка — ударная волна' },
+  shock: { school: 'tech', name: 'Разрядник', icon: '⚡', max: 3, desc: 'Каждый 4-й удар в ближнем бою бьёт током и оглушает', apex: 'разряд на каждом 3-м ударе' },
+  // ---- дары плоти ----
+  claws: { school: 'spirit', name: 'Когти зверя', icon: '🐾', max: 3, desc: 'Урон кулаком и быстрая добыча', apex: 'раны кровоточат: 4 урона в секунду 4 с' },
+  horns: { school: 'spirit', name: 'Рога', icon: '🦏', max: 3, desc: 'Таран [Пробел]: рывок с уроном, ломает постройки', apex: 'таран оглушает на 1 с' },
+  spikes: { school: 'spirit', name: 'Шипы чащи', icon: '🌵', max: 3, desc: 'Отражают часть урона тем, кто бьёт вплотную', apex: 'уколовшийся ещё и замедляется' },
+  acid: { school: 'spirit', name: 'Жабья железа', icon: '🧪', max: 3, desc: 'Плевок кислотой [Q], замедляет цель', apex: 'кислота разъедает: цель 4 с получает на 20% больше урона' },
+  fins: { school: 'spirit', name: 'Жабры и перепонки', icon: '🐟', max: 2, desc: 'Быстрое плавание' },
+  glow: { school: 'spirit', name: 'Блуждающий огонь', icon: '✨', max: 3, desc: 'Кожа светится в темноте (вас тоже видно!); мана +10 и копится на 25% быстрее за уровень' },
+  stomach: { school: 'spirit', name: 'Утроба', icon: '🫙', max: 2, desc: 'Голод и жажда растут медленнее; на 2-м уровне мясо лечит' },
+  size: { school: 'spirit', name: 'Облик великана', icon: '🦍', max: 3, desc: 'Больше здоровья и урона, но крупнее и медленнее', apex: 'вас отбрасывает вдвое слабее' },
+  regen: { school: 'spirit', name: 'Живая плоть', icon: '🩸', max: 3, desc: 'Раны затягиваются на 60% быстрее за уровень', apex: 'плоть срастается даже под облучением' },
 };
 export const PART_KEYS = Object.keys(PARTS);
 export const LEVEL_COST = [0, 10, 25, 50]; // мутаген за каждый уровень мутации
-export const LEVEL3_CRYSTALS = 3; // 3-й уровень требует кристаллы мутагена
+export const APEX_LEVEL = 3; // «предел»: третий уровень даётся только своему пути
+export const OFFPATH_MAX = 2; // до этого уровня мутации чужой школы (и любые — без пути)
 export const COMPLEXITY_CAP = 12; // максимум суммарных уровней мутаций
 export const MOUTH_CHANGE_COST = 10;
+// Рывок на реактивных ускорителях (мутация jets)
+export const DASH = { speed: 950, blastR: 85 };
+// Голос: слышно тех, кто ближе range (громкость падает с расстоянием); друзей — по «рации» где угодно
+export const VOICE = { range: 700, near: 180, friendVol: 0.75 }; // ближе near — в полный голос
+export const FRIENDS_MAX = 12;
+export const INVITE_LIFE = 120; // секунд живёт приглашение в друзья
 
 // ---- Чудовища острова ----
 // Две силы. spirit — духи и органические мутанты: живут в лесах и логовах, стерегут деревья и грибы.
@@ -363,11 +415,11 @@ export const MOUTH_CHANGE_COST = 10;
 export const NPCS = {
   stag: {
     name: 'Рогач', faction: 'spirit', model: 'stag', color: '#b08a5a', r: 20, hp: 60, speed: 120, dmg: 0, behavior: 'passive', flee: 240,
-    dna: 0, loot: { meat: 4, bone: 2 }, biomes: [T.GRASS],
+    dna: 0, loot: { meat: 4, bone: 2 }, biomes: [T.GRASS, T.SNOW],
   }, // пасутся на лугах
   crooked: {
     name: 'Горбун', faction: 'spirit', model: 'crooked', color: '#8a5a44', r: 17, hp: 90, speed: 152, dmg: 10, reach: 30, behavior: 'aggressive',
-    aggro: 240, nightAggro: 400, dna: 2, loot: { meat: 3, bone: 4 }, spirit: 1, biomes: [T.FOREST, T.ROCK],
+    aggro: 240, nightAggro: 400, dna: 2, loot: { meat: 3, bone: 4 }, spirit: 1, biomes: [T.FOREST, T.ROCK, T.SNOW],
   }, // охотятся в лесах и скалах, ночью выходят к людям
   claw: {
     name: 'Когтень', faction: 'spirit', model: 'claw', color: '#7a4a3a', r: 18, hp: 130, speed: 162, dmg: 14, reach: 34, behavior: 'aggressive',
@@ -401,6 +453,15 @@ export const NPCS = {
     shoot: { proj: 'bullet', dmg: 13, cd: 0.55, speed: 1200, life: 0.6, min: 150, range: 620 }, biomes: [],
   },
 };
+// Зима: стаи снежных волков и редкий снежный зверь — у них шкуры для меховой куртки
+NPCS.wolf = {
+  name: 'Снежный волк', faction: 'spirit', model: 'wolf', color: '#dfe8f2', r: 16, hp: 75, speed: 172, dmg: 9, reach: 28, behavior: 'aggressive',
+  aggro: 300, nightAggro: 430, dna: 1, loot: { meat: 3, bone: 2, fur: 2 }, pack: 3, biomes: [T.SNOW, T.TAIGA],
+};
+NPCS.frostbeast = {
+  name: 'Снежный зверь', faction: 'spirit', model: 'frostbeast', color: '#cfe6ff', r: 32, hp: 540, speed: 84, dmg: 27, reach: 40, behavior: 'territorial',
+  aggro: 200, dna: 14, loot: { meat: 10, bone: 8, fur: 7, crystal: 1 }, spirit: 6, attackCd: 1.3, windup: 0.56, def: 0.15, biomes: [T.SNOW],
+};
 // Проводник в мир духов: появляется только в трипе испытания, виден и уязвим лишь для того, кто его проходит
 NPCS.guide = {
   name: 'Проводник', faction: 'spirit', model: 'guide', color: '#ffe08a', r: 18, hp: 70, speed: 128, dmg: 0, reach: 0, behavior: 'guide', flee: 210,
@@ -410,6 +471,7 @@ NPCS.guide = {
 export const NPC_TARGET = {
   stag: Math.round(150 * WILD_DENSITY), crooked: Math.round(45 * WILD_DENSITY),
   claw: Math.round(14 * WILD_DENSITY), wraith: Math.round(30 * WILD_DENSITY),
+  wolf: 30, frostbeast: 14, // волки — стаями: число здесь — это число стай
 };
 export const NIGHT_HUNTER = 'crooked'; // кто ночью выходит на охоту вокруг игроков
 export const METEOR_GUARD = 'claw'; // кого приманивает упавший метеорит
@@ -468,7 +530,7 @@ export const ABILITIES = {
   exo: { path: 'mind', tier: 1, cost: 15, kind: 'passive', name: 'Экзоскелет', icon: '🦾', desc: '+20% к скорости и +15% к защите', speed: 1.2, def: 0.15 },
   laser: { path: 'mind', tier: 2, cost: 30, kind: 'unlock', name: 'Лазерная винтовка', icon: '🔦', desc: 'Рецепты лазерной винтовки и энергоячеек (в лаборатории)' },
   emp: { short: 'ЭМИ', path: 'mind', tier: 2, cost: 30, kind: 'instant', name: 'ЭМИ-импульс', icon: '⚡', desc: 'Волна вокруг: 30 урона и оглушение на 2,5 с всем врагам в 230 ед.; по машинам — в 2,5 раза сильнее', cd: 18, r: 230, dmg: 30, stun: 2.5 },
-  genetics: { path: 'mind', tier: 3, cost: 50, kind: 'passive', name: 'Генная инженерия', icon: '🧬', desc: 'Предел мутаций 12 → 20, мутации на 30% дешевле, 3-й уровень без кристаллов', cap: 8, priceMul: 0.7 },
+  genetics: { path: 'mind', tier: 3, cost: 50, kind: 'passive', name: 'Генная инженерия', icon: '🧬', desc: 'Предел мутаций 12 → 20, мутации на 30% дешевле и требуют только мутаген', cap: 8, priceMul: 0.7 },
   turret: { path: 'mind', tier: 3, cost: 50, kind: 'unlock', name: 'Автотурель', icon: '🗼', desc: 'Постройка (B): сама стреляет по зверям и чужакам в 360 ед.' },
   telekinesis: { short: 'Телекинез', path: 'spirit', tier: 1, cost: 15, kind: 'spell', name: 'Телекинез', icon: '🌀', desc: 'Удар силой мысли: отшвыривает врага далеко назад', mana: 12, cd: 0.7, proj: 'force', speed: 950, life: 0.42, dmg: 12, kb: 560 },
   shield: { short: 'Щит', path: 'spirit', tier: 1, cost: 15, kind: 'instant', name: 'Щит духа', icon: '🛡', desc: 'Сияющая сфера поглощает 60 урона за 8 с', mana: 35, cd: 20, absorb: 60, time: 8 },

@@ -307,7 +307,7 @@ miniBase.height = MAP_H;
 {
   const g = miniBase.getContext('2d');
   const img = g.createImageData(MAP_W, MAP_H);
-  const cols = [[27, 79, 99], [60, 138, 134], [227, 208, 154], [120, 177, 83], [63, 128, 64], [143, 142, 134], [92, 88, 84], [34, 31, 29]];
+  const cols = [[27, 79, 99], [60, 138, 134], [227, 208, 154], [120, 177, 83], [63, 128, 64], [143, 142, 134], [92, 88, 84], [34, 31, 29], [236, 242, 248], [168, 196, 190], [176, 216, 236]];
   for (let i = 0; i < tiles.length; i++) {
     const c = cols[tiles[i]];
     img.data[i * 4] = c[0];

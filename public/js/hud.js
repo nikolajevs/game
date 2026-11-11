@@ -1,19 +1,20 @@
 // Интерфейс поверх 3D: полоски, инвентарь, пояс с оружием, крафт, мини-карта, чат, хранилище.
 import {
   ITEMS, ITEM_KEYS, STRUCTURES, BUILD_CATS, buildCost, repairCost, demolishRefund, MAP_W, MAP_H, TILE, lightAt,
-  WEAPONS, WEAPON_ORDER, RECIPES, CRAFT_TABS, CRAFT_MAX, USES, TRIPS, RAD, SITES, ABILITIES, ABILITY_ORDER, FOOD, RESOURCES, NPCS,
+  WEAPONS, WEAPON_ORDER, RECIPES, CRAFT_TABS, CRAFT_MAX, USES, TRIPS, COLD, RAD, SITES, ABILITIES, ABILITY_ORDER, FOOD, RESOURCES, NPCS,
 } from '/shared/config.js';
 
 const MINI_SPAN = 4800; // сколько единиц мира видно на мини-карте
 const WORLD = MAP_W * TILE;
 
 const $ = (id) => document.getElementById(id);
-const TILE_RGB = [[27, 79, 99], [60, 138, 134], [227, 208, 154], [120, 177, 83], [63, 128, 64], [143, 142, 134], [92, 88, 84], [34, 31, 29]];
+const TILE_RGB = [[27, 79, 99], [60, 138, 134], [227, 208, 154], [120, 177, 83], [63, 128, 64], [143, 142, 134], [92, 88, 84], [34, 31, 29], [236, 242, 248], [168, 196, 190], [176, 216, 236]];
 const RECIPE_DESC = {
   cell: 'Боеприпас лазерной винтовки',
   arrows: 'Для лука и арбалета',
   bullets: 'Для самопала и дробовика',
   antirad: `Снимает ${RAD.antirad} ед. радиации (R)`,
+  coat: 'Пока лежит в инвентаре, холод зимнего биома почти не копится',
   elixir: `Возвращает ${USES.elixir.mana} маны и ${USES.elixir.hp} здоровья (T)`,
 };
 
@@ -58,7 +59,7 @@ export class Hud {
     this.send = send;
     this.root = $('hud');
     this.bars = {
-      hp: $('barHp'), food: $('barFood'), water: $('barWater'), sta: $('barSta'), rad: $('barRad'), mana: $('barMana'),
+      hp: $('barHp'), food: $('barFood'), water: $('barWater'), sta: $('barSta'), rad: $('barRad'), mana: $('barMana'), cold: $('barCold'),
     };
     this.knowVal = $('knowVal');
     this.spiritVal = $('spiritVal');
@@ -92,14 +93,17 @@ export class Hud {
     this.craftEl = $('craft');
     this.invWin = $('invWin');
     this.radFx = $('radFx');
+    this.coldFx = $('coldFx');
     this.cache = {};
     this.players = [];
+    this.friends = []; // друзья для карты: [{ n, on, x, y }]
     this.zones = [];
     this.belt = [];
     this.initBuildMenu();
     $('contClose').addEventListener('click', () => this.onCloseCont?.());
     $('craftClose').addEventListener('click', () => this.toggleCraft(false));
     this.initCraft();
+    this.initContainer();
     this.initInv();
   }
 
@@ -152,6 +156,7 @@ export class Hud {
     el.querySelector('.fill').style.width = `${Math.max(0, Math.min(100, (v / max) * 100))}%`;
     el.querySelector('.num').textContent = Math.round(v);
     if (key === 'rad') el.classList.toggle('low', v >= RAD.dmgStart);
+    else if (key === 'cold') el.classList.toggle('low', v >= COLD.slowAt);
     else el.classList.toggle('low', key !== 'sta' && v / max < 0.2);
   }
 
@@ -163,6 +168,15 @@ export class Hud {
     const showRad = you.rad > 0.5 || you.rz > 0;
     this.bars.rad.classList.toggle('hidden', !showRad);
     if (showRad) this.setBar(this.bars.rad, you.rad, 100, 'rad');
+    // холод: шкала видна в снегах и пока не отогрелись; по краям экрана — иней
+    const showCold = you.cold > 0.5 || you.ic;
+    this.bars.cold.classList.toggle('hidden', !showCold);
+    if (showCold) this.setBar(this.bars.cold, you.cold, 100, 'cold');
+    const coldOp = Math.min(0.9, Math.max(0, (you.cold - 25) / 75));
+    if (this.cache.coldOp !== coldOp.toFixed(2)) {
+      this.cache.coldOp = coldOp.toFixed(2);
+      this.coldFx.style.opacity = coldOp;
+    }
     const showMana = you.pa === 'spirit';
     this.bars.mana.classList.toggle('hidden', !showMana);
     if (showMana) this.setBar(this.bars.mana, you.mn, you.mm, 'mana');
@@ -199,6 +213,8 @@ export class Hud {
     }
     if (you.med) status = '🕯 Медитация у алтаря: сила духа копится, мана восстанавливается быстрее';
     if (you.sh > 0) status = `🛡 Щит духа: ${you.sh}`;
+    if (you.ic && !you.fire) status = you.inv.coat > 0 ? '❄ Снега: меховая куртка греет — холод почти не копится' : '❄ Снега: холод копится. Грейтесь у костра или сшейте меховую куртку из шкур (C → Припасы)';
+    if (you.cold >= COLD.slowAt) status = you.cold >= 100 ? '❄ Вы замерзаете! Скорее к костру или прочь из снегов' : '❄ Вы окоченели: медленнее идёте, раны не заживают';
     if (you.rz > 0) status = `☢ ${this.siteName || 'Радиационная зона'} (радиация ${Math.ceil(you.rz)}) — облучение растёт, копится мутаген`;
     if (you.rad >= RAD.dmgStart) status = '☢ Лучевая болезнь! Уйдите из зоны и примите антирад [R]';
     if (you.tr) status = `🔮 Трип: найдите и убейте проводников в мир духов — осталось ${you.tr[0]}, времени ${you.tr[1]} с`;
@@ -269,12 +285,13 @@ export class Hud {
     const atkIcon = spell ? spell.icon : you.wp ? ITEMS[you.wp].icon : '🐾';
     const atkName = spell ? spell.short || spell.name : you.wp ? ITEMS[you.wp].name.split(' ').pop() : 'Удар';
     const list = [
-      { key: 'ЛКМ', ic: atkIcon, nm: atkName, cd: you.cd.m, max: w ? w.cd : stats.attackCd, on: true },
+      { key: 'ЛКМ', ic: atkIcon, nm: atkName, cd: you.cd.m, max: w ? w.cd * (stats.cdMul || 1) : stats.attackCd, on: true },
       { key: 'Q', ic: '🧪', nm: 'Кислота', cd: you.cd.s, max: stats.spit ? stats.spit.cd : 1, on: !!stats.spit },
       { key: '␣', ic: '🦏', nm: 'Таран', cd: you.cd.c, max: stats.charge ? stats.charge.cd : 1, on: !!stats.charge },
       { key: 'F', ic: '🍖', nm: 'Есть', cd: 0, max: 1, on: you.inv.berries + you.inv.meat > 0 },
       { key: 'R', ic: '💊', nm: `Антирад ${you.inv.antirad || ''}`, cd: 0, max: 1, on: you.inv.antirad > 0 },
     ];
+    if (stats.dash) list.splice(3, 0, { key: 'Z', ic: '🚀', nm: 'Рывок', cd: you.cd.d || 0, max: stats.dash.cd, on: true });
     if (you.inv.elixir > 0) list.push({ key: 'T', ic: ITEMS.elixir.icon, nm: `Эликсир ${you.inv.elixir}`, cd: 0, max: 1, on: true });
     const sig = list.map((a) => `${a.on}${a.ic}${a.nm}${Math.ceil(a.cd * 10)}`).join('|');
     if (this.cache.ab === sig) return;
@@ -405,7 +422,7 @@ export class Hud {
           : 'Наведите на свою постройку. За снос возвращается до половины ресурсов — по оставшейся прочности.'}</div>`;
       } else {
         const d = STRUCTURES[t.k];
-        const mine = t.o === b.uid;
+        const mine = t.o === b.uid || (repair && !!b.friends?.has(t.o)); // чинить можно и постройки друзей
         const pct = Math.max(0, Math.min(100, Math.round((t.h / t.m) * 100)));
         const cost = repair ? repairCost(t.k, t.h, t.m) : demolishRefund(t.k, t.h, t.m);
         const any = Object.keys(cost).length > 0;
@@ -589,11 +606,17 @@ export class Hud {
     });
     grid.addEventListener('dblclick', (e) => {
       const c = e.target.closest('[data-item]');
-      if (c) this.send({ t: 'craft', item: c.dataset.item });
+      if (c) {
+        this.send({ t: 'craft', item: c.dataset.item });
+        this.onCraft?.();
+      }
     });
     $('craftInfo').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-n]');
-      if (b && !b.disabled) this.send({ t: 'craft', item: this.craftSel, n: Number(b.dataset.n) });
+      if (b && !b.disabled) {
+        this.send({ t: 'craft', item: this.craftSel, n: Number(b.dataset.n) });
+        this.onCraft?.();
+      }
     });
   }
 
@@ -736,6 +759,29 @@ export class Hud {
       return [cx + dx / m, cy + dy / m, true];
     };
     const k = big ? 1.6 : 1;
+    // друзья в сети: точки их цвета, на большой карте — с именами
+    for (const f of this.friends || []) {
+      if (!f.on) continue;
+      let [fx, fy, out] = [px(f.x), py(f.y), false];
+      if (edge) [fx, fy, out] = clampEdge(fx, fy);
+      else if (fx < -20 || fy < -20 || fx > W + 20 || fy > H + 20) continue;
+      g.fillStyle = f.dd ? '#777' : '#7fe0ff';
+      g.strokeStyle = '#06222c';
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.arc(fx, fy, (out ? 3 : 4) * k, 0, Math.PI * 2);
+      g.fill();
+      g.stroke();
+      if (big) {
+        g.font = 'bold 12px sans-serif';
+        g.strokeStyle = 'rgba(0,0,0,0.8)';
+        g.lineWidth = 3;
+        g.strokeText(f.n, fx, fy - 13);
+        g.fillStyle = '#bfefff';
+        g.fillText(f.n, fx, fy - 13);
+        g.font = `${iconSize}px sans-serif`;
+      }
+    }
     if (nest) {
       let [nx, ny, out] = [px(nest[0]), py(nest[1]), false];
       if (edge) [nx, ny, out] = clampEdge(nx, ny);
@@ -1031,79 +1077,148 @@ export class Hud {
   }
 
   // ---------- хранилище / останки / ящик ----------
+  // ---------- хранилище, ящики и останки ----------
+  // Две сетки: слева — что у вас, справа — что внутри. Щелчок выбирает предмет, внизу задаётся количество
+  // и жмётся «Положить» или «Забрать»; двойной щелчок переносит всё, Shift+щелчок — десять.
+  // У ящиков с добычей и останков сетка одна: оттуда можно только забирать.
+  initContainer() {
+    this.st = { filter: 'all', sel: null, n: 1 };
+    const el = this.contEl;
+    el.addEventListener('mousedown', (e) => e.stopPropagation());
+    el.addEventListener('click', (e) => {
+      const c = this.cont;
+      if (!c) return;
+      const slot = e.target.closest('[data-slot]');
+      if (slot) {
+        const [side, key] = slot.dataset.slot.split(':');
+        if (e.shiftKey) return this.moveItem(side, key, 10);
+        this.st.sel = { side, key };
+        this.st.n = this.slotCount(side, key);
+        return this.renderContainer(this.contYou);
+      }
+      const b = e.target.closest('[data-act]');
+      if (!b || b.disabled) return;
+      const act = b.dataset.act;
+      if (act === 'filter') {
+        this.st.filter = b.dataset.f;
+        // выбранный предмет из другого раздела сбрасываем
+        if (this.st.sel && this.st.filter !== 'all' && this.itemCat(this.st.sel.key) !== this.st.filter) this.st.sel = null;
+        this.renderContainer(this.contYou);
+      } else if (act === 'n') {
+        const max = this.st.sel ? this.slotCount(this.st.sel.side, this.st.sel.key) : 0;
+        this.st.n = Math.max(1, Math.min(max, b.dataset.n === 'half' ? Math.ceil(max / 2) : b.dataset.n === 'all' ? max : Number(b.dataset.n)));
+        this.renderContainer(this.contYou);
+      } else if (act === 'go' && this.st.sel) this.moveItem(this.st.sel.side, this.st.sel.key, this.st.n);
+      else if (act === 'putall') for (const k of this.bulkKeys('mine')) this.moveItem('mine', k, 'all');
+      else if (act === 'takeall') for (const k of this.bulkKeys('box')) this.moveItem('box', k, 'all');
+    });
+    el.addEventListener('dblclick', (e) => {
+      const slot = e.target.closest('[data-slot]');
+      if (!slot) return;
+      const [side, key] = slot.dataset.slot.split(':');
+      this.moveItem(side, key, 'all');
+    });
+    // ползунок количества: двигается без перерисовки окна
+    el.addEventListener('input', (e) => {
+      if (e.target.id !== 'stRange') return;
+      this.st.n = Number(e.target.value);
+      const out = el.querySelector('.st-n');
+      if (out) out.textContent = this.st.n;
+    });
+  }
+
+  slotCount(side, key) {
+    const c = this.cont;
+    const you = this.contYou;
+    if (!c || !you) return 0;
+    if (key === 'dna') return side === 'box' ? c.dna || 0 : 0;
+    return side === 'mine' ? you.inv[key] || 0 : c.inv[key] || 0;
+  }
+
+  // к какому разделу относится предмет
+  itemCat(k) {
+    if (k === 'dna') return 'res';
+    if (FOOD[k]) return 'food';
+    const kind = ITEMS[k].kind;
+    return kind === 'weapon' ? 'weapon' : kind === 'res' ? 'res' : 'supply';
+  }
+
+  // что переносит кнопка «всё»: то, что показано; без раздела своё оружие и куртку не трогаем
+  bulkKeys(side) {
+    const f = this.st.filter;
+    const keys = side === 'box' && this.cont.remains ? [...ITEM_KEYS, 'dna'] : ITEM_KEYS;
+    return keys.filter((k) => {
+      if (!(this.slotCount(side, k) > 0)) return false;
+      const cat = this.itemCat(k);
+      if (f !== 'all') return cat === f;
+      return side === 'box' || (cat !== 'weapon' && k !== 'coat');
+    });
+  }
+
+  moveItem(side, key, n) {
+    if (side === 'mine' && this.cont.remains) return;
+    this.send({ t: 'cont', id: this.cont.id, op: side === 'mine' ? 'put' : 'take', res: key, n });
+  }
+
   openContainer(c, you) {
+    const fresh = !this.cont || this.cont.id !== c.id;
     this.cont = c;
+    if (fresh) this.st = { filter: 'all', sel: null, n: 1 };
     this.contEl.classList.remove('hidden');
-    $('contTitle').textContent = c.title;
+    this.contEl.classList.toggle('loot', !!c.remains);
+    $('contTitle').textContent = `${c.remains ? '🎁' : '📦'} ${c.title}`;
     this.renderContainer(you);
   }
 
   renderContainer(you) {
     const c = this.cont;
-    if (!c) return;
-    const body = $('contBody');
-    body.innerHTML = '';
-    const head = document.createElement('div');
-    head.className = 'crow';
-    head.innerHTML = '<span></span><span class="muted small">У вас → внутри</span><span></span>';
-    body.appendChild(head);
-    const keys = [...ITEM_KEYS];
-    if (c.remains) keys.push('dna');
-    let rows = 0;
-    for (const k of keys) {
-      const isDna = k === 'dna';
-      const inside = isDna ? c.dna : c.inv[k] || 0;
-      const mine = isDna ? you.dna : you.inv[k] || 0;
-      // показываем только то, что есть у вас или внутри
-      if (c.remains ? !inside : !inside && !mine) continue;
-      rows++;
-      const row = document.createElement('div');
-      row.className = 'crow';
-      row.innerHTML = `<span>${isDna ? '☣' : ITEMS[k].icon}</span><span>${isDna ? 'Мутаген' : ITEMS[k].name}<br><span class="cnt">${mine} → ${inside}</span></span>`;
-      const btns = document.createElement('div');
-      btns.className = 'btns';
-      const mk = (label, op, n, disabled) => {
-        const b = document.createElement('button');
-        b.textContent = label;
-        b.disabled = disabled;
-        b.addEventListener('click', () => this.send({ t: 'cont', id: c.id, op, res: k, n }));
-        btns.appendChild(b);
-      };
-      if (!c.remains) {
-        mk('→10', 'put', 10, !mine);
-        mk('→все', 'put', 'all', !mine);
-      }
-      mk('←10', 'take', 10, !inside);
-      mk('←все', 'take', 'all', !inside);
-      row.appendChild(btns);
-      body.appendChild(row);
+    if (!c || !you) return;
+    this.contYou = you;
+    const st = this.st;
+    const loot = !!c.remains;
+    const total = ITEM_KEYS.reduce((a, k) => a + (c.inv[k] || 0), 0);
+    const pct = Math.min(100, Math.round((total / c.cap) * 100));
+    $('contCap').innerHTML = loot ? '' : `<div class="st-capbar"><i style="width:${pct}%" class="${pct > 90 ? 'full' : ''}"></i></div><span>${total} / ${c.cap}</span>`;
+    // выбранный предмет мог закончиться
+    if (st.sel && !(this.slotCount(st.sel.side, st.sel.key) > 0)) st.sel = null;
+    const FILTERS = [['all', 'Все'], ['res', '🪵 Ресурсы'], ['food', '🍖 Еда'], ['weapon', '⚔️ Оружие'], ['supply', '🎒 Припасы']];
+    const grid = (side) => {
+      const keys = (side === 'box' && loot ? [...ITEM_KEYS, 'dna'] : ITEM_KEYS)
+        .filter((k) => this.slotCount(side, k) > 0 && (st.filter === 'all' || this.itemCat(k) === st.filter));
+      if (!keys.length) return `<div class="st-empty">${st.filter === 'all' ? 'Пусто' : 'В этом разделе пусто'}</div>`;
+      return keys.map((k) => {
+        const on = st.sel && st.sel.side === side && st.sel.key === k;
+        const name = k === 'dna' ? 'Мутаген' : ITEMS[k].name;
+        return `<div class="st-slot${on ? ' on' : ''}" data-slot="${side}:${k}" title="${name}"><div class="st-ic">${k === 'dna' ? '☣' : ITEMS[k].icon}</div><div class="st-cnt">${this.slotCount(side, k)}</div><div class="st-nm">${name}</div></div>`;
+      }).join('');
+    };
+    let html = `<div class="st-filters">${FILTERS.map(([f, n]) => `<div class="st-filter${st.filter === f ? ' on' : ''}" data-act="filter" data-f="${f}">${n}</div>`).join('')}</div><div class="st-panes">`;
+    if (!loot) {
+      html += `<div class="st-pane"><div class="st-pane-h"><span>🎒 У вас</span><button data-act="putall" ${this.bulkKeys('mine').length ? '' : 'disabled'}>${st.filter === 'all' ? 'Сложить ресурсы' : 'Положить всё'} →</button></div><div class="st-grid">${grid('mine')}</div></div>`;
     }
-    if (!rows) {
-      const empty = document.createElement('div');
-      empty.className = 'muted small';
-      empty.style.padding = '8px 0';
-      empty.textContent = 'Пусто';
-      body.appendChild(empty);
-    }
-    if (c.remains) {
-      const all = document.createElement('button');
-      all.className = 'primary';
-      all.style.marginTop = '8px';
-      all.style.width = '100%';
-      all.textContent = 'Забрать всё';
-      all.addEventListener('click', () => {
-        for (const k of keys) {
-          const inside = k === 'dna' ? c.dna : c.inv[k];
-          if (inside) this.send({ t: 'cont', id: c.id, op: 'take', res: k, n: 'all' });
-        }
-      });
-      body.appendChild(all);
+    html += `<div class="st-pane"><div class="st-pane-h"><span>${loot ? '🎁 Внутри' : '📦 В хранилище'}</span><button data-act="takeall" class="${loot ? 'primary' : ''}" ${this.bulkKeys('box').length ? '' : 'disabled'}>← Забрать всё</button></div><div class="st-grid">${grid('box')}</div></div></div>`;
+    // панель переноса выбранного
+    if (st.sel) {
+      const { side, key } = st.sel;
+      const max = this.slotCount(side, key);
+      st.n = Math.max(1, Math.min(max, st.n));
+      const put = side === 'mine';
+      const name = key === 'dna' ? 'Мутаген' : ITEMS[key].name;
+      const room = c.cap - total;
+      const blocked = put && room <= 0;
+      html += `<div class="st-move"><div class="st-sel"><div class="st-ic">${key === 'dna' ? '☣' : ITEMS[key].icon}</div><div><b>${name}</b>
+        <div class="muted small">${key === 'dna' ? '' : `у вас ${you.inv[key] || 0} · `}внутри ${this.slotCount('box', key)}</div></div></div>
+        <div class="st-amount"><input type="range" id="stRange" min="1" max="${max}" value="${st.n}" ${max <= 1 ? 'disabled' : ''}><div class="st-n">${st.n}</div></div>
+        <div class="st-quick">${[['1', '1'], ['10', '10'], ['half', '½'], ['all', 'Все']].map(([n, t]) => `<button data-act="n" data-n="${n}">${t}</button>`).join('')}</div>
+        <button class="primary st-go" data-act="go" ${blocked ? 'disabled' : ''}>${put ? 'Положить →' : '← Забрать'}</button></div>
+        ${blocked ? '<div class="bm-state bad">✖ Хранилище заполнено</div>' : ''}`;
     } else {
-      const total = ITEM_KEYS.reduce((a, k) => a + (c.inv[k] || 0), 0);
-      const cap = document.createElement('div');
-      cap.className = 'cont-cap';
-      cap.textContent = `Заполнено: ${total} / ${c.cap}`;
-      body.appendChild(cap);
+      html += `<div class="st-move hint">${loot ? 'Щёлкните предмет, чтобы забрать часть, или нажмите «Забрать всё».' : 'Щёлкните предмет слева, чтобы положить, или справа — чтобы забрать.'}</div>`;
+    }
+    html += '<div class="st-foot"><span>щелчок — выбрать</span><span>двойной щелчок — перенести всё</span><span><kbd>Shift</kbd> + щелчок — 10 штук</span><span><kbd>E</kbd> / <kbd>Esc</kbd> закрыть</span></div>';
+    if (this.cache.contHtml !== html || !$('contBody').firstChild) {
+      this.cache.contHtml = html;
+      $('contBody').innerHTML = html;
     }
   }
 
