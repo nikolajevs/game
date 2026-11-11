@@ -101,6 +101,9 @@ const BONE = '#e8dcc0';
 const mutMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.55 });
 const acidMat = new THREE.MeshStandardMaterial({ color: '#8dff5a', emissive: '#3fd400', emissiveIntensity: 0.9, transparent: true, opacity: 0.85, roughness: 0.2 });
 const glowMat = new THREE.MeshBasicMaterial({ color: '#a8ffff' });
+const techMat = new THREE.MeshBasicMaterial({ color: '#5ec8ff' }); // огоньки имплантов
+const STEEL = '#8f9aa6';
+const DARK = '#3a424b';
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 function cone(list, base, dir, r, h, color = BONE) {
   const d = dir.clone().normalize();
@@ -131,12 +134,23 @@ function buildMutations(P) {
     const eyes = [[0, 0.155, 0.1]];
     if (P.eyes >= 2) eyes.push([0.035, 0.175, 0.092], [-0.035, 0.175, 0.092]);
     if (P.eyes >= 3) eyes.push([0, 0.2, 0.085]);
+    // оптический имплант: тёмные оправы с красными линзами
     for (const [x, y, z] of eyes) {
-      blob(head, V(x, y, z), 0.014, 0.014, 0.008, '#ffffff');
-      blob(head, V(x, y, z + 0.006), 0.007, 0.007, 0.005, '#c62828');
+      blob(head, V(x, y, z), 0.016, 0.016, 0.009, DARK);
+      blob(head, V(x, y, z + 0.006), 0.009, 0.009, 0.006, '#ff4a3a');
     }
   }
+  if (P.reflex) {
+    // нейроускоритель: пластина на затылке с разъёмами
+    blob(head, V(0, 0.13, -0.085), 0.05, 0.045, 0.02, DARK);
+    for (let i = 0; i < P.reflex; i++) cone(head, V((i - (P.reflex - 1) / 2) * 0.03, 0.15, -0.1), V(0, 0.4, -1), 0.008, 0.04, STEEL);
+  }
   add('Head', head);
+  if (P.reflex) {
+    const led = [];
+    for (let i = 0; i < P.reflex; i++) blob(led, V((i - (P.reflex - 1) / 2) * 0.03, 0.115, -0.105), 0.007, 0.007, 0.005, '#5ec8ff');
+    add('Head', led, techMat);
+  }
   // шея: жабры (плавники)
   if (P.fins) {
     const neck = [];
@@ -146,8 +160,22 @@ function buildMutations(P) {
   // spine_03 (грудь/спина): X — влево, Y — вверх, Z — вперёд; спина — минус Z
   const chest = [];
   if (P.armor) {
-    for (const s of [-1, 1]) blob(chest, V(s * 0.17, 0.2, -0.01), 0.07 + 0.012 * P.armor, 0.035, 0.08, s > 0 ? BONE : '#d8ccb0', 0, 0, s * 0.35);
-    for (let i = 0; i < 1 + P.armor; i++) blob(chest, V(0, 0.18 - i * 0.07, -0.13), 0.1, 0.035, 0.03, i % 2 ? BONE : '#d8ccb0');
+    // бронепластины — сталь: наплечники и сегменты вдоль спины
+    for (const s of [-1, 1]) blob(chest, V(s * 0.17, 0.2, -0.01), 0.07 + 0.012 * P.armor, 0.035, 0.08, s > 0 ? STEEL : '#7c8792', 0, 0, s * 0.35);
+    for (let i = 0; i < 1 + P.armor; i++) blob(chest, V(0, 0.18 - i * 0.07, -0.13), 0.1, 0.035, 0.03, i % 2 ? STEEL : '#7c8792');
+  }
+  if (P.jets) {
+    // реактивные ускорители: сопла на спине
+    for (const s of [-1, 1]) {
+      blob(chest, V(s * 0.085, 0.1, -0.15), 0.04, 0.07, 0.035, DARK);
+      cone(chest, V(s * 0.085, 0.02, -0.15), V(0, 1, 0), 0.03 + 0.005 * P.jets, 0.07, STEEL);
+    }
+  }
+  if (P.battery) blob(chest, V(0, 0.12, 0.115), 0.055, 0.055, 0.03, DARK); // гнездо энергоядра на груди
+  if (P.regen) {
+    // живая плоть: багровые наросты на плечах и боках
+    const spots = [[0.13, 0.24, 0.03], [-0.14, 0.22, -0.04], [0.15, 0.08, 0.02], [-0.13, 0.05, 0.05], [0.05, 0.26, -0.08], [-0.06, 0.02, -0.11]];
+    for (const [x, y, z] of spots.slice(0, P.regen * 2)) blob(chest, V(x, y, z), 0.035, 0.03, 0.03, '#a83a3a');
   }
   if (P.spikes) {
     const n = 2 + P.spikes * 2;
@@ -155,6 +183,12 @@ function buildMutations(P) {
     for (const s of [-1, 1]) cone(chest, V(s * 0.17, 0.23, -0.02), V(s * 0.4, 1, -0.2), 0.014, 0.06 + 0.02 * P.spikes);
   }
   add('spine_03', chest);
+  if (P.battery || P.jets) {
+    const lights = [];
+    if (P.battery) blob(lights, V(0, 0.12, 0.135), 0.022 + 0.006 * P.battery, 0.022 + 0.006 * P.battery, 0.012, '#5ec8ff');
+    if (P.jets) for (const s of [-1, 1]) blob(lights, V(s * 0.085, 0.015, -0.15), 0.02, 0.012, 0.02, '#5ec8ff');
+    add('spine_03', lights, techMat);
+  }
   if (P.acid) {
     const sacs = [];
     for (let i = 0; i < P.acid; i++) blob(sacs, V((i - (P.acid - 1) / 2) * 0.07, 0.24, -0.1), 0.035 + 0.006 * P.acid, 0.035, 0.03, '#8dff5a');
@@ -175,6 +209,34 @@ function buildMutations(P) {
         cone(hand, V(0, 0.16, z), V(0, 1, 0), 0.007, 0.04 + 0.018 * P.claws);
       }
       add(`hand_${side}`, hand);
+    }
+  }
+  // гидравлика рук: стальные наручи с поршнем; разрядник — катушки на кистях
+  if (P.arm || P.shock) {
+    for (const side of ['l', 'r']) {
+      if (P.arm) {
+        const arm = [];
+        blob(arm, V(0, 0.12, 0), 0.042 + 0.004 * P.arm, 0.085, 0.042 + 0.004 * P.arm, STEEL);
+        blob(arm, V(0, 0.12, 0.04), 0.012, 0.11, 0.012, DARK);
+        add(`lowerarm_${side}`, arm);
+      }
+      if (P.shock) {
+        const coil = [];
+        for (let i = 0; i < P.shock; i++) blob(coil, V(0, 0.05 + i * 0.022, 0), 0.04, 0.008, 0.04, DARK);
+        add(`hand_${side}`, coil);
+        const spark = [];
+        blob(spark, V(0, 0.09, 0.035), 0.012, 0.012, 0.012, '#5ec8ff');
+        add(`hand_${side}`, spark, techMat);
+      }
+    }
+  }
+  // сервоприводы ног: стальные голени
+  if (P.legs) {
+    for (const side of ['l', 'r']) {
+      const leg = [];
+      blob(leg, V(0, 0.2, 0), 0.052 + 0.004 * P.legs, 0.13, 0.052 + 0.004 * P.legs, STEEL);
+      blob(leg, V(0, 0.2, -0.05), 0.014, 0.15, 0.014, DARK);
+      add(`calf_${side}`, leg);
     }
   }
   // предплечья: плавники вдоль тыльной стороны руки

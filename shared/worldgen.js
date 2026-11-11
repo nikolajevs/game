@@ -96,41 +96,37 @@ export function generateMap(seed) {
 }
 
 // ---- Зимний биом ----
-// Север острова под снегом: луга и пляжи становятся снежными полями, лес — тайгой,
+// Северный и южный края карты под снегом: луга и пляжи становятся снежными полями, лес — тайгой,
 // мелководье замерзает в лёд, по которому можно ходить. Скалы и глубокая вода остаются собой.
+// Лежит ли клетка в зимней полосе (по её координатам, без учёта того, что на ней): так клиент узнаёт,
+// что скалу надо укрыть снегом и что над игроком идёт снег.
+export function winterTest(seed) {
+  const climate = makeNoise(seed + 909);
+  return (x, y) => {
+    const edgeNoise = (climate(x / 95, y / 95, 3) - 0.5) * WINTER.edge;
+    return y < WINTER.band + edgeNoise || y > MAP_H - WINTER.band + edgeNoise;
+  };
+}
+
 function stampWinter(tiles, seed) {
-  // южная граница зимы — ряд, выше которого лежит нужная доля суши
-  let land = 0;
-  const rows = new Uint32Array(MAP_H);
-  for (let i = 0; i < tiles.length; i++) {
-    if (tiles[i] >= T.SAND) {
-      rows[Math.floor(i / MAP_W)]++;
-      land++;
-    }
-  }
-  let cut = 0;
-  for (let y = 0, acc = 0; y < MAP_H; y++) {
-    acc += rows[y];
-    if (acc >= land * WINTER.share) {
-      cut = y;
-      break;
-    }
-  }
-  const edge = makeNoise(seed + 909);
-  for (let y = 2; y < Math.min(MAP_H - 2, cut + WINTER.edge + 2); y++) {
+  const inWinter = winterTest(seed);
+  const reach = WINTER.band + Math.ceil(WINTER.edge / 2) + 15;
+  const row = (y) => {
     for (let x = 2; x < MAP_W - 2; x++) {
-      if (y > cut + (edge(x / 60, y / 60, 4) - 0.5) * 2.4 * WINTER.edge) continue;
       const i = y * MAP_W + x;
       const t = tiles[i];
-      if (t === T.GRASS || t === T.SAND) tiles[i] = T.SNOW;
-      else if (t === T.FOREST) tiles[i] = T.TAIGA;
+      if (t !== T.SAND && t !== T.GRASS && t !== T.FOREST && t !== T.SHALLOW) continue;
+      if (!inWinter(x, y)) continue;
+      if (t === T.FOREST) tiles[i] = T.TAIGA;
       else if (t === T.SHALLOW) {
         // лёд встаёт только у берега: рядом с глубиной остаётся полоса воды, иначе льдина обрывалась бы стеной
         const deep = tiles[i - 1] === T.DEEP || tiles[i + 1] === T.DEEP || tiles[i - MAP_W] === T.DEEP || tiles[i + MAP_W] === T.DEEP;
         if (!deep) tiles[i] = T.ICE;
-      }
+      } else tiles[i] = T.SNOW;
     }
-  }
+  };
+  for (let y = 2; y < reach; y++) row(y);
+  for (let y = MAP_H - reach; y < MAP_H - 2; y++) row(y);
 }
 
 // ---- Мёртвый город ----

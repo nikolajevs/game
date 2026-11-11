@@ -202,6 +202,7 @@ export class WorldView {
       nm.style.color = def.behavior === 'passive' ? '#e8e0c8' : def.faction === 'tech' ? '#ffd27a' : '#ffb4a8';
     }
     el.appendChild(nm);
+    v.nm = nm;
     const bar = document.createElement('div');
     bar.className = 'hp';
     const fill = document.createElement('i');
@@ -440,6 +441,17 @@ export class WorldView {
           snd('heavyHit', f, { volume: 0.62, range: 720 });
           fx.burst(f.x, gy + 8, f.y, '#b5a585', 16, { speed: 100, size: 3 });
           if (Math.hypot(f.x - myX, f.y - myY) < 300) this.shake = Math.max(this.shake, 4);
+          break;
+        case 'dash':
+          // рывок на реактивных ускорителях
+          snd('heavyHit', f, { volume: 0.4, range: 700, rate: 1.7 });
+          fx.burst(f.x, gy + 16, f.y, '#5ec8ff', 18, { speed: 130, size: 2.4, life: 0.35, gravity: 0 });
+          fx.burst(f.x, gy + 6, f.y, '#c9d2da', 10, { speed: 70, size: 3, life: 0.5 });
+          break;
+        case 'zap':
+          // разрядник: удар током
+          snd('crystalHit', f, { volume: 0.5, range: 600, rate: 1.9 });
+          fx.burst(f.x, gy + 24, f.y, '#bff8ff', 16, { speed: 170, size: 2, life: 0.25, gravity: 0 });
           break;
         case 'break':
           snd(f.m === 'wood' ? 'woodBreak' : f.m === 'stone' ? 'stoneHit' : 'softBreak', f, { volume: 0.62, range: 700 });
@@ -926,6 +938,16 @@ export class WorldView {
       }
       v.label.style.display = '';
       v.label.style.transform = `translate(${(_v.x * 0.5 + 0.5) * w}px, ${(-_v.y * 0.5 + 0.5) * h}px) translate(-50%, -100%)`;
+      // игрок: друг — голубым с рукопожатием, говорящий в микрофон — со значком
+      if (e.k === 'p') {
+        const tag = `${this.friends?.has(e.u) ? 'f' : ''}${e.tk ? 't' : ''}`;
+        if (v.tag !== tag) {
+          v.tag = tag;
+          const friend = tag.includes('f');
+          v.nm.textContent = `${friend ? '🤝 ' : ''}${e.n}${e.tk ? ' 🔊' : ''}`;
+          v.nm.style.color = friend ? '#7fe0ff' : '#ffffff';
+        }
+      }
       v.hpBar.style.display = damaged ? '' : 'none';
       if (e.h !== v.lastHp) {
         v.lastHp = e.h;

@@ -3,7 +3,7 @@
 // Рельеф нарезан на участки: рисуются только видимые и не слишком далёкие.
 import * as THREE from 'three';
 import { TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, isCold } from '/shared/config.js';
-import { makeNoise, zoneAt, zoneFalloff } from '/shared/worldgen.js';
+import { makeNoise, zoneAt, zoneFalloff, winterTest } from '/shared/worldgen.js';
 import { surfaceTextures, TRIPLANAR_GLSL } from './surfaces.js';
 import { Water } from './water.js';
 
@@ -23,7 +23,7 @@ function applyTerrainSurfaces(material) {
     shader.uniforms.uGrass = { value: grass };
     shader.uniforms.uDirt = { value: dirt };
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec3 biome;\nvarying vec3 vBiome;\nvarying vec3 vTerrWP;')
+      .replace('#include <common>', '#include <common>\nattribute vec4 biome;\nvarying vec4 vBiome;\nvarying vec3 vTerrWP;')
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
         vBiome = biome;
         vTerrWP = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
@@ -32,7 +32,7 @@ function applyTerrainSurfaces(material) {
       uniform sampler2D uRock;
       uniform sampler2D uGrass;
       uniform sampler2D uDirt;
-      varying vec3 vBiome;
+      varying vec4 vBiome;
       varying vec3 vTerrWP;
       ${TRIPLANAR_GLSL}
       // высота поверхности: общая мелкая фактура, песок (рябь и зерно), скала (сколы и трещины)
@@ -40,7 +40,7 @@ function applyTerrainSurfaces(material) {
         float h = texture2D(bumpMap, uvD).x;
         float hs = texture2D(uSand, wp.xz / ${SAND_SCALE.toFixed(1)}).a;
         float hr = triSample(uRock, wp, ${ROCK_SCALE.toFixed(1)}, tw).a;
-        float green = clamp(1.0 - vBiome.x - vBiome.y, 0.0, 1.0);
+        float green = clamp(1.0 - vBiome.x - vBiome.y - vBiome.w, 0.0, 1.0);
         float hg = dot(texture2D(uGrass, wp.xz / ${GRASS_SCALE.toFixed(1)}).rgb, vec3(4.0));
         h = mix(h, hg * 0.9, green * 0.6);
         h = mix(h, hs * 1.8, vBiome.x);
@@ -80,7 +80,7 @@ function applyTerrainSurfaces(material) {
         vec3 sandC = texture2D(uSand, vTerrWP.xz / ${SAND_SCALE.toFixed(1)}).rgb * 1.1;
         vec3 rockC = triSample(uRock, vTerrWP, ${ROCK_SCALE.toFixed(1)}, triWeights(vTerrWP)).rgb * 1.12;
         // зелёная часть: травяной ковёр ez-tree; крупная копия той же текстуры прячет повторы
-        float green = clamp(1.0 - vBiome.x - vBiome.y, 0.0, 1.0);
+        float green = clamp(1.0 - vBiome.x - vBiome.y - vBiome.w, 0.0, 1.0);
         vec3 gFine = texture2D(uGrass, vTerrWP.xz / ${GRASS_SCALE.toFixed(1)}).rgb / ${GRASS_MEAN};
         vec3 gBig = texture2D(uGrass, vTerrWP.xz / ${(GRASS_SCALE * 7.3).toFixed(1)} + 0.37).rgb / ${GRASS_MEAN};
         vec3 grassD = mix(vec3(1.0), clamp(gFine * mix(vec3(1.0), gBig, 0.4), 0.0, 2.6), 0.6) * 0.96;
@@ -92,9 +92,12 @@ function applyTerrainSurfaces(material) {
         float patches = smoothstep(0.42, 0.68, texture2D(uRock, vTerrWP.xz / 1600.0).a);
         float dirtMask = vBiome.z * green * (0.25 + 0.55 * patches);
         diffuseColor.rgb = mix(diffuseColor.rgb, texture2D(uDirt, vTerrWP.xz / 95.0).rgb * 1.45, dirtMask);
+        float snowGrain = clamp(dot(gFine, vec3(0.3333)), 0.0, 1.0);
+        vec3 snowC = vec3(0.92, 0.97, 1.0) * mix(0.92, 1.04, snowGrain);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * snowC, vBiome.w);
       #endif`);
   };
-  material.customProgramCacheKey = () => 'terrain-surfaces-v2';
+  material.customProgramCacheKey = () => 'terrain-surfaces-v3-snow';
 }
 import { hash2 } from './util.js';
 
@@ -178,16 +181,7 @@ export class Terrain {
     this.tiles = tiles;
     this.zones = zones;
     this.crater = zones.find((z) => z.kind === 'crater') || null;
-    // южная граница зимы по столбцам карты: скалы сами «холодными» клетками не считаются,
-    // а снегом их красить надо — так и узнаём, что скала лежит в зимнем биоме
-    this.coldEdge = new Int16Array(MAP_W).fill(-1);
-    for (let i = 0; i < tiles.length; i++) {
-      if (isCold(tiles[i])) {
-        const x = i % MAP_W;
-        const y = Math.floor(i / MAP_W);
-        if (y > this.coldEdge[x]) this.coldEdge[x] = y;
-      }
-    }
+    this.inWinter = winterTest(seed); // зимняя полоса по координатам: скалы в ней тоже под снегом
     this.group = new THREE.Group();
     this.surfaceTextures = makeSurfaceTextures();
     this.n = [makeNoise(seed + 776), makeNoise(seed + 777), makeNoise(seed + 778), makeNoise(seed + 779)];
@@ -215,8 +209,7 @@ export class Terrain {
 
   // точка лежит в зимнем биоме (включая его скалы)?
   winterAt(x, z) {
-    const tx = Math.max(0, Math.min(MAP_W - 1, Math.floor(x / TILE)));
-    return z / TILE < this.coldEdge[tx] - 1;
+    return this.inWinter(x / TILE, z / TILE);
   }
 
   tile(tx, ty) {
@@ -366,6 +359,10 @@ export class Terrain {
         c.b += tileCols[t].b * w;
       }
     }
+    // снег лежит на всём зимнем биоме: поля, тайга и (тоньше) лёд
+    const snowTile = this.sampleTiles(x, z, (tt) => (tt === T.ICE ? 0.45 : isCold(tt) ? 1 : 0));
+    const coldTile = snowTile;
+    this.wSnow = snowTile;
     const h = this.hv(i, j);
     const il = Math.max(0, i - 1);
     const ir = Math.min(GW - 1, i + 1);
@@ -382,8 +379,7 @@ export class Terrain {
     c.lerp(BEACH, beach * 0.9);
     const patch = this.patch(x / 260, z / 260, 3);
     const cityTile = this.sampleTiles(x, z, (tt) => (isCity(tt) ? 1 : 0));
-    const coldTile = this.sampleTiles(x, z, (tt) => (isCold(tt) ? 1 : 0));
-    const grassHeight = smoothstep(2, 9, h) * (1 - smoothstep(55, 76, h)) * (1 - cityTile) * (1 - coldTile);
+    const grassHeight = smoothstep(2, 9, h) * (1 - smoothstep(55, 76, h)) * (1 - cityTile) * (1 - snowTile);
     if (patch > 0.55) c.lerp(DRY, grassHeight * Math.min(0.42, (patch - 0.55) * 2.4));
     else if (patch < 0.42) c.lerp(LUSH, grassHeight * Math.min(0.38, (0.42 - patch) * 2.4));
     const cliff = smoothstep(0.58, 1.35, steepness) * smoothstep(4, 18, h);
@@ -434,7 +430,7 @@ export class Terrain {
     const vw = i1 - i0 + 1;
     const vh = j1 - j0 + 1;
     const vcol = new Float32Array(vw * vh * 3);
-    const vbio = new Float32Array(vw * vh * 3); // веса песка, скалы и леса
+    const vbio = new Float32Array(vw * vh * 4); // веса песка, скалы, леса и снега
     const vh0 = new Float32Array(vw * vh);
     const c = new THREE.Color();
     const zones = this.zones;
@@ -445,9 +441,10 @@ export class Terrain {
         vcol[k * 3] = c.r;
         vcol[k * 3 + 1] = c.g;
         vcol[k * 3 + 2] = c.b;
-        vbio[k * 3] = this.wSand;
-        vbio[k * 3 + 1] = this.wRock;
-        vbio[k * 3 + 2] = this.wForest;
+        vbio[k * 4] = this.wSand;
+        vbio[k * 4 + 1] = this.wRock;
+        vbio[k * 4 + 2] = this.wForest;
+        vbio[k * 4 + 3] = this.wSnow;
         vh0[k] = this.hv(i, j);
       }
     }
@@ -455,9 +452,10 @@ export class Terrain {
     const pos = new Float32Array(quads * 18);
     const col = new Float32Array(quads * 18);
     const uv = new Float32Array(quads * 12);
-    const bio = new Float32Array(quads * 18);
+    const bio = new Float32Array(quads * 24);
     let o = 0;
     let u = 0;
+    let b = 0;
     const put = (i, j) => {
       const x = i * CELL;
       const z = j * CELL;
@@ -468,13 +466,15 @@ export class Terrain {
       col[o] = vcol[k * 3];
       col[o + 1] = vcol[k * 3 + 1];
       col[o + 2] = vcol[k * 3 + 2];
-      bio[o] = vbio[k * 3];
-      bio[o + 1] = vbio[k * 3 + 1];
-      bio[o + 2] = vbio[k * 3 + 2];
+      bio[b] = vbio[k * 4];
+      bio[b + 1] = vbio[k * 4 + 1];
+      bio[b + 2] = vbio[k * 4 + 2];
+      bio[b + 3] = vbio[k * 4 + 3];
       uv[u] = x / TEXTURE_WORLD_SIZE;
       uv[u + 1] = z / TEXTURE_WORLD_SIZE;
       o += 3;
       u += 2;
+      b += 4;
     };
     for (let j = j0; j < j1; j++) {
       for (let i = i0; i < i1; i++) {
@@ -486,7 +486,7 @@ export class Terrain {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    geo.setAttribute('biome', new THREE.BufferAttribute(bio, 3));
+    geo.setAttribute('biome', new THREE.BufferAttribute(bio, 4));
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
     const mesh = new THREE.Mesh(geo, this.mat);
