@@ -19,6 +19,7 @@ import { updateNpc } from './ai.js';
 const PROJ_R = { acid: 7, stone: 5, arrow: 4, bullet: 3, bomb: 8, laser: 3, force: 11, fireball: 9, drain: 8, hex: 8 };
 
 const HS = TILE / 2;
+const STRUCT_FIT = 18; // см. collide: пролезть в проём в одну клетку (TILE = 40) должен игрок любого роста
 const GUARDED = new Set(['tree', 'mush_brown', 'mush_red', 'mush_glow']); // что стерегут лесные духи
 const WALL_HIT = { cat: 'wall' }; // «препятствие» для стен мёртвого города
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -1253,7 +1254,7 @@ export class Game {
     if (!(n > 0)) return;
     if (m.op === 'take') {
       if (isDna) {
-        if (s.cat !== 'remains') return;
+        if (!this.isLootBox(s)) return; // мутаген лежит в останках и в ящиках с добычей; в хранилище его нет
         const take = Math.min(n, s.dna || 0);
         s.dna -= take;
         p.dna += take;
@@ -1542,6 +1543,9 @@ export class Game {
   // Выталкивает существо из стен и твёрдых ресурсов. Возвращает первое препятствие.
   collide(e) {
     const r = e.stats.radius;
+    // О постройки игрок трётся кругом не шире STRUCT_FIT: иначе великан (радиус 26–31) не пролезал бы в проём
+    // в одну клетку (40), в том числе в собственную дверь. Звери и стены города считаются по настоящему радиусу.
+    const rs = e.type === 'player' ? Math.min(r, STRUCT_FIT) : r;
     let hit = null;
     e.x = clamp(e.x, r, WORLD_W - r);
     e.y = clamp(e.y, r, WORLD_H - r);
@@ -1585,17 +1589,17 @@ export class Game {
         const dx = e.x - cx;
         const dy = e.y - cy;
         const d2 = dx * dx + dy * dy;
-        if (d2 >= r * r) continue;
+        if (d2 >= rs * rs) continue;
         hit = hit || s;
         if (d2 > 1e-6) {
           const d = Math.sqrt(d2);
-          e.x += (dx / d) * (r - d);
-          e.y += (dy / d) * (r - d);
+          e.x += (dx / d) * (rs - d);
+          e.y += (dy / d) * (rs - d);
         } else {
           const ox = e.x - s.x;
           const oy = e.y - s.y;
-          if (Math.abs(ox) > Math.abs(oy)) e.x = s.x + Math.sign(ox || 1) * (HS + r);
-          else e.y = s.y + Math.sign(oy || 1) * (HS + r);
+          if (Math.abs(ox) > Math.abs(oy)) e.x = s.x + Math.sign(ox || 1) * (HS + rs);
+          else e.y = s.y + Math.sign(oy || 1) * (HS + rs);
         }
       } else if (s.cat === 'res' && s.cr > 0) {
         // выше верха валуна — пролетаем над ним или стоим на нём (у зверей e.z нет — для них валун стена)
