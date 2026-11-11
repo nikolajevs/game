@@ -6,9 +6,10 @@ import {
   NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
   RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
   ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET,
+  PARTS, MUT_SCHOOLS, DASH, VOICE, FRIENDS_MAX, INVITE_LIFE,
 } from '../shared/config.js';
 import {
-  computeStats, decodeGenome, encodeGenome, evolveCostWith, sanitizeGenome, defaultGenome, complexity, cloneGenome,
+  computeStats, encodeGenome, evolveCostWith, sanitizeGenome, defaultGenome, complexity, cloneGenome, overLimit,
 } from '../shared/creature.js';
 import { generateMap, generateResources, generateZones, zoneStrength, zoneAt, tilesHash, Grid } from './world.js';
 import { updateNpc } from './ai.js';
@@ -63,6 +64,8 @@ export class Game {
     this.projectiles = new Map();
     this.clients = new Set();
     this.profiles = new Map(); // секретный токен -> профиль
+    this.byUid = new Map(); // uid -> профиль
+    this.fr = new Map(); // uid -> множество uid друзей (дружба взаимная)
     this.nextId = 1;
     this.time = Number(saved?.time) || 0;
     this.sAdd = new Map();
@@ -280,6 +283,7 @@ export class Game {
     this.saveProfile(p);
     this.players.delete(p.id);
     this.broadcast({ t: 'chat', sys: true, text: `${p.name} покинул остров` });
+    for (const q of this.players.values()) if (this.isFriend(q.uid, p.uid)) this.sendFriends(q);
   }
 
   send(c, msg) {
@@ -326,6 +330,11 @@ export class Game {
       case 'absorb': return this.onAbsorb(p);
       case 'trial': return this.onTrial(p);
       case 'cast': return this.onCast(p, msg);
+      case 'dash': return this.tryDash(p, msg);
+      case 'friend': return this.onFriend(p, msg);
+      case 'voice': return this.onVoice(p, msg);
+      case 'talk': p.talk = p.voice && !!msg.on; return undefined;
+      case 'rtc': return this.onRtc(p, msg);
       default: return undefined;
     }
   }
@@ -485,7 +494,7 @@ export class Game {
     if ((p.abcd[m.id] || 0) > 0) return;
     if (ab.mana && p.mana < ab.mana) return this.toast(p, 'Не хватает маны');
     if (ab.mana) p.mana -= ab.mana;
-    p.abcd[m.id] = ab.cd;
+    p.abcd[m.id] = ab.cd * p.stats.abilCd;
     p.atkT = 0.25;
     if (m.id === 'shield') {
       p.shieldHp = ab.absorb;
@@ -518,7 +527,7 @@ export class Game {
       return;
     }
     p.mana -= ab.mana;
-    p.abcd[id] = ab.cd;
+    p.abcd[id] = ab.cd * p.stats.abilCd;
     p.cd.melee = Math.min(ab.cd, 0.45);
     p.atkT = 0.25;
     if (id === 'blink') {
@@ -591,6 +600,16 @@ export class Game {
         this.damageCreature(e, e.hexDps || 6, this.getCreature(e.hexSrc), 'hex');
       }
     }
+    if (e.corrT > 0) e.corrT -= dt; // кислота разъела защиту
+    // кровотечение от когтей зверя
+    if (e.bleedT > 0 && !e.dead) {
+      e.bleedT -= dt;
+      e.bleedTick = (e.bleedTick || 0) + dt;
+      if (e.bleedTick >= 1) {
+        e.bleedTick -= 1;
+        this.damageCreature(e, e.bleedDps || 4, this.getCreature(e.bleedSrc), 'bleed');
+      }
+    }
   }
 
   // автотурели: стреляют по враждебным зверям и чужим игрокам
@@ -603,7 +622,7 @@ export class Game {
       for (const c of this.creaturesNear(s.x, s.y, TURRET.range)) {
         if (c.dead) continue;
         if (c.type === 'npc' && (NPCS[c.kind].behavior === 'passive' || c.owner)) continue;
-        if (c.type === 'player' && (c.uid === s.owner || c.spawnProtect > 0)) continue;
+        if (c.type === 'player' && (c.uid === s.owner || c.spawnProtect > 0 || this.isFriend(s.owner, c.uid))) continue; // своих и друзей не трогает
         const d = Math.hypot(c.x - s.x, c.y - s.y);
         if (d < bd) {
           bd = d;
@@ -622,7 +641,7 @@ export class Game {
       const sa = Math.sin(a);
       const x = s.x + ca * 34;
       const y = s.y + sa * 34;
-      this.addProjectile(owner || { id: -s.id }, 'bullet', x, y, ca * TURRET.speed, sa * TURRET.speed, TURRET.dmg, TURRET.range / TURRET.speed + 0.05);
+      this.addProjectile(owner || { id: -s.id, uid: s.owner }, 'bullet', x, y, ca * TURRET.speed, sa * TURRET.speed, TURRET.dmg, TURRET.range / TURRET.speed + 0.05);
       this.fx.push({ k: 'shot', x, y, m: 'bullet' });
     }
   }
@@ -696,6 +715,7 @@ export class Game {
     if (!prof) {
       prof = { uid: crypto.randomBytes(6).toString('hex'), genome: defaultGenome(), dna: PLAYER.startDna, inv: emptyInv(), alive: false, kills: 0 };
       this.profiles.set(token, prof);
+      this.byUid.set(prof.uid, prof);
     }
     prof.name = name;
     prof.color = color;
@@ -713,6 +733,8 @@ export class Game {
     });
     this.broadcast({ t: 'chat', sys: true, text: `${name} появился на острове` });
     this.broadcastPlayerList();
+    this.sendFriends(p);
+    for (const q of this.players.values()) if (q !== p && this.isFriend(q.uid, p.uid)) this.sendFriends(q);
   }
 
   linkProfile(fromToken, toToken) {
@@ -732,7 +754,9 @@ export class Game {
       x: 0, y: 0, kbx: 0, kby: 0, angle: 0,
       hp: 100, food: 80, water: 80, stamina: 100, dna: Math.max(0, Math.floor(prof.dna || 0)), inv: cleanInv(prof.inv),
       input: idleInput(),
-      cd: { melee: 0, spit: 0, charge: 0 },
+      cd: { melee: 0, spit: 0, charge: 0, dash: 0 },
+      dashT: 0, dashDir: 0, shockN: 0, bleedT: 0, corrT: 0,
+      invites: new Map(), lastInvite: -10, voice: false, talk: false, // приглашения в друзья: uid -> { name, until }
       combatT: 0, atkT: 0, hitT: 0, slowT: 0, spikeT: 0, drinkT: 0, eatT: 0, lastChat: -10,
       charging: 0, chargeDir: 0, chargeHit: null,
       spawnProtect: PLAYER.spawnProtect, dead: false, openCont: null, nearFire: false,
@@ -778,7 +802,7 @@ export class Game {
     if (p.abil) {
       let spells = 0;
       for (const id of p.abil) if (ABILITIES[id].path === 'spirit') spells++;
-      p.maxMana = MANA.base + spells * MANA.perAbility;
+      p.maxMana = MANA.base + spells * MANA.perAbility + p.stats.manaMax; // «блуждающий огонь» расширяет запас маны
       p.mana = Math.min(p.mana || 0, p.maxMana);
     }
     if (oldMax) p.hp = clamp((p.hp / oldMax) * p.stats.maxHp, 1, p.stats.maxHp);
@@ -828,6 +852,143 @@ export class Game {
     p.charging = 0.32;
     p.chargeDir = p.angle;
     p.chargeHit = new Set();
+  }
+
+  // рывок на реактивных ускорителях (мутация jets): в сторону курсора, не дальше него
+  tryDash(p, m) {
+    const d = p.stats.dash;
+    if (p.dead || !d || p.cd.dash > 0 || p.dashT > 0 || p.charging > 0 || p.stunT > 0) return;
+    if (Number.isFinite(m.ang)) p.angle = m.ang;
+    p.cd.dash = d.cd;
+    p.dashDir = p.angle;
+    p.dashT = clamp(Math.min(d.dist, p.aimD || d.dist), 60, d.dist) / DASH.speed;
+    this.fx.push({ k: 'dash', x: p.x, y: p.y });
+  }
+
+  dashEnd(p) {
+    p.dashT = 0;
+    const blast = p.stats.dash?.blast;
+    if (!blast) return;
+    this.fx.push({ k: 'emp', x: p.x, y: p.y, r: DASH.blastR });
+    for (const c of this.creaturesNear(p.x, p.y, DASH.blastR + 40)) {
+      if (c === p || c.dead || this.isFriend(p.uid, c.uid)) continue;
+      const dx = c.x - p.x;
+      const dy = c.y - p.y;
+      const d = Math.hypot(dx, dy) || 1;
+      if (d > DASH.blastR + c.stats.radius) continue;
+      this.damageCreature(c, blast, p, 'dash');
+      c.kbx += (dx / d) * 320 * (c.stats.kbResist || 1);
+      c.kby += (dy / d) * 320 * (c.stats.kbResist || 1);
+    }
+  }
+
+  // ================= друзья =================
+  // Дружба взаимная: приглашение → согласие. Друзьям нельзя нанести урон, они проходят в ваши двери,
+  // их не трогают ваши колья и турели, они могут чинить ваши постройки.
+  isFriend(a, b) {
+    if (!a || !b || a === b) return false;
+    const set = this.fr.get(a);
+    return !!set && set.has(b);
+  }
+
+  playerByUid(uid) {
+    for (const p of this.players.values()) if (p.uid === uid) return p;
+    return null;
+  }
+
+  setFriends(a, b, on) {
+    for (const [x, y] of [[a, b], [b, a]]) {
+      let set = this.fr.get(x);
+      if (!set) this.fr.set(x, (set = new Set()));
+      if (on) set.add(y);
+      else set.delete(y);
+      const prof = this.byUid.get(x);
+      if (prof) prof.friends = [...set];
+    }
+  }
+
+  sendFriends(p) {
+    const list = [];
+    for (const uid of this.fr.get(p.uid) || []) {
+      const q = this.playerByUid(uid);
+      const prof = this.byUid.get(uid);
+      list.push(q ? { u: uid, n: q.name, c: q.color, on: 1, i: q.id, x: Math.round(q.x), y: Math.round(q.y), vc: q.voice ? 1 : 0, dd: q.dead ? 1 : 0 }
+        : { u: uid, n: prof?.name || '?', c: prof?.color || '#888888', on: 0 });
+    }
+    const inv = [];
+    for (const [uid, v] of p.invites) {
+      if (v.until < this.time) p.invites.delete(uid);
+      else inv.push({ u: uid, n: v.name });
+    }
+    this.send(p.client, { t: 'friends', list, inv, max: FRIENDS_MAX });
+  }
+
+  onFriend(p, m) {
+    const uid = typeof m.uid === 'string' ? m.uid : '';
+    const mine = this.fr.get(p.uid);
+    const full = (u) => (this.fr.get(u)?.size || 0) >= FRIENDS_MAX;
+    const link = (q, name) => {
+      this.setFriends(p.uid, uid, true);
+      p.invites.delete(uid);
+      q?.invites.delete(p.uid);
+      this.toast(p, `🤝 ${name} теперь ваш друг: ваши двери открыты друг другу, а урон не проходит`);
+      if (q) {
+        this.toast(q, `🤝 ${p.name} теперь ваш друг: ваши двери открыты друг другу, а урон не проходит`);
+        this.sendFriends(q);
+      }
+    };
+    if (m.op === 'invite') {
+      const q = this.playerByUid(uid);
+      if (!q || q === p) return this.toast(p, 'Этот игрок не в сети');
+      if (mine?.has(uid)) return this.toast(p, `${q.name} уже ваш друг`);
+      if (full(p.uid)) return this.toast(p, `Друзей не больше ${FRIENDS_MAX}`);
+      if (full(uid)) return this.toast(p, `У ${q.name} уже слишком много друзей`);
+      const back = p.invites.get(uid);
+      if (back && back.until >= this.time) link(q, q.name); // он уже звал вас — сразу дружба
+      else {
+        if (this.time - p.lastInvite < 1.5) return;
+        p.lastInvite = this.time;
+        q.invites.set(p.uid, { name: p.name, until: this.time + INVITE_LIFE });
+        this.toast(p, `Приглашение отправлено: ${q.name}`);
+        this.send(q.client, { t: 'toast', big: true, text: `🤝 ${p.name} зовёт вас в друзья — откройте окно друзей (O), чтобы ответить` });
+        this.sendFriends(q);
+      }
+    } else if (m.op === 'accept') {
+      const inv = p.invites.get(uid);
+      if (!inv || inv.until < this.time) {
+        p.invites.delete(uid);
+        this.toast(p, 'Приглашение устарело');
+      } else if (full(p.uid) || full(uid)) this.toast(p, `Друзей не больше ${FRIENDS_MAX}`);
+      else link(this.playerByUid(uid), inv.name);
+    } else if (m.op === 'decline') {
+      p.invites.delete(uid);
+    } else if (m.op === 'remove') {
+      if (!mine?.has(uid)) return;
+      this.setFriends(p.uid, uid, false);
+      const q = this.playerByUid(uid);
+      this.toast(p, `${q?.name || this.byUid.get(uid)?.name || 'Игрок'} больше не ваш друг`);
+      if (q) {
+        this.toast(q, `${p.name} больше не ваш друг: двери закрыты, урон снова проходит`);
+        this.sendFriends(q);
+      }
+    } else return;
+    this.sendFriends(p);
+  }
+
+  // ================= голос =================
+  // Сам звук идёт между браузерами напрямую (WebRTC); сервер только знакомит их друг с другом.
+  onVoice(p, m) {
+    p.voice = !!m.on;
+    if (!p.voice) p.talk = false;
+    for (const q of this.players.values()) if (this.isFriend(q.uid, p.uid)) this.sendFriends(q);
+  }
+
+  onRtc(p, m) {
+    const q = this.players.get(Number(m.to));
+    if (!q || q === p || !p.voice || !q.voice || !m.d || typeof m.d !== 'object') return;
+    // знакомим только тех, кто рядом, и друзей (они слышат друг друга по «рации» где угодно)
+    if (!this.isFriend(p.uid, q.uid) && Math.hypot(q.x - p.x, q.y - p.y) > VOICE.range * 1.6) return;
+    this.send(q.client, { t: 'rtc', from: p.id, d: m.d });
   }
 
   onBuild(p, m) {
@@ -884,7 +1045,8 @@ export class Game {
   // ремонт своей постройки до полной прочности: цена — доля её стоимости по утраченному запасу
   onRepair(p, m) {
     const s = this.statics.get(Number(m.id));
-    if (!s || s.cat !== 'struct' || s.owner !== p.uid || p.dead) return;
+    if (!s || s.cat !== 'struct' || p.dead) return;
+    if (s.owner !== p.uid && !this.isFriend(s.owner, p.uid)) return; // чинить можно свои постройки и постройки друзей
     if (Math.hypot(s.x - p.x, s.y - p.y) > PLAYER.buildRange + TILE) return this.toast(p, 'Слишком далеко');
     if (p.combatT > 0) return this.toast(p, 'В бою чинить нельзя');
     const cost = repairCost(s.kind, s.hp, s.maxHp);
@@ -904,11 +1066,14 @@ export class Game {
     g.mouth = 'omni';
     const genetics = p.abil.has('genetics');
     if (complexity(g) > COMPLEXITY_CAP + (genetics ? ABILITIES.genetics.cap : 0)) return this.toast(p, 'Тело не выдержит столько мутаций');
+    // третий уровень («предел») — только мутациям школы своего пути
+    const over = overLimit(p.genome, g, p.path);
+    if (over.length) return this.toast(p, `«${PARTS[over[0]].name}»: этот уровень откроет ${PATHS[MUT_SCHOOLS[PARTS[over[0]].school].path].name.toLowerCase()}`);
     const c = evolveCostWith(p.genome, g, genetics);
     if (c.net > p.dna) return this.toast(p, 'Не хватает мутагена');
-    if (c.crystals > p.inv.crystal) return this.toast(p, 'Не хватает кристаллов мутагена');
+    for (const k in c.items) if ((p.inv[k] || 0) < c.items[k]) return this.toast(p, `Не хватает: ${ITEMS[k].name.toLowerCase()}`);
     p.dna -= c.net;
-    p.inv.crystal -= c.crystals;
+    for (const k in c.items) p.inv[k] -= c.items[k];
     p.genome = g;
     this.applyGenome(p);
     this.fx.push({ k: 'evolve', x: p.x, y: p.y, c: p.color });
@@ -932,8 +1097,9 @@ export class Game {
     const food = f.food * f.mult[diet];
     p.food = Math.min(100, p.food + food);
     p.water = Math.min(100, p.water + f.water);
-    p.hp = Math.min(p.stats.maxHp, p.hp + 3);
-    let extra = '';
+    const heal = 3 + (item === 'meat' ? p.stats.meatHeal : 0); // «утроба»: мясо лечит
+    p.hp = Math.min(p.stats.maxHp, p.hp + heal);
+    let extra = heal > 3 ? `  +${heal} ❤` : '';
     if (f.trip) {
       // у мухомора, пейотля и жабы свои видения и свой бонус на время трипа
       const tr = TRIPS[f.trip];
@@ -1042,6 +1208,7 @@ export class Game {
     p.cd.melee = 0;
     p.cd.spit = 0;
     p.cd.charge = 0;
+    p.cd.dash = 0;
     p.mana = p.maxMana;
   }
 
@@ -1095,6 +1262,7 @@ export class Game {
     p.cd.melee = Math.max(0, p.cd.melee - dt);
     p.cd.spit = Math.max(0, p.cd.spit - dt);
     p.cd.charge = Math.max(0, p.cd.charge - dt);
+    p.cd.dash = Math.max(0, p.cd.dash - dt);
     p.combatT = Math.max(0, p.combatT - dt);
     p.atkT = Math.max(0, p.atkT - dt);
     p.hitT = Math.max(0, p.hitT - dt);
@@ -1119,7 +1287,7 @@ export class Game {
     this.statusTick(p, dt);
     if (p.dead) return;
     this.meditate(p, dt);
-    if (p.path === 'spirit') p.mana = Math.min(p.maxMana, p.mana + (MANA.regen + (p.meditating ? MANA.altarRegen : 0)) * dt);
+    if (p.path === 'spirit') p.mana = Math.min(p.maxMana, p.mana + (MANA.regen * p.stats.manaRegen + (p.meditating ? MANA.altarRegen : 0)) * dt);
 
     const moving = p.input.mx !== 0 || p.input.my !== 0;
     const sprinting = p.input.sprint && moving && p.stamina > 1 && p.charging <= 0;
@@ -1136,7 +1304,7 @@ export class Game {
         p.dna += n;
         p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `+${n} ☣ мутаген` });
       }
-    } else p.rad = Math.max(0, p.rad - RAD.decay * dt);
+    } else p.rad = Math.max(0, p.rad - RAD.decay * (st.radClean ? 2 : 1) * dt); // предел фильтра: выводит вдвое быстрее
     if (p.rad > RAD.dmgStart) this.damageCreature(p, (p.rad - RAD.dmgStart) * RAD.dmgPerPoint * dt, null, 'rad');
     if (p.dead) return;
 
@@ -1148,8 +1316,10 @@ export class Game {
     else {
       // наниты: втрое быстрее и даже при облучении до 50
       const nan = p.abil.has('nanites') ? ABILITIES.nanites : null;
-      if (p.food > 35 && p.water > 35 && p.rad < (nan ? nan.radRegen : RAD.regenBlock) && p.hp < st.maxHp) {
-        p.hp = Math.min(st.maxHp, p.hp + (PLAYER.regen * (nan ? nan.regenMul : 1) + (p.nearFire ? PLAYER.fireRegen : 0)) * dt);
+      // «живая плоть» ускоряет лечение, на пределе — лечит и под облучением; предел фильтра радиации — до 50
+      const radOk = st.regenAlways || p.rad < (nan || st.radClean ? ABILITIES.nanites.radRegen : RAD.regenBlock);
+      if (p.food > 35 && p.water > 35 && radOk && p.hp < st.maxHp) {
+        p.hp = Math.min(st.maxHp, p.hp + (PLAYER.regen * st.regen * (nan ? nan.regenMul : 1) + (p.nearFire ? PLAYER.fireRegen : 0)) * dt);
       }
     }
     if (p.dead) return;
@@ -1164,9 +1334,9 @@ export class Game {
     }
     if (sprinting) {
       speed *= PLAYER.sprintMul;
-      if (!(p.trip.p > 0)) p.stamina = Math.max(0, p.stamina - PLAYER.staminaUse * dt); // пейотль: бег даром
+      if (!(p.trip.p > 0)) p.stamina = Math.max(0, p.stamina - PLAYER.staminaUse * st.sprintCost * dt); // пейотль: бег даром
     } else {
-      p.stamina = Math.min(100, p.stamina + PLAYER.staminaRegen * dt);
+      p.stamina = Math.min(100, p.stamina + PLAYER.staminaRegen * st.staRegen * dt);
     }
     if (p.slowT > 0) speed *= 0.6;
     const charging = p.charging > 0 && st.charge;
@@ -1176,12 +1346,21 @@ export class Game {
       speed = st.charge.speed;
       p.charging -= dt;
     } else p.charging = 0;
+    // рывок на реактивных ускорителях: летим к точке, в конце на пределе — ударная волна
+    const dashing = p.dashT > 0 && st.dash && !charging;
+    if (dashing) {
+      mx = Math.cos(p.dashDir);
+      my = Math.sin(p.dashDir);
+      speed = DASH.speed;
+      p.dashT -= dt;
+    } else p.dashT = 0;
     const hit = this.moveCreature(p, mx, my, speed, dt);
     if (charging) this.chargeStep(p, hit);
+    if (dashing && (p.dashT <= 0 || hit)) this.dashEnd(p);
     this.envEffects(p, dt);
     if (p.dead) return;
 
-    if (p.input.attack && p.cd.melee <= 0 && p.charging <= 0 && !stunned) this.attack(p);
+    if (p.input.attack && p.cd.melee <= 0 && p.charging <= 0 && p.dashT <= 0 && !stunned) this.attack(p);
     if (p.input.spit && st.spit && p.cd.spit <= 0 && !stunned) {
       p.cd.spit = st.spit.cd;
       this.spit(p);
@@ -1238,7 +1417,7 @@ export class Game {
     if (e.spikeT > 0) return;
     const r = e.stats.radius;
     for (const s of this.grid.query(e.x, e.y, r + TILE)) {
-      if (s.kind !== 'spikes' || (e.uid && e.uid === s.owner)) continue;
+      if (s.kind !== 'spikes' || (e.uid && (e.uid === s.owner || this.isFriend(s.owner, e.uid)))) continue; // свои и друзья проходят
       if (!circleBox(e.x, e.y, r, s.x, s.y)) continue;
       e.spikeT = 0.6;
       this.damageCreature(e, STRUCTURES.spikes.touchDmg, null, 'spikes');
@@ -1265,7 +1444,7 @@ export class Game {
   blocks(s, e) {
     const solid = STRUCTURES[s.kind].solid;
     if (solid === true) return true;
-    if (solid === 'owner') return !e.uid || e.uid !== s.owner;
+    if (solid === 'owner') return !e.uid || (e.uid !== s.owner && !this.isFriend(s.owner, e.uid)); // дверь открыта хозяину и его друзьям
     return false;
   }
 
@@ -1485,9 +1664,10 @@ export class Game {
     if (ABILITIES[p.weapon]) return this.castSpell(p, p.weapon);
     const w = p.weapon ? WEAPONS[p.weapon] : null;
     if (!w || w.type === 'melee') {
-      p.cd.melee = w ? w.cd : st.attackCd;
+      p.cd.melee = w ? w.cd * st.cdMul : st.attackCd;
       p.atkT = 0.25;
-      this.melee(p, (st.meleeDmg + (w ? w.dmg : 0)) * (p.trip.a > 0 ? TRIPS.a.might : 1), w); // мухомор даёт силу
+      // тело (когти) + оружие, усиленное гидравликой рук и резонансом имплантов
+      this.melee(p, (st.meleeDmg + (w ? w.dmg * st.armMul * st.wpnMul : 0)) * (p.trip.a > 0 ? TRIPS.a.might : 1), w); // мухомор даёт силу
       return;
     }
     if (w.mana) {
@@ -1501,7 +1681,7 @@ export class Game {
         return;
       }
       p.mana -= w.mana;
-      p.cd.melee = w.cd;
+      p.cd.melee = w.cd * st.cdMul;
       p.atkT = 0.2;
       this.fireWeapon(p, w);
       return;
@@ -1516,7 +1696,7 @@ export class Game {
     }
     if (w.type === 'ranged') p.inv[w.ammo]--;
     else p.inv[p.weapon]--; // бросок расходует само оружие
-    p.cd.melee = w.cd;
+    p.cd.melee = w.cd * st.cdMul;
     p.atkT = 0.2;
     this.fireWeapon(p, w);
   }
@@ -1529,13 +1709,14 @@ export class Game {
       const ca = Math.cos(ang);
       const sa = Math.sin(ang);
       const sp = w.speed * (n > 1 ? 0.85 + Math.random() * 0.3 : 1);
-      this.addProjectile(p, w.proj, p.x + ca * r0, p.y + sa * r0, ca * sp, sa * sp, w.dmg, w.life * (n > 1 ? 0.8 + Math.random() * 0.4 : 1), w);
+      const dmg = w.dmg * p.stats.wpnMul * (w.type === 'ranged' ? p.stats.aimMul : 1); // импланты: резонанс и целеуказатель
+      this.addProjectile(p, w.proj, p.x + ca * r0, p.y + sa * r0, ca * sp, sa * sp, dmg, w.life * (n > 1 ? 0.8 + Math.random() * 0.4 : 1), w);
     }
     this.fx.push({ k: 'shot', x: p.x + Math.cos(p.angle) * r0, y: p.y + Math.sin(p.angle) * r0, m: w.proj });
   }
 
   addProjectile(owner, kind, x, y, vx, vy, dmg, life, w = null) {
-    const j = { id: this.nextId++, owner: owner.id, kind, x, y, vx, vy, dmg, life, a: Math.atan2(vy, vx) };
+    const j = { id: this.nextId++, owner: owner.id, uid: owner.uid || null, kind, x, y, vx, vy, dmg, life, a: Math.atan2(vy, vx) };
     if (w?.radius) {
       j.radius = w.radius;
       j.structDmg = w.structDmg;
@@ -1556,9 +1737,11 @@ export class Game {
     const ca = Math.cos(a.angle);
     const sa = Math.sin(a.angle);
     let hitCreature = false;
+    let shockHit = null;
     for (const t of this.creaturesNear(a.x, a.y, reach + 90)) {
       if (t === a) continue;
       if (a.type === 'npc' && t.type === 'npc') continue;
+      if (this.isFriend(a.uid, t.uid)) continue; // друзей удар не задевает
       const dx = t.x - a.x;
       const dy = t.y - a.y;
       const d = Math.hypot(dx, dy) || 0.01;
@@ -1566,9 +1749,27 @@ export class Game {
       if (d > st.radius + t.stats.radius * 0.5 && (dx * ca + dy * sa) / d < 0.4) continue;
       const dealt = this.damageCreature(t, dmg, a, 'melee');
       if (w && w.leech && dealt > 0 && !a.dead) a.hp = Math.min(a.stats.maxHp, a.hp + dealt * w.leech); // ритуальный кинжал пьёт жизнь
-      t.kbx += (dx / d) * 140;
-      t.kby += (dy / d) * 140;
+      const kb = 140 * (st.kbMul || 1) * (t.stats.kbResist || 1);
+      t.kbx += (dx / d) * kb;
+      t.kby += (dy / d) * kb;
       hitCreature = true;
+      if (dealt > 0 && !t.dead && st.bleed) {
+        // предел когтей: рана кровоточит
+        t.bleedT = st.bleed.time;
+        t.bleedDps = st.bleed.dps;
+        t.bleedSrc = a.id;
+        t.bleedTick = 0;
+      }
+      shockHit = shockHit || (dealt > 0 && !t.dead ? t : null);
+    }
+    // разрядник: каждый N-й удар, попавший в цель, бьёт током и оглушает
+    if (shockHit && st.shock) {
+      a.shockN = (a.shockN || 0) + 1;
+      if (a.shockN >= st.shock.every) {
+        a.shockN = 0;
+        this.fx.push({ k: 'zap', x: shockHit.x, y: shockHit.y });
+        if (this.damageCreature(shockHit, st.shock.dmg, a, 'shock') > 0 && !shockHit.dead) shockHit.stunT = Math.max(shockHit.stunT || 0, st.shock.stun);
+      }
     }
     if (hitCreature || a.type === 'npc') return;
 
@@ -1600,7 +1801,7 @@ export class Game {
     }
     if (!best) return;
     if (best.cat === 'res') this.gather(a, best, dmg, w);
-    else if (best.cat === 'struct') this.damageStructure(best, dmg * STRUCT_DMG.melee[STRUCTURES[best.kind].mat] * (w?.struct || 1), a);
+    else if (best.cat === 'struct') this.damageStructure(best, dmg * STRUCT_DMG.melee[STRUCTURES[best.kind].mat] * (w?.struct || 1) * (st.structMul || 1), a);
   }
 
   gather(p, s, dmg, w = null) {
@@ -1641,7 +1842,10 @@ export class Game {
     const silent = kind === 'starve' || kind === 'rad'; // урон «изнутри»: без цифр и защиты
     if (t.type === 'player' && t.spawnProtect > 0 && !silent) return 0;
     if (t.owner && (!src || src.id !== t.owner)) return 0; // проводника ранит только тот, чьё это испытание
+    if (src && src !== t && this.isFriend(src.uid, t.uid)) return 0; // друзьям нельзя нанести урон
     if (!silent) amount *= 1 - t.stats.defense;
+    if (kind === 'ranged' && t.stats.rangedDef) amount *= 1 - t.stats.rangedDef; // предел бронепластин
+    if (!silent && t.corrT > 0) amount *= 1.2; // разъеден кислотой
     if (!silent && t.trip && t.trip.t > 0) amount *= TRIPS.t.numb; // онемение от жабы
     if (!silent && t.hexT > 0) amount *= t.hexVuln || 1.25;
     // щит духа поглощает урон первым
@@ -1667,7 +1871,10 @@ export class Game {
         t.target = src.id;
         t.alertT = 6;
       }
-      if (kind === 'melee' && t.stats.thorns > 0 && !src.dead) this.damageCreature(src, amount * t.stats.thorns + 2, t, 'thorns');
+      if (kind === 'melee' && t.stats.thorns > 0 && !src.dead) {
+        this.damageCreature(src, amount * t.stats.thorns + 2, t, 'thorns');
+        if (t.stats.thornSlow) src.slowT = Math.max(src.slowT || 0, 1.2); // предел шипов
+      }
     }
     if (t.hp <= 0) this.killCreature(t, src, kind);
     return amount;
@@ -1719,6 +1926,9 @@ export class Game {
     t.shieldHp = 0;
     t.hexT = 0;
     t.stunT = 0;
+    t.bleedT = 0;
+    t.corrT = 0;
+    t.dashT = 0;
     if (t.type === 'player') {
       this.endTrial(t, '🔮 Вы погибли в трипе — испытание духа не пройдено.');
       t.trip = { a: 0, p: 0, t: 0 };
@@ -1734,7 +1944,7 @@ export class Game {
     if (dnaDrop > 0 || ITEM_KEYS.some((k) => t.inv[k] > 0)) this.addRemains(t.x, t.y, t.inv, dnaDrop, t.name);
     t.inv = emptyInv();
     this.fx.push({ k: 'die', x: t.x, y: t.y, c: t.color, r: t.stats.radius });
-    const reasons = { starve: 'голод и жажда', spikes: 'колья', meteor: 'метеорит', rad: 'радиация' };
+    const reasons = { starve: 'голод и жажда', spikes: 'колья', meteor: 'метеорит', rad: 'радиация', bleed: 'потеря крови', hex: 'проклятие' };
     const killer = src ? (src.type === 'player' ? src.name : NPCS[src.kind].name) : reasons[kind] || 'неизвестность';
     if (killerIsPlayer) {
       src.kills++;
@@ -1747,6 +1957,7 @@ export class Game {
 
   damageStructure(s, amount, src) {
     if (s.cat !== 'struct' || amount <= 0 || !this.statics.has(s.id)) return;
+    if (src && this.isFriend(s.owner, src.uid)) return; // друг не сломает ваш дом по неосторожности
     s.hp -= amount;
     if (src) this.fx.push({ k: 'hit', x: s.x, y: s.y, m: STRUCTURES[s.kind].mat, id: s.id });
     if (s.hp <= 0) {
@@ -1767,6 +1978,7 @@ export class Game {
     const sa = Math.sin(a.angle);
     const r0 = a.stats.radius + 8;
     const j = this.addProjectile(a, 'acid', a.x + ca * r0, a.y + sa * r0, ca * sp.speed, sa * sp.speed, sp.dmg, 0.9);
+    j.corrode = !!sp.corrode;
     this.fx.push({ k: 'spit', x: j.x, y: j.y });
   }
 
@@ -1808,11 +2020,14 @@ export class Game {
       if (!hit) continue;
       if (hit.type) {
         const dealt = this.damageCreature(hit, j.dmg, owner, j.kind === 'acid' ? 'acid' : 'ranged');
-        if (j.kind === 'acid') hit.slowT = 1.5;
-        else {
+        if (j.kind === 'acid') {
+          hit.slowT = 1.5;
+          if (j.corrode && dealt > 0) hit.corrT = 4; // предел железы: кислота разъедает защиту
+        } else {
           const d = Math.hypot(j.vx, j.vy) || 1;
-          hit.kbx += (j.vx / d) * (j.kb || 60);
-          hit.kby += (j.vy / d) * (j.kb || 60);
+          const kb = (j.kb || 60) * (hit.stats.kbResist || 1);
+          hit.kbx += (j.vx / d) * kb;
+          hit.kby += (j.vy / d) * kb;
         }
         if (j.kind === 'drain' && owner && !owner.dead && dealt > 0) {
           owner.hp = Math.min(owner.stats.maxHp, owner.hp + dealt);
@@ -1839,12 +2054,13 @@ export class Game {
     for (const t of this.creaturesNear(j.x, j.y, 70)) {
       if (t.id === j.owner) continue;
       if (owner && owner.type === 'npc' && t.type === 'npc') continue;
+      if (j.uid && (t.uid === j.uid || this.isFriend(j.uid, t.uid))) continue; // сквозь друзей снаряд пролетает
       if (Math.hypot(t.x - j.x, t.y - j.y) <= t.stats.radius + pr) return t;
     }
     if (this.tileAt(j.x, j.y) === T.WALL && !(owner && owner.fly)) return WALL_HIT; // дроны и духи стреляют поверх стен
     for (const s of this.grid.query(j.x, j.y, 30)) {
       if (s.cat === 'struct' && STRUCTURES[s.kind].solid && circleBox(j.x, j.y, pr, s.x, s.y)) {
-        if (STRUCTURES[s.kind].solid === 'owner' && owner && owner.uid === s.owner) continue;
+        if (STRUCTURES[s.kind].solid === 'owner' && j.uid && (j.uid === s.owner || this.isFriend(s.owner, j.uid))) continue;
         return s;
       }
       if (s.cat === 'res' && s.cr > 0 && Math.hypot(s.x - j.x, s.y - j.y) < s.cr + pr) return s;
@@ -1860,10 +2076,11 @@ export class Game {
       const d = Math.hypot(t.x - j.x, t.y - j.y) - t.stats.radius;
       if (d > R) continue;
       const k = 1 - Math.max(0, d) / R;
+      if (j.uid && t.uid !== j.uid && this.isFriend(j.uid, t.uid)) continue; // друзей взрыв не трогает
       this.damageCreature(t, j.dmg * (0.4 + 0.6 * k), owner, 'bomb');
       const dd = Math.hypot(t.x - j.x, t.y - j.y) || 1;
-      t.kbx += ((t.x - j.x) / dd) * 420 * k;
-      t.kby += ((t.y - j.y) / dd) * 420 * k;
+      t.kbx += ((t.x - j.x) / dd) * 420 * k * (t.stats.kbResist || 1);
+      t.kby += ((t.y - j.y) / dd) * 420 * k * (t.stats.kbResist || 1);
     }
     for (const s of this.grid.query(j.x, j.y, R + TILE)) {
       if (s.cat !== 'struct') continue;
@@ -1881,12 +2098,13 @@ export class Game {
     const ca = Math.cos(p.chargeDir);
     const sa = Math.sin(p.chargeDir);
     for (const t of this.creaturesNear(p.x, p.y, p.stats.radius + 70)) {
-      if (t === p || p.chargeHit.has(t.id)) continue;
+      if (t === p || p.chargeHit.has(t.id) || this.isFriend(p.uid, t.uid)) continue;
       if (Math.hypot(t.x - p.x, t.y - p.y) > p.stats.radius + t.stats.radius + 8) continue;
       p.chargeHit.add(t.id);
-      this.damageCreature(t, ch.dmg, p, 'charge');
-      t.kbx += ca * 520;
-      t.kby += sa * 520;
+      const dealt = this.damageCreature(t, ch.dmg, p, 'charge');
+      t.kbx += ca * 520 * (t.stats.kbResist || 1);
+      t.kby += sa * 520 * (t.stats.kbResist || 1);
+      if (ch.stun && dealt > 0 && !t.dead) t.stunT = Math.max(t.stunT || 0, ch.stun); // предел рогов
     }
     if (hit) {
       if (hit.cat === 'struct') this.damageStructure(hit, ch.dmg * STRUCT_DMG.charge[STRUCTURES[hit.kind].mat], p);
@@ -2149,7 +2367,7 @@ export class Game {
       at: p.atkT > 0 ? 1 : 0, hf: p.hitT > 0 ? 1 : 0, ch: p.charging > 0 ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0,
       w: p.weapon || undefined,
       sh: p.shieldT > 0 ? 1 : undefined, hx: p.hexT > 0 ? 1 : undefined, st: p.stunT > 0 ? 1 : undefined,
-      pa: p.path || undefined,
+      pa: p.path || undefined, u: p.uid, vc: p.voice ? 1 : undefined, tk: p.talk ? 1 : undefined,
     };
   }
 
@@ -2169,7 +2387,7 @@ export class Game {
     return {
       id: p.id, hp: Math.ceil(p.hp), mh: p.stats.maxHp, f: round1(p.food), w: round1(p.water), sta: Math.round(p.stamina),
       dna: p.dna, inv, g: p.look, c: p.color,
-      cd: { m: round1(p.cd.melee), s: round1(p.cd.spit), c: round1(p.cd.charge) },
+      cd: { m: round1(p.cd.melee), s: round1(p.cd.spit), c: round1(p.cd.charge), d: round1(p.cd.dash) },
       cb: p.combatT > 0 ? 1 : 0, dead: p.dead ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0, fire: p.nearFire ? 1 : 0,
       nest: nest ? [nest.x, nest.y] : null, k: p.kills,
       wp: p.weapon, rad: round1(p.rad), rz: round1(p.radHere), bench: this.nearBench(p) ? 1 : 0,
@@ -2233,9 +2451,11 @@ export class Game {
   }
 
   broadcastPlayerList() {
-    const list = [...this.players.values()].map((p) => ({ n: p.name, c: p.color, k: p.kills, cx: complexity(p.genome) }));
+    const list = [...this.players.values()].map((p) => ({ n: p.name, c: p.color, k: p.kills, cx: complexity(p.genome), u: p.uid }));
     list.sort((a, b) => b.k - a.k);
     this.broadcast({ t: 'pl', list });
+    // друзьям — где они сейчас (для карты и «рации»)
+    for (const p of this.players.values()) if (this.fr.get(p.uid)?.size || p.invites.size) this.sendFriends(p);
   }
 
   // ================= сохранение =================
@@ -2257,6 +2477,14 @@ export class Game {
         prof.genome = sanitizeGenome(prof.genome);
         prof.inv = cleanInv(prof.inv);
         this.profiles.set(token, prof);
+        this.byUid.set(prof.uid, prof);
+      }
+      // дружба взаимная: оставляем только пары, записанные у обоих
+      for (const prof of this.byUid.values()) {
+        const list = Array.isArray(prof.friends) ? prof.friends : [];
+        const set = new Set(list.filter((u) => u !== prof.uid && Array.isArray(this.byUid.get(u)?.friends) && this.byUid.get(u).friends.includes(prof.uid)));
+        if (set.size) this.fr.set(prof.uid, set);
+        prof.friends = [...set];
       }
     }
     if (Array.isArray(data.structures)) {

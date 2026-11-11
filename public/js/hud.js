@@ -76,6 +76,7 @@ export class Hud {
     this.radFx = $('radFx');
     this.cache = {};
     this.players = [];
+    this.friends = []; // друзья для карты: [{ n, on, x, y }]
     this.zones = [];
     this.belt = [];
     this.initBuildMenu();
@@ -256,12 +257,13 @@ export class Hud {
     const atkIcon = spell ? spell.icon : you.wp ? ITEMS[you.wp].icon : '🐾';
     const atkName = spell ? spell.short || spell.name : you.wp ? ITEMS[you.wp].name.split(' ').pop() : 'Удар';
     const list = [
-      { key: 'ЛКМ', ic: atkIcon, nm: atkName, cd: you.cd.m, max: w ? w.cd : stats.attackCd, on: true },
+      { key: 'ЛКМ', ic: atkIcon, nm: atkName, cd: you.cd.m, max: w ? w.cd * (stats.cdMul || 1) : stats.attackCd, on: true },
       { key: 'Q', ic: '🧪', nm: 'Кислота', cd: you.cd.s, max: stats.spit ? stats.spit.cd : 1, on: !!stats.spit },
       { key: '␣', ic: '🦏', nm: 'Таран', cd: you.cd.c, max: stats.charge ? stats.charge.cd : 1, on: !!stats.charge },
       { key: 'F', ic: '🍖', nm: 'Есть', cd: 0, max: 1, on: you.inv.berries + you.inv.meat > 0 },
       { key: 'R', ic: '💊', nm: `Антирад ${you.inv.antirad || ''}`, cd: 0, max: 1, on: you.inv.antirad > 0 },
     ];
+    if (stats.dash) list.splice(3, 0, { key: 'Z', ic: '🚀', nm: 'Рывок', cd: you.cd.d || 0, max: stats.dash.cd, on: true });
     if (you.inv.elixir > 0) list.push({ key: 'T', ic: ITEMS.elixir.icon, nm: `Эликсир ${you.inv.elixir}`, cd: 0, max: 1, on: true });
     const sig = list.map((a) => `${a.on}${a.ic}${a.nm}${Math.ceil(a.cd * 10)}`).join('|');
     if (this.cache.ab === sig) return;
@@ -392,7 +394,7 @@ export class Hud {
           : 'Наведите на свою постройку. За снос возвращается до половины ресурсов — по оставшейся прочности.'}</div>`;
       } else {
         const d = STRUCTURES[t.k];
-        const mine = t.o === b.uid;
+        const mine = t.o === b.uid || (repair && !!b.friends?.has(t.o)); // чинить можно и постройки друзей
         const pct = Math.max(0, Math.min(100, Math.round((t.h / t.m) * 100)));
         const cost = repair ? repairCost(t.k, t.h, t.m) : demolishRefund(t.k, t.h, t.m);
         const any = Object.keys(cost).length > 0;
@@ -587,6 +589,29 @@ export class Hud {
       return [cx + dx / m, cy + dy / m, true];
     };
     const k = big ? 1.6 : 1;
+    // друзья в сети: точки их цвета, на большой карте — с именами
+    for (const f of this.friends || []) {
+      if (!f.on) continue;
+      let [fx, fy, out] = [px(f.x), py(f.y), false];
+      if (edge) [fx, fy, out] = clampEdge(fx, fy);
+      else if (fx < -20 || fy < -20 || fx > W + 20 || fy > H + 20) continue;
+      g.fillStyle = f.dd ? '#777' : '#7fe0ff';
+      g.strokeStyle = '#06222c';
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.arc(fx, fy, (out ? 3 : 4) * k, 0, Math.PI * 2);
+      g.fill();
+      g.stroke();
+      if (big) {
+        g.font = 'bold 12px sans-serif';
+        g.strokeStyle = 'rgba(0,0,0,0.8)';
+        g.lineWidth = 3;
+        g.strokeText(f.n, fx, fy - 13);
+        g.fillStyle = '#bfefff';
+        g.fillText(f.n, fx, fy - 13);
+        g.font = `${iconSize}px sans-serif`;
+      }
+    }
     if (nest) {
       let [nx, ny, out] = [px(nest[0]), py(nest[1]), false];
       if (edge) [nx, ny, out] = clampEdge(nx, ny);

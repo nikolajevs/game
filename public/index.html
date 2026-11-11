@@ -28,6 +28,10 @@
       <div class="dna" title="Мутаген копится в радиации, есть в кристаллах и ящиках">☣ <b id="dnaVal">0</b> <span>мутаген</span></div>
       <button id="btnEvolve">Мутации <kbd>G</kbd></button>
     </div>
+    <div id="socialPanel" class="panel">
+      <button id="btnFriends" title="Друзья: приглашайте игроков в свой дом">🤝 Друзья <kbd>O</kbd><span id="friendBadge" class="hidden"></span></button>
+      <button id="btnVoice" title="Голосовой чат: включить микрофон. Говорить — держать V">🎙 Голос</button>
+    </div>
     <div id="pathPanel" class="panel" title="Пути развития">
       <div class="pts"><span title="Знания (путь разума)">📘 <b id="knowVal">0</b></span> <span title="Сила духа (путь духа)">✨ <b id="spiritVal">0</b></span></div>
       <button id="btnPath">Путь <kbd>P</kbd></button>
@@ -56,13 +60,14 @@
     <div class="help-title">Управление <span class="muted">(H — скрыть)</span></div>
     <div><kbd>W A S D</kbd> идти, <kbd>Shift</kbd> бег</div>
     <div><kbd>Курсор</kbd> прицел, <kbd>ЛКМ</kbd> удар и добыча</div>
-    <div><kbd>Q</kbd> или щелчок <kbd>ПКМ</kbd> кислота, <kbd>Пробел</kbd> таран (мутации)</div>
+    <div><kbd>Q</kbd> или щелчок <kbd>ПКМ</kbd> кислота, <kbd>Пробел</kbd> таран, <kbd>Z</kbd> рывок (мутации)</div>
     <div>Потянуть с <kbd>ЛКМ</kbd>/<kbd>ПКМ</kbd> или <kbd>← →</kbd> — камера, <kbd>Колесо</kbd> — отдалить</div>
     <div><kbd>E</kbd> пить / открыть, <kbd>F</kbd> есть, <kbd>R</kbd> антирад</div>
     <div><kbd>C</kbd> крафт, <kbd>1–9</kbd> оружие и заклинания из пояса</div>
     <div><kbd>B</kbd> стройка: <kbd>Q</kbd>/<kbd>E</kbd> разделы, <kbd>1–9</kbd> постройка, <kbd>R</kbd> чинить, <kbd>X</kbd> снести</div>
     <div><kbd>G</kbd> мутации, <kbd>P</kbd> путь развития, <kbd>N</kbd> карта</div>
-    <div><kbd>Tab</kbd> игроки, <kbd>Enter</kbd> чат</div>
+    <div><kbd>Tab</kbd> игроки, <kbd>Enter</kbd> чат, <kbd>O</kbd> друзья</div>
+    <div><kbd>V</kbd> (держать) — говорить в микрофон</div>
     <div><kbd>M</kbd> звук вкл./выкл.</div>
   </div>
 </div>
@@ -75,6 +80,17 @@
   </div>
 </div>
 
+<div id="social" class="panel hidden">
+  <div class="cont-head"><span>🤝 Друзья <span class="muted small">(O — закрыть)</span></span><button id="socialClose" title="Закрыть (O)">✕</button></div>
+  <div class="muted small">Друг проходит в ваши двери, его не трогают ваши колья и турели, он может чинить ваши постройки. Друзьям нельзя нанести урон — и вам они его не нанесут. Дружба взаимная.</div>
+  <div id="socialBody"></div>
+  <div class="so-voice">
+    <div class="so-h">🎙 Голосовой чат</div>
+    <div id="voiceState" class="muted small"></div>
+    <div class="row"><button id="voiceToggle"></button><button id="voiceMode"></button></div>
+  </div>
+</div>
+
 <div id="bigmap" class="screen hidden">
   <div class="bigmap-box panel">
     <div class="cont-head"><span>🗺 Карта острова</span>
@@ -82,7 +98,7 @@
     </div>
     <div class="bigmap-wrap"><canvas id="bigmapCanvas"></canvas></div>
     <div class="bigmap-foot muted small"><span>Колесо — масштаб · перетаскивание — сдвиг · щелчок — поставить метку · ПКМ — убрать · N — закрыть</span>
-    <span>⚖️ алтари выбора · 🏙 мёртвый город · ☢ руины · ⛏ рудники · 🦴 логова · 🕯 алтари · <span style="color:#ffd23f">●</span> палатка · <span style="color:#c77dff">◎</span> метеорит · <span style="color:#ff5a3c">▼</span> метка</span></div>
+    <span>⚖️ алтари выбора · 🏙 мёртвый город · ☢ руины · ⛏ рудники · 🦴 логова · 🕯 алтари · <span style="color:#ffd23f">●</span> палатка · <span style="color:#7fe0ff">●</span> друзья · <span style="color:#c77dff">◎</span> метеорит · <span style="color:#ff5a3c">▼</span> метка</span></div>
   </div>
 </div>
 
@@ -145,7 +161,8 @@
       <canvas id="joinPreview" width="320" height="330"></canvas>
       <ul class="rules">
         <li>🪵 Добывайте ресурсы, крафтите оружие, стройте базу</li>
-        <li>☢ Радиация копит мутаген — тратьте его на мутации: когти, рога, пластины, кислоту</li>
+        <li>☢ Радиация копит мутаген — тратьте его на мутации: импланты из железа или дары плоти</li>
+        <li>🤝 Зовите друзей в дом (O) и говорите голосом (V)</li>
         <li>🌲 В лесах живут духи и мутанты: они стерегут деревья и грибы</li>
         <li>🏙 Мёртвый город, руины и рудники стерегут машины-убийцы — там металл и электроника</li>
         <li>☠ При смерти всё, что несли, остаётся в останках — мутации сохраняются</li>
@@ -176,7 +193,8 @@
     </div>
     <div class="ed-right">
       <div class="ed-title">Мутации тела <span id="edComplexity"></span></div>
-      <div class="muted small">Мутаген копится, пока вы в радиации; ещё он есть в кристаллах, ящиках зон и у мутантов.</div>
+      <div id="edSchools"></div>
+      <div id="edSchoolInfo"></div>
       <div id="edParts"></div>
       <div id="edFooter">
         <div id="edCost"></div>

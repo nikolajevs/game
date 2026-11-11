@@ -1,6 +1,6 @@
 // Клиент игры: вход, сеть, интерполяция, управление, стройка, интерфейс.
 import {
-  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, BUILD_CATS, BUILD_PAINT, buildCost, ITEMS, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES, ABILITIES,
+  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, BUILD_CATS, BUILD_PAINT, buildCost, ITEMS, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES, ABILITIES, VOICE,
 } from '/shared/config.js';
 import { zoneAt, generateMap, tilesHash } from '/shared/worldgen.js';
 import { computeStats, decodeGenome, defaultGenome, encodeGenome } from '/shared/creature.js';
@@ -12,6 +12,8 @@ import { Hud } from './hud.js';
 import { Editor } from './editor.js';
 import { CreaturePreview } from './creature-preview.js';
 import { PathsWindow } from './paths.js';
+import { Voice } from './voice.js';
+import { Social } from './social.js';
 import { HAIR_COLORS, parseLook } from './gfx/human3d.js';
 
 const $ = (id) => document.getElementById(id);
@@ -36,6 +38,8 @@ const input = new Input($('game'));
 const hud = new Hud((m) => net.send(m));
 const editor = new Editor((m) => net.send(m));
 const paths = new PathsWindow((m) => net.send(m));
+const voice = new Voice((m) => net.send(m));
+const social = new Social((m) => net.send(m), voice);
 
 const S = {
   myId: null, uid: null, tiles: null, you: null, stats: computeStats(defaultGenome()), look: '',
@@ -47,6 +51,7 @@ const S = {
   aim: { x: 0, y: 0, sky: true }, // точка на земле под курсором
   ready: false, pendingRes: [],
   siteId: -1, siteToast: {}, // текущее особое место и когда о нём последний раз подсказывали
+  friends: new Map(), lastVoice: 0, // друзья: uid -> { n, c, on, i, x, y, vc }
 };
 const cursorEl = $('cursor');
 
@@ -270,6 +275,7 @@ net.on('welcome', async (m) => {
   store.set('mutagen.token', m.token);
   S.myId = m.id;
   S.uid = m.uid;
+  social.myUid = m.uid;
   $('playBtn').textContent = 'Строим остров…';
   await new Promise((r) => setTimeout(r, 30)); // дать браузеру показать надпись
   const tiles = await buildTiles(m.seed, m.th);
@@ -356,7 +362,18 @@ net.on('s', (m) => {
 
 net.on('toast', (m) => hud.toast(m.text, m.big));
 net.on('chat', (m) => hud.chat(m));
-net.on('pl', (m) => hud.setPlayers(m.list));
+net.on('pl', (m) => {
+  hud.setPlayers(m.list);
+  social.setPlayers(m.list);
+});
+// друзья: список, приглашения и где они сейчас
+net.on('friends', (m) => {
+  S.friends = new Map(m.list.map((f) => [f.u, f]));
+  world.friends = new Set(S.friends.keys());
+  hud.friends = m.list;
+  social.setFriends(m);
+});
+net.on('rtc', (m) => voice.onSignal(m.from, m.d));
 net.on('dead', (m) => showDeath(m));
 net.on('evolved', () => editor.close());
 net.on('cont', (m) => {
@@ -372,6 +389,7 @@ net.on('close', () => {
     $('disconnected').classList.remove('hidden');
     input.enabled = false;
     input.releaseLock();
+    voice.disable();
   }
 });
 net.on('authError', (m) => {
@@ -479,6 +497,39 @@ paths.onClose = () => {
   input.enabled = !anyModal();
 };
 $('btnPath').addEventListener('click', togglePaths);
+
+// ================= друзья и голос =================
+function toggleSocial() {
+  audio.play(social.toggle() ? 'uiOpen' : 'uiClose', { volume: 0.3 });
+}
+$('btnFriends').addEventListener('click', toggleSocial);
+async function toggleVoice() {
+  if (voice.enabled) {
+    voice.disable();
+    hud.toast('🎙 Микрофон выключен');
+  } else if (await voice.enable()) hud.toast('🎙 Голос включён: держите V, чтобы говорить. Слышно тех, кто рядом, и друзей — где угодно');
+  else hud.toast(`🎙 ${voice.error}`);
+}
+$('btnVoice').addEventListener('click', toggleVoice);
+social.onVoiceToggle = toggleVoice;
+voice.onChange = () => social.renderVoice();
+social.renderVoice();
+
+// Кого сейчас должно быть слышно: игроков рядом (тише с расстоянием) и друзей — по «рации»
+function syncVoice() {
+  const targets = new Map();
+  for (const [id, v] of world.ents) {
+    const e = v.e;
+    if (!e || e.k !== 'p' || id === S.myId || !e.vc) continue;
+    const d = Math.hypot(v.x - S.me.x, v.y - S.me.y);
+    if (d > VOICE.range * 1.2) continue;
+    targets.set(id, clamp(1 - (d - VOICE.near) / (VOICE.range - VOICE.near), 0, 1));
+  }
+  for (const f of S.friends.values()) {
+    if (f.on && f.vc) targets.set(f.i, Math.max(targets.get(f.i) || 0, VOICE.friendVol));
+  }
+  voice.sync(targets, S.myId);
+}
 
 // умение из пояса: заклинание берём «в руку», мгновенное применяем сразу
 function useSkill(id) {
@@ -594,8 +645,8 @@ function updateBuild() {
       hud.setBuildTip(null);
       return;
     }
-    const mine = t.o === S.uid;
     const repair = B.mode === 'repair';
+    const mine = t.o === S.uid || (repair && S.friends.has(t.o)); // чинить можно и постройки друзей
     world.setGhost(t.k, t.x, t.y, !mine ? '#9aa3a0' : repair ? '#ffd166' : '#ff5d5d', { grid: false, solid: true });
     const what = !mine ? '<span class="bad">✖ Чужая постройка</span>'
       : repair ? (t.h >= t.m ? '<span class="good">✔ Цела</span>' : '🔧 <b>ЛКМ</b> — починить') : '🧨 <b>ЛКМ</b> — снести';
@@ -632,7 +683,7 @@ input.onLeftDown = () => {
     if (S.ghost?.reason) hud.toast(S.ghost.reason);
     else if (S.ghost) placeGhost();
   } else if (B.target) {
-    if (B.target.o !== S.uid) hud.toast('Это чужая постройка');
+    if (B.target.o !== S.uid && !(B.mode === 'repair' && S.friends.has(B.target.o))) hud.toast('Это чужая постройка');
     else net.send({ t: B.mode, id: B.target.i });
   }
   return true;
@@ -670,10 +721,13 @@ input.onPress = (code) => {
     else if (hud.bigOpen) hud.toggleBigMap(false);
     else if (editor.isOpen) editor.close();
     else if (hud.cont) hud.onCloseCont();
+    else if (social.isOpen) social.toggle(false);
     else if (!hud.craftEl.classList.contains('hidden')) hud.toggleCraft(false);
     else if (B.mode) setBuildMode(null);
     return;
   }
+  if (code === 'KeyV') return voice.setKey(true); // говорить можно и погибшим, и в окнах
+  if (code === 'KeyO') return toggleSocial();
   if (S.dead) return;
   if (code === 'KeyM') return hud.toast(audio.toggleMute() ? 'Звук выключен' : 'Звук включён');
   if (code === 'KeyN') return hud.toggleBigMap();
@@ -724,8 +778,14 @@ input.onPress = (code) => {
     S.me.face = aimAngle();
     net.send({ t: 'charge', ang: Math.round(S.me.face * 100) / 100 });
   }
+  // рывок на реактивных ускорителях — к курсору
+  if (code === 'KeyZ' && S.stats.dash && input.enabled && !B.mode) {
+    S.me.face = aimAngle();
+    net.send({ t: 'dash', ang: Math.round(S.me.face * 100) / 100 });
+  }
 };
 input.onRelease = (code) => {
+  if (code === 'KeyV') voice.setKey(false);
   if (code === 'Tab') hud.togglePlayers(false);
 };
 
@@ -826,6 +886,10 @@ function frame(now) {
   const ents = interpolate(now);
   world.listenerYaw = input.cam.yaw;
   world.syncEntities(ents, dt, S.myId, S.me);
+  if (now - S.lastVoice > 300) {
+    S.lastVoice = now;
+    syncVoice();
+  }
   updateBuild();
   updateHint();
   const showCursor = input.enabled && input.pos.inside && !you.dead;
@@ -856,7 +920,7 @@ function frame(now) {
     hud.toast('📍 Вы на месте — метка снята');
   }
   hud.update(you, S.stats, {
-    build: B.mode && !you.dead ? { mode: B.mode, kind: B.kind, cat: B.cat, reason: S.ghost?.reason || '', target: B.target, count: B.count, max: PLAYER.maxStructures, uid: S.uid } : null,
+    build: B.mode && !you.dead ? { mode: B.mode, kind: B.kind, cat: B.cat, reason: S.ghost?.reason || '', target: B.target, count: B.count, max: PLAYER.maxStructures, uid: S.uid, friends: S.friends } : null,
   });
   hud.clock(S.phase);
   if (now - S.lastMini > 100) {
@@ -898,10 +962,11 @@ function updateHint() {
   if (t) {
     const def = STRUCTURES[t.k];
     const mine = t.o === S.uid;
-    lines.push(`<span class="sub">${def.name} · ${mine ? 'ваша' : t.on || '?'} · ${t.h}/${t.m}${mine ? ' · <b>X</b> снести' : ''}</span>`);
+    const friend = S.friends.has(t.o);
+    lines.push(`<span class="sub">${def.name} · ${mine ? 'ваша' : `${friend ? '🤝 друг ' : ''}${t.on || '?'}`} · ${t.h}/${t.m}${mine ? ' · <b>X</b> снести' : ''}${friend && def.solid === 'owner' ? ' · открыта для вас' : ''}</span>`);
   }
   hud.setHint(lines.join('<br>'));
 }
 
 // для отладки из консоли браузера
-window.mutagen = { S, input, world, net };
+window.mutagen = { S, input, world, net, voice, social };
