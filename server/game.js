@@ -5,9 +5,10 @@ import {
   ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, CRAFT_MAX, USES, TRIALS, TRIPS, TRIP_MAX, buildCost, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
   NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
   RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
-  ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET, JUMP,
+  ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET,
   PARTS, MUT_SCHOOLS, DASH, VOICE, FRIENDS_MAX, INVITE_LIFE,
 } from '../shared/config.js';
+import { stepVertical, platformTop, airborne, JUMP_SPEED, PLAT_MARGIN, JUMP_BUFFER } from '../shared/vertical.js';
 import {
   computeStats, encodeGenome, evolveCostWith, sanitizeGenome, defaultGenome, complexity, cloneGenome, overLimit,
 } from '../shared/creature.js';
@@ -791,7 +792,8 @@ export class Game {
       cd: { melee: 0, spit: 0, charge: 0, dash: 0 },
       dashT: 0, dashDir: 0, shockN: 0, bleedT: 0, corrT: 0,
       invites: new Map(), lastInvite: -10, voice: false, talk: false, // приглашения в друзья: uid -> { name, until }
-      combatT: 0, atkT: 0, hitT: 0, slowT: 0, spikeT: 0, drinkT: 0, eatT: 0, jumpT: 0, lastChat: -10,
+      combatT: 0, atkT: 0, hitT: 0, slowT: 0, spikeT: 0, drinkT: 0, eatT: 0, lastChat: -10,
+      z: 0, vz: 0, jumpReq: 0, plat: 0, air: false, // вертикаль: высота ног, скорость, нажатый прыжок, валун под ногами
       charging: 0, chargeDir: 0, chargeHit: null,
       spawnProtect: PLAYER.spawnProtect, dead: false, openCont: null, nearFire: false,
       resLoaded: new Set(), rcx: null, rcy: null,
@@ -879,12 +881,50 @@ export class Game {
     if (Number.isFinite(m.ad)) p.aimD = clamp(m.ad, 0, 2000);
   }
 
-  // Прыжок (пробел): чисто зрелищный — положение (x, y) и бой не меняются, сервер только отмечает
-  // «в воздухе» на JUMP.time секунд, чтобы подскок видели все. В воздухе заново не прыгнуть;
-  // оглушённый, мёртвый и плывущий в глубокой воде не прыгают.
+  // Прыжок (пробел): запоминаем нажатие, а оттолкнуться игрок сможет на ближайшем шаге вертикали
+  // (verticalStep), если стоит на земле или на валуне. Нажатие чуть раньше приземления не пропадает.
+  // Оглушённый, мёртвый и плывущий в глубокой воде не прыгают.
   onJump(p) {
-    if (p.dead || p.jumpT > 0 || p.stunT > 0 || this.tileAt(p.x, p.y) === T.DEEP) return;
-    p.jumpT = JUMP.time;
+    if (p.dead || p.stunT > 0 || this.tileAt(p.x, p.y) === T.DEEP) return;
+    p.jumpReq = JUMP_BUFFER;
+  }
+
+  // Высота опоры под точкой: верх самого высокого валуна, на который можно встать (его круг накрывает
+  // точку), иначе 0 — земля. id — какой это валун.
+  surfaceAt(x, y) {
+    let top = 0;
+    let id = 0;
+    for (const s of this.grid.query(x, y, 40)) {
+      if (s.cat !== 'res') continue;
+      const def = RESOURCES[s.kind];
+      if (!def.climb || Math.hypot(s.x - x, s.y - y) > def.climb.r) continue;
+      const t = platformTop(def, s.hp, s.maxHp);
+      if (t > top) {
+        top = t;
+        id = s.id;
+      }
+    }
+    return { top, id };
+  }
+
+  // стоит ли кто-то на этом валуне (тогда он не заслоняет от выстрелов того, кто на нём, и его самого)
+  occupied(s) {
+    for (const p of this.players.values()) if (p.plat === s.id && !p.dead) return true;
+    return false;
+  }
+
+  // Вертикаль игрока за шаг: оттолкнуться, если нажат прыжок и есть опора, потом лететь или падать
+  // по общей физике. Идёт после движения: приземляемся туда, где игрок оказался после столкновений.
+  verticalStep(p, dt) {
+    const sf = this.surfaceAt(p.x, p.y);
+    p.jumpReq = Math.max(0, p.jumpReq - dt);
+    if (p.jumpReq > 0 && !airborne(p, sf.top)) {
+      p.vz = JUMP_SPEED;
+      p.jumpReq = 0;
+    }
+    stepVertical(p, sf.top, dt);
+    p.air = airborne(p, sf.top);
+    p.plat = !p.air && sf.top > 0 ? sf.id : 0;
   }
 
   tryCharge(p, m) {
@@ -1312,7 +1352,6 @@ export class Game {
     p.slowT = Math.max(0, p.slowT - dt);
     p.drinkT = Math.max(0, p.drinkT - dt);
     p.eatT = Math.max(0, p.eatT - dt);
-    p.jumpT = Math.max(0, p.jumpT - dt);
     p.warnT = Math.max(0, p.warnT - dt);
     p.spawnProtect = Math.max(0, p.spawnProtect - dt);
     if (p.weapon && !ABILITIES[p.weapon] && !(p.inv[p.weapon] > 0)) p.weapon = null; // оружие выложили или потратили
@@ -1409,6 +1448,7 @@ export class Game {
     if (dashing && (p.dashT <= 0 || hit)) this.dashEnd(p);
     this.envEffects(p, dt);
     if (p.dead) return;
+    this.verticalStep(p, dt);
 
     if (p.input.attack && p.cd.melee <= 0 && p.charging <= 0 && p.dashT <= 0 && !stunned) this.attack(p);
     if (p.input.spit && st.spit && p.cd.spit <= 0 && !stunned) {
@@ -1558,6 +1598,9 @@ export class Game {
           else e.y = s.y + Math.sign(oy || 1) * (HS + r);
         }
       } else if (s.cat === 'res' && s.cr > 0) {
+        // выше верха валуна — пролетаем над ним или стоим на нём (у зверей e.z нет — для них валун стена)
+        const top = platformTop(RESOURCES[s.kind], s.hp, s.maxHp);
+        if (top > 0 && e.z >= top - PLAT_MARGIN) continue;
         const rr = r + s.cr;
         const dx = e.x - s.x;
         const dy = e.y - s.y;
@@ -1990,7 +2033,12 @@ export class Game {
     t.corrT = 0;
     t.dashT = 0;
     if (t.type === 'player') {
-      t.jumpT = 0; // мёртвый не в прыжке (updatePlayer его не считает, флаг завис бы до возрождения)
+      // мёртвый лежит на земле (updatePlayer его уже не считает, высота зависла бы до возрождения)
+      t.z = 0;
+      t.vz = 0;
+      t.jumpReq = 0;
+      t.air = false;
+      t.plat = 0;
       this.endTrial(t, '🔮 Вы погибли в трипе — испытание духа не пройдено.');
       t.trip = { a: 0, p: 0, t: 0 };
       t.halT = 0;
@@ -2124,7 +2172,11 @@ export class Game {
         if (STRUCTURES[s.kind].solid === 'owner' && j.uid && (j.uid === s.owner || this.isFriend(s.owner, j.uid))) continue;
         return s;
       }
-      if (s.cat === 'res' && s.cr > 0 && Math.hypot(s.x - j.x, s.y - j.y) < s.cr + pr) return s;
+      if (s.cat === 'res' && s.cr > 0 && Math.hypot(s.x - j.x, s.y - j.y) < s.cr + pr) {
+        // валун с игроком наверху не заслоняет его и не мешает ему стрелять, иначе он сидел бы на нём неуязвимым
+        if (RESOURCES[s.kind].climb && this.occupied(s)) continue;
+        return s;
+      }
     }
     return null;
   }
@@ -2435,7 +2487,7 @@ export class Game {
       i: p.id, k: 'p', x: Math.round(p.x), y: Math.round(p.y), a: Math.round(p.angle * 100) / 100,
       h: Math.ceil(p.hp), mh: p.stats.maxHp, n: p.name, c: p.color, g: p.look, ap: p.ap, dd: p.dead ? 1 : undefined,
       at: p.atkT > 0 ? 1 : 0, hf: p.hitT > 0 ? 1 : 0, ch: p.charging > 0 ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0,
-      jp: p.jumpT > 0 ? 1 : undefined,
+      z: p.z > 0.05 ? Math.round(p.z * 10) / 10 : undefined, jp: p.air ? 1 : undefined,
       w: p.weapon || undefined,
       sh: p.shieldT > 0 ? 1 : undefined, hx: p.hexT > 0 ? 1 : undefined, st: p.stunT > 0 ? 1 : undefined,
       pa: p.path || undefined, u: p.uid, vc: p.voice ? 1 : undefined, tk: p.talk ? 1 : undefined,

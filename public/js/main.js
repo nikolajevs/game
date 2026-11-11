@@ -834,13 +834,20 @@ function interpolate(now) {
   const span = s1.st - s0.st;
   const t = span > 0 ? clamp((rt - s0.st) / span, 0, 1) : 1;
   const out = [];
+  // высоту и флаг прыжка своего существа берём из самого свежего снимка, без отставания интерполяции:
+  // положение у него и так своё (S.me), а прыжок должен начинаться сразу после нажатия
+  const mine = snaps[snaps.length - 1].ents.get(S.myId);
   for (const e of s1.ents.values()) {
+    if (mine && e.i === S.myId) {
+      out.push({ ...e, z: mine.z || 0, jp: mine.jp });
+      continue;
+    }
     const p = s0.ents.get(e.i);
     if (!p || t >= 1) {
       out.push(e);
       continue;
     }
-    out.push({ ...e, x: lerp(p.x, e.x, t), y: lerp(p.y, e.y, t), a: e.a !== undefined ? angleLerp(p.a, e.a, t) : e.a });
+    out.push({ ...e, x: lerp(p.x, e.x, t), y: lerp(p.y, e.y, t), z: lerp(p.z || 0, e.z || 0, t), a: e.a !== undefined ? angleLerp(p.a, e.a, t) : e.a });
   }
   return out;
 }
@@ -883,7 +890,7 @@ function frame(now) {
   const myView = world.ents.get(S.myId);
   const hb = myView ? myView.creature.tpl.hb : 20;
   if (you.dead) input.cam.yaw += dt * 0.15;
-  world.updateCamera(S.me.x, S.me.y, hb, input.cam, dt);
+  world.updateCamera(S.me.x, S.me.y, hb, input.cam, dt, myView?.hop || 0);
   const hit = world.pickAt(input.pos.x, input.pos.y);
   if (hit) S.aim = { x: hit.x, y: hit.y, sky: false };
   else {

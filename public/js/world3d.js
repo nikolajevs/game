@@ -1,6 +1,6 @@
 // 3D-сцена игры: рельеф, объекты, существа с сервера, эффекты, камера.
 import * as THREE from 'three';
-import { MAP_H, MAP_W, NPCS, PLAYER, T, TILE, RESOURCES, RES_CHUNK, ABILITIES, WEAPONS, JUMP } from '/shared/config.js';
+import { MAP_H, MAP_W, NPCS, PLAYER, T, TILE, RESOURCES, RES_CHUNK, ABILITIES, WEAPONS } from '/shared/config.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 import { Terrain } from './gfx/terrain.js';
@@ -257,13 +257,10 @@ export class WorldView {
   // нет существа, оно мертво, плывёт, уже в воздухе или ещё не отошло от приземления.
   jump(id, me) {
     const v = this.ents.get(id);
-    if (!v || !v.e || v.e.dd || v.swimming || v.jt > 0 || v.sq > 0.5) return false;
-    this.startJump(v, v.x, v.y, me, true);
-    return true;
+    return !!v && !!v.e && !v.e.dd && !v.swimming && !v.jp && !(v.sq > 0.5); // сам прыжок считает сервер
   }
 
   startJump(v, x, y, me, isMe) {
-    v.jt = JUMP.time;
     this.effects.burst(x, Math.max(this.ground(x, y), 0) + 2, y, '#b9ad8a', 4, { speed: 36, size: 2, life: 0.32, gravity: -6 });
     const { step, pitch } = this.stepInfo(x, y);
     this.audio?.playAt(step, x, y, me.x, me.y, { volume: isMe ? 0.42 : 0.2, range: 520, yaw: this.listenerYaw, rate: 1.18 * pitch });
@@ -374,21 +371,15 @@ export class WorldView {
       else v.cy += (wantY - v.cy) * (1 - Math.exp(-dt * 7));
       // прыжок (пробел): дуга над землёй, растяжка в полёте, сжатие при приземлении. Чисто зрелищный:
       // свой стартует сразу по нажатию (jump), чужой — по флагу jp с сервера
-      if (e.jp && !v.jp && !(v.jt > 0) && !e.dd && !swimming) this.startJump(v, x, y, me, isMe);
-      v.jp = e.jp;
-      if (e.dd || swimming) v.jt = 0;
-      let hop = 0;
-      let squash = 1;
-      if (v.jt > 0) {
-        v.jt -= dt;
-        const k = Math.min(1, Math.max(0, 1 - v.jt / JUMP.time));
-        hop = 4 * JUMP.height * k * (1 - k);
-        squash = 1 + Math.sin(k * Math.PI) * 0.06;
-        if (v.jt <= 0) {
-          v.sq = 1;
-          this.landJump(v, x, y, me, isMe);
-        }
+      // высота над землёй (прыжок, падение, стойка на валуне) приходит с сервера, взлёт и посадка — по флагу jp
+      if (e.jp && !v.jp && !e.dd && !swimming) this.startJump(v, x, y, me, isMe);
+      if (!e.jp && v.jp && !e.dd) {
+        v.sq = 1;
+        this.landJump(v, x, y, me, isMe);
       }
+      v.jp = e.jp;
+      const hop = e.dd || swimming ? 0 : e.z || 0;
+      let squash = 1 + (e.jp ? Math.min(0.06, hop * 0.002) : 0);
       if (v.sq > 0) {
         v.sq = Math.max(0, v.sq - dt / 0.16);
         squash -= 0.12 * v.sq;
@@ -403,7 +394,7 @@ export class WorldView {
         swim: swimming, dead: !!e.dd,
       });
       // шаги: звук по типу почвы (в прыжке ноги землю не касаются)
-      if (v.speed > 34 && !(v.jt > 0)) {
+      if (v.speed > 34 && !v.jp) {
         v.stepTimer -= dt;
         if (v.stepTimer <= 0) {
           const { step, pitch, wet } = this.stepInfo(x, y);
@@ -1029,9 +1020,9 @@ export class WorldView {
   }
 
   // ---------- кадр ----------
-  updateCamera(x, y, hb, cam, dt) {
+  updateCamera(x, y, hb, cam, dt, z = 0) {
     // высота цели сглажена: иначе камера подпрыгивает на каждой кочке рельефа
-    const rawY = this.standY(x, y, hb) + hb + 18;
+    const rawY = this.standY(x, y, hb) + hb + 18 + z; // z — высота над землёй: на валуне камера поднимается
     if (this.camY === undefined || Math.abs(rawY - this.camY) > 120) this.camY = rawY;
     else this.camY += (rawY - this.camY) * (1 - Math.exp(-dt * 6));
     const ty = this.camY;

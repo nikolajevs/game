@@ -11,6 +11,7 @@ const _m = new THREE.Matrix4();
 const _c = new THREE.Color();
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const STATIC_CHUNK = 600;
+const TREE_HIDE_ELEV = 0.42; // рад: выше этого угла камеры кроны деревьев не прячутся (см. cutaway)
 const BUSH_BERRIES = RESOURCES.bush.total; // ягод (и гроздей на кусте) — как в игровой логике
 // ресурсы рисуются пулами по участкам карты; постройки — отдельными мешами
 const RESOURCE_KINDS = new Set(['tree', 'rock', 'sulfur', 'bush', 'crystal', 'scrap', 'car', 'terminal', 'cactus', 'frog', 'mush_brown', 'mush_red', 'mush_glow']);
@@ -691,6 +692,7 @@ export class StaticsView {
     const giant = r() < 0.018;
     const sc = giant ? 1.75 + r() * 0.55 : 0.85 + r() * 0.45;
     o.treeCutawayRadius = giant ? 50 : 36;
+    o.treeHeight = 68 * sc; // высота кроны над землёй — для cutaway
     const scale = (68 * sc) / model.height;
     const spreadX = 0.92 + r() * 0.16;
     const spreadZ = 0.92 + r() * 0.16;
@@ -899,25 +901,48 @@ export class StaticsView {
     return vert && !horiz ? Math.PI / 2 : 0;
   }
 
-  // Прячет кроны деревьев, которые стоят между камерой и игроком
+  // Прячет кроны деревьев (и валуны), которые правда заслоняют игрока от камеры. Дерево прячется, только если
+  // оно ближе к камере, чем игрок (деревья впереди и позади игрока не трогаем — раньше они пропадали, стоило
+  // подойти), и луч взгляда проходит сквозь крону, а не над ней или под ней.
   cutaway(camPos, target) {
     const ax = camPos.x;
+    const ay = camPos.y;
     const az = camPos.z;
     const last = this.lastCutaway;
-    if (last && (ax - last.ax) ** 2 + (az - last.az) ** 2 < 144 && (target.x - last.tx) ** 2 + (target.z - last.tz) ** 2 < 36) return;
-    this.lastCutaway = { ax, az, tx: target.x, tz: target.z };
+    if (last && (ax - last.ax) ** 2 + (az - last.az) ** 2 < 144 && (target.x - last.tx) ** 2 + (target.z - last.tz) ** 2 < 36
+      && (ay - last.ay) ** 2 + (target.y - last.ty) ** 2 < 64) return;
+    this.lastCutaway = { ax, ay, az, tx: target.x, ty: target.y, tz: target.z };
     const dx = target.x - ax;
     const dz = target.z - az;
     const len2 = dx * dx + dz * dz || 1;
+    const treeMax = 1 - 12 / Math.sqrt(len2); // объект должен быть хотя бы на 12 единиц ближе к камере, чем игрок
+    // Угол камеры над горизонтом. С высокой камерой (обычный наклон ~0,55) деревья не прячем вовсе: кроны там
+    // лишь задевают луч у самого игрока, а дерево, исчезающее в тот миг, когда к нему подходишь, выглядит как глюк.
+    // Прячем, только когда камера опущена и дерево правда закрывает обзор.
+    const elev = Math.atan2(ay - target.y, Math.sqrt(len2));
     for (const o of this.occluders) {
       const tree = o.s.k === 'tree' && o.base;
       const rock = o.s.k === 'rock' || o.s.k === 'sulfur';
       if (!tree && !rock) continue;
       const t = ((o.s.x - ax) * dx + (o.s.y - az) * dz) / len2;
+      // Уже скрытый объект возвращаем не раньше, чем он заметно выйдет из зоны (slack): иначе при шагах
+      // вперёд-назад и вбок он мигал бы на самой границе
+      const slack = o.hidden ? 1 : 0;
       let hide = false;
-      if (t > -0.15 && t < (tree ? 1.15 : 0.9)) {
+      if (t > -0.15 && t < treeMax + 0.03 * slack) {
         const k = Math.max(0, Math.min(1, t));
-        hide = Math.hypot(o.s.x - (ax + dx * k), o.s.y - (az + dz * k)) < (tree ? (o.treeCutawayRadius || 36) : 34);
+        const lateral = Math.hypot(o.s.x - (ax + dx * k), o.s.y - (az + dz * k));
+        // на какой доле высоты объекта проходит луч взгляда: 0 — у земли, 1 — у самой верхушки
+        const lineY = ay + (target.y - ay) * k;
+        const base = this.ground(o.s.x, o.s.y);
+        const h = tree ? (o.treeHeight || 70) : 34 * (0.55 + 0.45 * (o.s.h / (o.s.m || 1)));
+        const frac = (lineY - base) / h;
+        // Заслоняет, только если луч идёт сквозь тело: у дерева — сквозь крону (от четверти высоты до 85%; у верхушки
+        // она узкая, луч там лишь задевает её и ничего не закрывает), у валуна — ниже 90% высоты. Зона сбоку у кроны
+        // сужается к верхушке до 60%.
+        const radius = tree ? (o.treeCutawayRadius || 36) * (1 - 0.4 * Math.max(0, Math.min(1, (frac - 0.6) / 0.25))) : 30;
+        hide = lateral < radius + 12 * slack && frac < (tree ? 0.85 : 0.9) + 0.05 * slack && (!tree || frac > 0.25 - 0.1 * slack);
+        if (tree && elev > TREE_HIDE_ELEV + 0.04 * slack) hide = false;
       }
       if (hide === !!o.hidden) continue;
       o.hidden = hide;
