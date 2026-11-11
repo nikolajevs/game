@@ -18,9 +18,16 @@ export const NPC_WAKE_R = 2600; // звери дальше от всех игр�
 
 // Типы клеток карты
 // CITY — асфальт и бетон мёртвого города, WALL — уцелевшие стены его домов (сквозь них не пройти)
-export const T = { DEEP: 0, SHALLOW: 1, SAND: 2, GRASS: 3, FOREST: 4, ROCK: 5, CITY: 6, WALL: 7 };
-export const TERRAIN_NAMES = ['Глубина', 'Мелководье', 'Песок', 'Луг', 'Лес', 'Скалы', 'Мёртвый город', 'Руины домов'];
-export const TERRAIN_SPEED = [0.45, 0.7, 0.95, 1, 0.92, 0.95, 1, 1];
+// SNOW, TAIGA и ICE — зимний биом на севере острова: снежные поля, заснеженный лес и лёд на замёрзшем мелководье
+export const T = { DEEP: 0, SHALLOW: 1, SAND: 2, GRASS: 3, FOREST: 4, ROCK: 5, CITY: 6, WALL: 7, SNOW: 8, TAIGA: 9, ICE: 10 };
+export const TERRAIN_NAMES = ['Глубина', 'Мелководье', 'Песок', 'Луг', 'Лес', 'Скалы', 'Мёртвый город', 'Руины домов', 'Снега', 'Тайга', 'Лёд'];
+export const TERRAIN_SPEED = [0.45, 0.7, 0.95, 1, 0.92, 0.95, 1, 1, 0.86, 0.82, 1.08]; // в сугробах вязнешь, по льду скользишь
+export const isCold = (t) => t === T.SNOW || t === T.TAIGA || t === T.ICE;
+// Зима занимает северную часть суши (доля от всей суши); граница неровная
+export const WINTER = { share: 0.15, edge: 42 };
+// Холод: в зимнем биоме копится (ночью быстрее), у костра и вне снегов спадает.
+// Выше slowAt — замедление и нет лечения, на 100 — урон. Меховая куртка почти снимает холод.
+export const COLD = { rate: 1.0, night: 1.5, coat: 0.12, warm: 14, decay: 5, slowAt: 55, slow: 0.82, dmg: 3 };
 // Мёртвый город: один на острове, с воронкой ядерного взрыва в центре. Размеры — в клетках.
 export const CITY = { r: 62, crater: 9, block: 14, street: 3 };
 export const isWater = (t) => t === T.DEEP || t === T.SHALLOW;
@@ -48,6 +55,8 @@ export const ITEMS = {
   peyote: { name: 'Пейотль', icon: '🌵', kind: 'res' }, // кактус с пляжей и скал: второе дыхание
   toad: { name: 'Сияющая жаба', icon: '🐸', kind: 'res' }, // ловится у воды: онемение
   bone: { name: 'Кости', icon: '🦴', kind: 'res' },
+  fur: { name: 'Шкуры', icon: '🐺', kind: 'res' }, // со снежных волков и снежного зверя
+  coat: { name: 'Меховая куртка', icon: '🧥', kind: 'res' }, // пока лежит в инвентаре — греет: холод почти не копится
   scrap: { name: 'Металлолом', icon: '⚙️', kind: 'res' },
   electronics: { name: 'Электроника', icon: '🔌', kind: 'res' }, // платы и провода из мёртвого города и роботов
   // три части верстака для испытания пути разума: лежат в ящиках рудников, города и руин
@@ -130,6 +139,7 @@ export const RECIPES = {
   crossbow: { cost: { wood: 35, bone: 10, scrap: 8 } },
   arrows: { cost: { wood: 4, stone: 2 }, out: 5 },
   antirad: { cost: { berries: 4, bone: 2 }, out: 1 },
+  coat: { cost: { fur: 8, bone: 3 } },
   // технологии пути разума
   bullets: { cost: { scrap: 1, sulfur: 3 }, out: 4, bench: true, path: 'mind' },
   // trial — этим рецептом у алтаря выбора проходят испытание разума: его видно и без пути
@@ -146,7 +156,7 @@ export const RECIPES = {
 // Вкладки меню крафта. Вкладка с path видна только тем, кто выбрал этот путь.
 export const CRAFT_TABS = [
   { id: 'weapons', name: 'Оружие', icon: '⚔️', items: ['club', 'spear', 'axe', 'blade', 'pickaxe', 'sling', 'bow', 'crossbow'] },
-  { id: 'supplies', name: 'Припасы', icon: '🎒', items: ['arrows', 'antirad'] },
+  { id: 'supplies', name: 'Припасы', icon: '🎒', items: ['arrows', 'antirad', 'coat'] },
   { id: 'trial', trial: true, name: 'Испытание разума', icon: '⚖️', items: ['pistol'] }, // только без пути и у алтаря выбора
   { id: 'tech', path: 'mind', name: 'Технологии', icon: '⚙️', items: ['bullets', 'pistol', 'shotgun', 'bomb', 'cell', 'laser'] },
   { id: 'ritual', path: 'spirit', name: 'Ритуалы', icon: '🔮', items: ['elixir', 'dagger', 'staff'] },
@@ -399,6 +409,15 @@ export const NPCS = {
     shoot: { proj: 'bullet', dmg: 13, cd: 0.55, speed: 1200, life: 0.6, min: 150, range: 620 }, biomes: [],
   },
 };
+// Зима: стаи снежных волков и редкий снежный зверь — у них шкуры для меховой куртки
+NPCS.wolf = {
+  name: 'Снежный волк', faction: 'spirit', model: 'wolf', color: '#dfe8f2', r: 16, hp: 75, speed: 172, dmg: 9, reach: 28, behavior: 'aggressive',
+  aggro: 300, nightAggro: 430, dna: 1, loot: { meat: 3, bone: 2, fur: 2 }, pack: 3, biomes: [T.SNOW, T.TAIGA],
+};
+NPCS.frostbeast = {
+  name: 'Снежный зверь', faction: 'spirit', model: 'frostbeast', color: '#cfe6ff', r: 32, hp: 540, speed: 84, dmg: 27, reach: 40, behavior: 'territorial',
+  aggro: 200, dna: 14, loot: { meat: 10, bone: 8, fur: 7, crystal: 1 }, spirit: 6, attackCd: 1.3, windup: 0.56, def: 0.15, biomes: [T.SNOW],
+};
 // Проводник в мир духов: появляется только в трипе испытания, виден и уязвим лишь для того, кто его проходит
 NPCS.guide = {
   name: 'Проводник', faction: 'spirit', model: 'guide', color: '#ffe08a', r: 18, hp: 70, speed: 128, dmg: 0, reach: 0, behavior: 'guide', flee: 210,
@@ -408,6 +427,7 @@ NPCS.guide = {
 export const NPC_TARGET = {
   stag: Math.round(150 * WILD_DENSITY), crooked: Math.round(45 * WILD_DENSITY),
   claw: Math.round(14 * WILD_DENSITY), wraith: Math.round(30 * WILD_DENSITY),
+  wolf: 30, frostbeast: 14, // волки — стаями: число здесь — это число стай
 };
 export const NIGHT_HUNTER = 'crooked'; // кто ночью выходит на охоту вокруг игроков
 export const METEOR_GUARD = 'claw'; // кого приманивает упавший метеорит

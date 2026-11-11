@@ -2,7 +2,7 @@
 // Высоты чисто визуальные: игровая логика на сервере плоская (x, y).
 // Рельеф нарезан на участки: рисуются только видимые и не слишком далёкие.
 import * as THREE from 'three';
-import { TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T } from '/shared/config.js';
+import { TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, isCold } from '/shared/config.js';
 import { makeNoise, zoneAt, zoneFalloff } from '/shared/worldgen.js';
 import { surfaceTextures, TRIPLANAR_GLSL } from './surfaces.js';
 import { Water } from './water.js';
@@ -104,9 +104,10 @@ export const CELL = TILE / RES;
 const GW = MAP_W * RES + 1;
 const GH = MAP_H * RES + 1;
 const CHUNK_CELLS = 48; // клеток сетки в стороне участка
-const BASE_H = [-46, -13, 4, 12, 16, 26, 13, 13];
+const BASE_H = [-46, -13, 4, 12, 16, 26, 13, 13, 13, 17, 2.2];
 // луг чуть темнее и спокойнее — под цвет травы ez-tree, чтобы вдали, где пучков меньше, не было пятен
-const TILE_COL = ['#1b4f63', '#3c8a86', '#e3d09a', '#679b42', '#3f8040', '#8f8e86', '#5d5a55', '#55524e'];
+const TILE_COL = ['#1b4f63', '#3c8a86', '#e3d09a', '#679b42', '#3f8040', '#8f8e86', '#5d5a55', '#55524e', '#eef3f8', '#d9e6ea', '#b9ddf0'];
+const SNOWCAP = new THREE.Color('#f2f6fa'); // снег на скалах зимнего биома
 const isCity = (t) => t === T.CITY || t === T.WALL;
 const GLASS = new THREE.Color('#26221e'); // оплавленная земля воронки
 const BEACH = new THREE.Color('#e8d7a2');
@@ -177,6 +178,16 @@ export class Terrain {
     this.tiles = tiles;
     this.zones = zones;
     this.crater = zones.find((z) => z.kind === 'crater') || null;
+    // южная граница зимы по столбцам карты: скалы сами «холодными» клетками не считаются,
+    // а снегом их красить надо — так и узнаём, что скала лежит в зимнем биоме
+    this.coldEdge = new Int16Array(MAP_W).fill(-1);
+    for (let i = 0; i < tiles.length; i++) {
+      if (isCold(tiles[i])) {
+        const x = i % MAP_W;
+        const y = Math.floor(i / MAP_W);
+        if (y > this.coldEdge[x]) this.coldEdge[x] = y;
+      }
+    }
     this.group = new THREE.Group();
     this.surfaceTextures = makeSurfaceTextures();
     this.n = [makeNoise(seed + 776), makeNoise(seed + 777), makeNoise(seed + 778), makeNoise(seed + 779)];
@@ -200,6 +211,12 @@ export class Terrain {
     this.group.add(this.water);
     this.group.add(this.buildSeabed());
     this.warm = true; // первый раз строим всё видимое сразу, дальше — понемногу за кадр
+  }
+
+  // точка лежит в зимнем биоме (включая его скалы)?
+  winterAt(x, z) {
+    const tx = Math.max(0, Math.min(MAP_W - 1, Math.floor(x / TILE)));
+    return z / TILE < this.coldEdge[tx] - 1;
   }
 
   tile(tx, ty) {
@@ -315,7 +332,7 @@ export class Terrain {
     const cliff = smoothstep(0.58, 1.35, Math.hypot(sx, sz)) * smoothstep(4, 18, h);
     const rockTile = this.sampleTiles(x, z, (tt) => (tt === T.ROCK ? 1 : 0));
     const rock = Math.max(cliff * 1.2, smoothstep(0.25, 0.75, rockTile));
-    const city = this.sampleTiles(x, z, (tt) => (isCity(tt) ? 1 : 0));
+    const city = this.sampleTiles(x, z, (tt) => (isCity(tt) || isCold(tt) ? 1 : 0)); // на асфальте и в снегу трава не растёт
     return Math.min(1, Math.max(sand, rock, smoothstep(0.15, 0.5, city)));
   }
 
@@ -365,7 +382,8 @@ export class Terrain {
     c.lerp(BEACH, beach * 0.9);
     const patch = this.patch(x / 260, z / 260, 3);
     const cityTile = this.sampleTiles(x, z, (tt) => (isCity(tt) ? 1 : 0));
-    const grassHeight = smoothstep(2, 9, h) * (1 - smoothstep(55, 76, h)) * (1 - cityTile);
+    const coldTile = this.sampleTiles(x, z, (tt) => (isCold(tt) ? 1 : 0));
+    const grassHeight = smoothstep(2, 9, h) * (1 - smoothstep(55, 76, h)) * (1 - cityTile) * (1 - coldTile);
     if (patch > 0.55) c.lerp(DRY, grassHeight * Math.min(0.42, (patch - 0.55) * 2.4));
     else if (patch < 0.42) c.lerp(LUSH, grassHeight * Math.min(0.38, (0.42 - patch) * 2.4));
     const cliff = smoothstep(0.58, 1.35, steepness) * smoothstep(4, 18, h);
@@ -374,8 +392,10 @@ export class Terrain {
     this.wRock = Math.min(1, Math.max(cliff * 1.2, smoothstep(0.25, 0.75, rockTile), smoothstep(0.2, 0.7, cityTile) * 0.9));
     this.wSand *= 1 - this.wRock;
     this.wForest = this.sampleTiles(x, z, (tt) => (tt === T.FOREST ? 1 : 0));
-    c.lerp(CLIFF, cliff * 0.92);
+    c.lerp(CLIFF, cliff * 0.92 * (1 - coldTile * 0.6));
     c.lerp(SNOWY, smoothstep(55, 88, h));
+    // скалы зимнего биома под снегом; на самых крутых обрывах проступает камень
+    if (rockTile > 0.05 && this.winterAt(x, z)) c.lerp(SNOWCAP, rockTile * (0.85 - cliff * 0.45));
     if (h > 0 && zones.length) {
       const site = zoneAt(zones, x, z);
       const k = site ? zoneFalloff(site, x, z) : 0;

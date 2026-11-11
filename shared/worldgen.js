@@ -1,6 +1,6 @@
 // Генерация острова и раскладка ресурсов по зерну (seed).
 // Общий код: сервер строит по нему мир, браузер — превью.
-import { MAP_W, MAP_H, TILE, T, RESOURCES, RAD, SITES, CITY } from './config.js';
+import { MAP_W, MAP_H, TILE, T, RESOURCES, RAD, SITES, CITY, WINTER, isCold } from './config.js';
 
 export function mulberry32(a) {
   return function rand() {
@@ -90,8 +90,47 @@ export function generateMap(seed) {
       tiles[y * MAP_W + x] = t;
     }
   }
+  stampWinter(tiles, seed);
   stampCity(tiles, seed);
   return tiles;
+}
+
+// ---- Зимний биом ----
+// Север острова под снегом: луга и пляжи становятся снежными полями, лес — тайгой,
+// мелководье замерзает в лёд, по которому можно ходить. Скалы и глубокая вода остаются собой.
+function stampWinter(tiles, seed) {
+  // южная граница зимы — ряд, выше которого лежит нужная доля суши
+  let land = 0;
+  const rows = new Uint32Array(MAP_H);
+  for (let i = 0; i < tiles.length; i++) {
+    if (tiles[i] >= T.SAND) {
+      rows[Math.floor(i / MAP_W)]++;
+      land++;
+    }
+  }
+  let cut = 0;
+  for (let y = 0, acc = 0; y < MAP_H; y++) {
+    acc += rows[y];
+    if (acc >= land * WINTER.share) {
+      cut = y;
+      break;
+    }
+  }
+  const edge = makeNoise(seed + 909);
+  for (let y = 2; y < Math.min(MAP_H - 2, cut + WINTER.edge + 2); y++) {
+    for (let x = 2; x < MAP_W - 2; x++) {
+      if (y > cut + (edge(x / 60, y / 60, 4) - 0.5) * 2.4 * WINTER.edge) continue;
+      const i = y * MAP_W + x;
+      const t = tiles[i];
+      if (t === T.GRASS || t === T.SAND) tiles[i] = T.SNOW;
+      else if (t === T.FOREST) tiles[i] = T.TAIGA;
+      else if (t === T.SHALLOW) {
+        // лёд встаёт только у берега: рядом с глубиной остаётся полоса воды, иначе льдина обрывалась бы стеной
+        const deep = tiles[i - 1] === T.DEEP || tiles[i + 1] === T.DEEP || tiles[i - MAP_W] === T.DEEP || tiles[i + MAP_W] === T.DEEP;
+        if (!deep) tiles[i] = T.ICE;
+      }
+    }
+  }
 }
 
 // ---- Мёртвый город ----
@@ -109,7 +148,7 @@ function stampCity(tiles, seed) {
   const R = mulberry32(seed ^ 0x51c17e3);
   const at = (x, y) => (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H ? T.DEEP : tiles[y * MAP_W + x]);
   // центр — там, где в радиусе города больше всего ровной суши
-  const value = [-1.6, -1.6, 0.5, 1, 0.85, 0.2];
+  const value = [-1.6, -1.6, 0.5, 1, 0.85, 0.2, 0, 0, -1.2, -1.2, -1.6]; // в снегах город не стоит
   let best = null;
   const span = Math.max(1, MAP_W - 2 * CITY.r - 20);
   const spanH = Math.max(1, MAP_H - 2 * CITY.r - 20);
@@ -388,6 +427,9 @@ export function generateResources(tiles, seed, zones = []) {
         if ((kind === 'mush_brown' || kind === 'mush_red') && !(tiles[ty * MAP_W + tx - 1] === T.FOREST && tiles[ty * MAP_W + tx + 1] === T.FOREST
           && tiles[(ty - 1) * MAP_W + tx] === T.FOREST && tiles[(ty + 1) * MAP_W + tx] === T.FOREST)) kind = null;
       }
+      else if (t === T.TAIGA) kind = r < 0.2 ? 'tree' : r < 0.225 ? 'rock' : null; // заснеженный лес: ели и валуны
+      else if (t === T.SNOW) kind = r < 0.018 ? 'tree' : r < 0.04 ? 'rock' : null; // снежное поле почти пустое
+      else if (t === T.ICE) kind = null;
       else if (t === T.GRASS) kind = r < 0.035 ? 'tree' : r < 0.055 ? 'bush' : r < 0.075 ? null : r < 0.09 ? 'rock' : null;
       else if (t === T.ROCK) kind = r < 0.2 ? (r2 < 0.3 ? 'sulfur' : 'rock') : r < 0.23 ? 'tree' : null;
       else if (t === T.SAND) {
@@ -402,7 +444,7 @@ export function generateResources(tiles, seed, zones = []) {
         let bare = false;
         for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
           const nt = tiles[(ty + dy) * MAP_W + tx + dx];
-          if (nt !== T.GRASS && nt !== T.FOREST) bare = true;
+          if (nt !== T.GRASS && nt !== T.FOREST && nt !== T.SNOW && nt !== T.TAIGA) bare = true;
         }
         if (bare && !site) continue;
       }

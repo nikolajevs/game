@@ -1,7 +1,7 @@
 // Состояние мира и вся игровая логика. Сервер — единственный источник правды.
 import crypto from 'node:crypto';
 import {
-  TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, TERRAIN_SPEED, isWater, DAY_LENGTH, isNight,
+  TILE, MAP_W, MAP_H, WORLD_W, WORLD_H, T, TERRAIN_SPEED, isWater, isCold, COLD, DAY_LENGTH, isNight,
   ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, CRAFT_MAX, USES, TRIALS, TRIPS, TRIP_MAX, buildCost, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
   NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
   RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
@@ -744,7 +744,7 @@ export class Game {
       shieldHp: 0, shieldT: 0, hexT: 0, hexSrc: null, stunT: 0, altars: new Map(), medT: 0, meditating: false, medWarnT: 0,
       halT: 0, halS: 0, // галлюцинации от грибов
       trip: { a: 0, p: 0, t: 0 }, // трипы от мухомора, пейотля и жабы: сколько секунд осталось
-      kills: prof.kills || 0, pfx: [], weapon: null, rad: clamp(Number(prof.rad) || 0, 0, 100), radHere: 0, warnT: 0,
+      kills: prof.kills || 0, pfx: [], weapon: null, rad: clamp(Number(prof.rad) || 0, 0, 100), radHere: 0, cold: 0, inCold: false, warnT: 0,
     };
     this.applyGenome(p);
     p.mana = p.maxMana;
@@ -1144,11 +1144,17 @@ export class Game {
     p.food = Math.max(0, p.food - PLAYER.hungerRate * st.metabolism * (sprinting ? 1.6 : 1) * dt);
     p.water = Math.max(0, p.water - PLAYER.thirstRate * st.metabolism * dt);
     p.nearFire = this.nearKind(p.x, p.y, 'campfire', 140);
+    // холод зимнего биома: копится в снегах (ночью быстрее), у костра и в тепле спадает; куртка почти снимает его
+    p.inCold = isCold(this.tileAt(p.x, p.y));
+    if (p.nearFire) p.cold = Math.max(0, p.cold - COLD.warm * dt);
+    else if (p.inCold) p.cold = Math.min(100, p.cold + COLD.rate * (isNight(this.phase()) ? COLD.night : 1) * (p.inv.coat > 0 ? COLD.coat : 1) * dt);
+    else p.cold = Math.max(0, p.cold - COLD.decay * dt);
+    if (p.cold >= 100) this.damageCreature(p, COLD.dmg * dt, null, 'cold');
     if (p.food <= 0 || p.water <= 0) this.damageCreature(p, PLAYER.starveDmg * dt, null, 'starve');
     else {
       // наниты: втрое быстрее и даже при облучении до 50
       const nan = p.abil.has('nanites') ? ABILITIES.nanites : null;
-      if (p.food > 35 && p.water > 35 && p.rad < (nan ? nan.radRegen : RAD.regenBlock) && p.hp < st.maxHp) {
+      if (p.food > 35 && p.water > 35 && p.rad < (nan ? nan.radRegen : RAD.regenBlock) && p.cold < COLD.slowAt && p.hp < st.maxHp) {
         p.hp = Math.min(st.maxHp, p.hp + (PLAYER.regen * (nan ? nan.regenMul : 1) + (p.nearFire ? PLAYER.fireRegen : 0)) * dt);
       }
     }
@@ -1252,6 +1258,7 @@ export class Game {
     let tm = TERRAIN_SPEED[tile];
     if (isWater(tile) && e.stats.swim) tm = 0.95 + e.stats.swim * 0.2;
     if (e.fly) tm = 1;
+    if (e.cold >= COLD.slowAt) tm *= COLD.slow; // окоченевший идёт медленнее
     e.x += (mx * speed * tm + e.kbx) * dt;
     e.y += (my * speed * tm + e.kby) * dt;
     const decay = Math.pow(0.004, dt);
@@ -1638,7 +1645,7 @@ export class Game {
 
   damageCreature(t, amount, src, kind) {
     if (t.dead || amount <= 0) return 0;
-    const silent = kind === 'starve' || kind === 'rad'; // урон «изнутри»: без цифр и защиты
+    const silent = kind === 'starve' || kind === 'rad' || kind === 'cold'; // урон «изнутри»: без цифр и защиты
     if (t.type === 'player' && t.spawnProtect > 0 && !silent) return 0;
     if (t.owner && (!src || src.id !== t.owner)) return 0; // проводника ранит только тот, чьё это испытание
     if (!silent) amount *= 1 - t.stats.defense;
@@ -1734,7 +1741,7 @@ export class Game {
     if (dnaDrop > 0 || ITEM_KEYS.some((k) => t.inv[k] > 0)) this.addRemains(t.x, t.y, t.inv, dnaDrop, t.name);
     t.inv = emptyInv();
     this.fx.push({ k: 'die', x: t.x, y: t.y, c: t.color, r: t.stats.radius });
-    const reasons = { starve: 'голод и жажда', spikes: 'колья', meteor: 'метеорит', rad: 'радиация' };
+    const reasons = { starve: 'голод и жажда', spikes: 'колья', meteor: 'метеорит', rad: 'радиация', cold: 'холод' };
     const killer = src ? (src.type === 'player' ? src.name : NPCS[src.kind].name) : reasons[kind] || 'неизвестность';
     if (killerIsPlayer) {
       src.kills++;
@@ -1956,6 +1963,15 @@ export class Game {
       target: null, wanderT: 0, wx: 0, wy: 0, spikeT: 0,
     };
     this.npcs.set(n.id, n);
+    // стайные звери (волки) появляются сразу группой
+    if (def.pack && !at) {
+      for (let i = 1; i < def.pack; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const x = pos.x + Math.cos(a) * 70;
+        const y = pos.y + Math.sin(a) * 70;
+        if (def.biomes.includes(this.tileAt(x, y))) this.spawnNpc(kind, true, { x, y });
+      }
+    }
     return n;
   }
 
@@ -2005,7 +2021,7 @@ export class Game {
     }
     // звери вне особых мест: недостачу добираем понемногу
     for (const kind of Object.keys(NPC_TARGET)) {
-      const deficit = NPC_TARGET[kind] - counts[kind];
+      const deficit = NPC_TARGET[kind] - counts[kind] / (NPCS[kind].pack || 1); // стайных считаем стаями
       for (let i = 0; i < Math.min(10, Math.ceil(deficit / 10)); i++) this.spawnNpc(kind);
     }
     if (night) {
@@ -2172,6 +2188,7 @@ export class Game {
       cd: { m: round1(p.cd.melee), s: round1(p.cd.spit), c: round1(p.cd.charge) },
       cb: p.combatT > 0 ? 1 : 0, dead: p.dead ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0, fire: p.nearFire ? 1 : 0,
       nest: nest ? [nest.x, nest.y] : null, k: p.kills,
+      cold: Math.round(p.cold), ic: p.inCold ? 1 : 0,
       wp: p.weapon, rad: round1(p.rad), rz: round1(p.radHere), bench: this.nearBench(p) ? 1 : 0,
       pa: p.path, kn: p.know, spi: p.spirit, ab: [...p.abil], mn: Math.round(p.mana), mm: p.maxMana,
       acd: Object.fromEntries(Object.entries(p.abcd).filter(([, v]) => v > 0).map(([k, v]) => [k, round1(v)])),

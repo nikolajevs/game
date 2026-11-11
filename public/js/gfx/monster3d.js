@@ -26,6 +26,9 @@ const MODELS = {
     file: 'wraith', h: 62, hover: 16, clips: { idle: 'Flying_Idle', walk: 'Flying_Idle', run: 'Fast_Flying', hit: 'HitReact', death: 'Death' },
     runAt: 60, ghost: true, ghostTint: '#ffe9a0', glow: '#ffd76a',
   },
+  // зима: снежный волк и снежный зверь (та же модель, что у утробника, но белая)
+  wolf: { h: 30, clips: { idle: 'Idle', walk: 'Walk', run: 'Gallop', attack: 'Attack', hit: 'Idle_HitReact1', death: 'Death' }, runAt: 80, impact: 0.4, tint: '#f4f8ff' },
+  frostbeast: { file: 'glutton', h: 80, clips: { walk: 'glutton_Walk', run: 'glutton_Walk' }, runAt: 999, stride: 70, recolor: '#dfeaf5' },
   spider: { h: 30, clips: { idle: 'Idle', walk: 'Walk', run: 'Run', attack: 'Attack', hit: 'Hit', death: 'TurnOff' }, runAt: 90, stride: 120, impact: 0.45, eye: 0.6, tint: '#a4a4ac' },
   drone: { h: 26, hover: 36, clips: { idle: 'Idle', walk: 'Idle', run: 'Idle', shoot: 'Attack', hit: 'Hit' }, runAt: 999, impact: 0.3, eye: 0.5, lean: 0.35, tint: '#a4a4ac' },
   reaper: { h: 66, clips: { idle: 'Idle', walk: 'Walk', run: 'Run', attack: 'Attack', hit: 'Hit', death: 'TurnOff' }, runAt: 70, stride: 90, impact: 0.45, eye: 0.7, tint: '#a4a4ac' },
@@ -78,6 +81,10 @@ function loadModel(kind) {
         m.side = def.alphaTest ? THREE.DoubleSide : THREE.FrontSide;
         m.metalness = Math.min(m.metalness, 0.5); // без карты окружения металл выглядит чёрным
         if (def.tint) m.color.multiply(new THREE.Color(def.tint));
+        if (def.recolor) {
+          // перекраска поверх текстуры: модель становится светлой, фактура остаётся
+          m.color.set(def.recolor).multiplyScalar(1.5);
+        }
       }
     });
     const clips = {};

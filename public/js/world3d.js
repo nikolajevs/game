@@ -10,6 +10,7 @@ import { Effects } from './gfx/effects.js';
 import { Decor } from './gfx/decor.js';
 import { ZonesView } from './gfx/zones3d.js';
 import { CityView } from './gfx/city3d.js';
+import { Snowfall } from './gfx/snow.js';
 import { Hallucinations } from './gfx/hallucinations.js';
 import { G, M, mergeParts, glowTexture } from './gfx/util.js';
 
@@ -95,6 +96,7 @@ export class WorldView {
     this.visions = new Hallucinations(this.renderer, this.scene, this.camera, (x, z) => this.ground(x, z));
     this.zonesView = new ZonesView(this.scene, this.terrain, zones);
     this.cityView = new CityView(this.scene, this.terrain, tiles);
+    this.snow = this.snow || new Snowfall(this.scene);
     this.decor = new Decor(this.terrain, tiles, seed);
     this.scene.add(this.decor.group);
     this.statics = new StaticsView(this.scene, this.terrain);
@@ -312,7 +314,7 @@ export class WorldView {
           const tx = Math.max(0, Math.min(MAP_W - 1, Math.floor(x / TILE)));
           const ty = Math.max(0, Math.min(MAP_H - 1, Math.floor(y / TILE)));
           const tile = this.terrain.tiles[ty * MAP_W + tx];
-          const step = tile === T.ROCK || tile === T.CITY ? 'stepRock' : tile === T.SAND ? 'stepSand' : 'stepGrass';
+          const step = tile === T.ROCK || tile === T.CITY || tile === T.ICE ? 'stepRock' : tile === T.SAND || tile === T.SNOW || tile === T.TAIGA ? 'stepSand' : 'stepGrass'; // «песочные» шаги — это записи шагов по снегу
           this.audio?.playAt(step, x, y, me.x, me.y, { volume: isMe ? 0.52 : 0.26, range: 520, yaw, rate: v.speed > 135 ? 1.08 : 0.96 });
           v.stepTimer = Math.max(0.3, Math.min(0.54, 0.58 - v.speed * 0.00135));
         }
@@ -876,6 +878,7 @@ export class WorldView {
     this.terrain.update(this.time, this.camTarget, env.far);
     this.zonesView.update(dt, this.camTarget, env.far);
     this.cityView.update(this.camTarget, env.far);
+    this.snow.update(dt, this.time, this.terrain.winterAt(this.camTarget.x, this.camTarget.z), this.camTarget);
     this.statics.update(dt, this.camera.position, this.night, this.camTarget);
     this.updateMeteor(dt);
     this.updateMarker();
