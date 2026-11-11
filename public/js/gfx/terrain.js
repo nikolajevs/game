@@ -186,6 +186,7 @@ export class Terrain {
     this.surfaceTextures = makeSurfaceTextures();
     this.n = [makeNoise(seed + 776), makeNoise(seed + 777), makeNoise(seed + 778), makeNoise(seed + 779)];
     this.patch = makeNoise(seed + 779);
+    this.lawn = makeNoise(seed + 911);
     this.heights = new Map(); // участок -> высоты его вершин
     this.meshes = new Map(); // участок -> сетка
     this.tileCols = TILE_COL.map((c) => new THREE.Color(c));
@@ -311,6 +312,13 @@ export class Terrain {
     return this.chunkHeights(ci, cj)[(j - cj * CHUNK_CELLS) * CS + (i - ci * CHUNK_CELLS)];
   }
 
+  // Лужайки: трава растёт не сплошным ковром, а пятнами в 200–400 единиц, между ними голая земля.
+  // 0 — плешь, 1 — середина лужайки; на краю плавный спад, поэтому кромка рваная, а не ровный круг.
+  // Одна функция на траву (decor.js) и на оттенок земли (vertexColor) — лужайки и земля совпадают.
+  lawnAt(x, z) {
+    return smoothstep(0.56, 0.64, this.lawn(x / 230, z / 230, 2));
+  }
+
   // Насколько точка — голый песок или камень (0..1): те же правила, что красят пляж, песчаные
   // клетки, скалистые клетки и крутые обрывы. Растения там не растут.
   bareAt(x, z) {
@@ -382,6 +390,11 @@ export class Terrain {
     const grassHeight = smoothstep(2, 9, h) * (1 - smoothstep(55, 76, h)) * (1 - cityTile) * (1 - snowTile);
     if (patch > 0.55) c.lerp(DRY, grassHeight * Math.min(0.42, (patch - 0.55) * 2.4));
     else if (patch < 0.42) c.lerp(LUSH, grassHeight * Math.min(0.38, (0.42 - patch) * 2.4));
+    // между лужайками земля суше и светлее — плешины читаются и без травы на них
+    const grassTile = this.sampleTiles(x, z, (tt) => (tt === T.GRASS ? 1 : 0));
+    const lawn = this.lawnAt(x, z);
+    c.lerp(DRY, grassHeight * grassTile * (1 - lawn) * 0.3);
+    c.lerp(LUSH, grassHeight * grassTile * lawn * 0.12);
     const cliff = smoothstep(0.58, 1.35, steepness) * smoothstep(4, 18, h);
     const rockTile = this.sampleTiles(x, z, (tt) => (tt === T.ROCK ? 1 : 0));
     // асфальт и бетон города берут фактуру камня

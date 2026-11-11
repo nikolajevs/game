@@ -274,6 +274,7 @@ export class Human3D {
     this.speed = 0;
     this.t = Math.random() * 10;
     this.flash = 0;
+    this.hi = null; // { r, g, b } — свечение цели под прицелом
     if (ASSETS) this.build(ASSETS);
     else loadHumanAssets().then((a) => this.build(a));
   }
@@ -507,10 +508,16 @@ export class Human3D {
     if (this.halo) this.halo.material.opacity = 0.15 + night * 0.85;
     // вспышка при попадании
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 5);
+    const hi = this.hi; // свечение цели под прицелом (задаёт TargetMark)
     for (const mat of this.skinMats) {
       if (this.flash > 0) mat.emissive.setRGB(this.flash * 0.8, this.flash * 0.15, this.flash * 0.15);
       else if (this.genome.parts.glow) mat.emissive.setRGB(0, 0.05 + Math.sin(this.t * 2) * 0.02, 0.06);
       else mat.emissive.setRGB(0, 0, 0);
+      if (hi) {
+        mat.emissive.r += hi.r;
+        mat.emissive.g += hi.g;
+        mat.emissive.b += hi.b;
+      }
     }
   }
 

@@ -170,24 +170,26 @@ export const USES = {
 export const BENCH_RANGE = 130;
 
 // r — радиус для ударов, cr — радиус столкновения (0 = проходимо)
-// Добыча за удар: доля от нанесённого урона (rate) или фиксированно (fixed)
+// Добыча за удар: доля от нанесённого урона (rate), фиксированно по 1 за удар (fixed)
+// или запас на узел (total): сколько бы ни было ударов, всего выдаст не больше total.
 export const RESOURCES = {
   tree: { name: 'Дерево', r: 30, cr: 14, hp: 120, give: 'wood', rate: 0.25, respawn: 100 },
   rock: { name: 'Валун', r: 24, cr: 22, hp: 160, give: 'stone', rate: 0.15, respawn: 140 },
   sulfur: { name: 'Сернистая руда', r: 24, cr: 22, hp: 160, give: 'sulfur', rate: 0.12, respawn: 160 },
-  bush: { name: 'Ягодный куст', r: 18, cr: 0, hp: 40, give: 'berries', rate: 0.15, respawn: 70 },
+  bush: { name: 'Ягодный куст', r: 18, cr: 0, hp: 40, give: 'berries', total: 3, respawn: 70 }, // на кусте ровно 3 ягоды
   scrap: { name: 'Груда металлолома', r: 22, cr: 18, hp: 140, give: 'scrap', rate: 0.12, respawn: 120 },
   // мёртвый город: остовы машин — металл, серверные шкафы — электроника
   car: { name: 'Остов машины', r: 34, cr: 26, hp: 220, give: 'scrap', rate: 0.14, respawn: 300 },
   terminal: { name: 'Серверный шкаф', r: 20, cr: 16, hp: 120, give: 'electronics', rate: 0.1, respawn: 240 },
   crystal: { name: 'Кристалл мутагена', r: 16, cr: 12, hp: 45, give: 'crystal', fixed: 15, dna: 4, respawn: 0 },
-  // грибы: срываются за 2 удара (по грибу за удар), сквозь них можно пройти
+  // боровики срываются за 2 удара (по грибу за удар), сквозь грибы можно пройти;
+  // психоделики (мухомор, поганка, пейотль, жаба) — один удар и ровно 1 штука с узла
   mush_brown: { name: 'Боровики', r: 11, cr: 0, hp: 30, give: 'mushroom', fixed: 15, respawn: 140 },
-  mush_red: { name: 'Мухоморы', r: 11, cr: 0, hp: 30, give: 'amanita', fixed: 15, respawn: 180 },
-  mush_glow: { name: 'Сияющие поганки', r: 11, cr: 0, hp: 30, give: 'glowcap', fixed: 15, respawn: 240 },
+  mush_red: { name: 'Мухоморы', r: 11, cr: 0, hp: 15, give: 'amanita', fixed: 15, respawn: 180 },
+  mush_glow: { name: 'Сияющие поганки', r: 11, cr: 0, hp: 15, give: 'glowcap', fixed: 15, respawn: 240 },
   // для испытания пути духа: кактус растёт на песке, жаба сидит на берегу у самой воды
-  cactus: { name: 'Пейотль', r: 12, cr: 0, hp: 30, give: 'peyote', fixed: 15, respawn: 220 },
-  frog: { name: 'Сияющая жаба', r: 11, cr: 0, hp: 30, give: 'toad', fixed: 15, respawn: 240 },
+  cactus: { name: 'Пейотль', r: 12, cr: 0, hp: 15, give: 'peyote', fixed: 15, respawn: 220 },
+  frog: { name: 'Сияющая жаба', r: 11, cr: 0, hp: 15, give: 'toad', fixed: 15, respawn: 240 },
 };
 
 // Три трипа: у каждого свои видения (их рисует клиент) и свой бонус, пока трип длится.
@@ -497,6 +499,10 @@ export const PLAYER = {
 
 // Дальность прорисовки = обзор (глаза) * VIEW_MULT. Дальше сервер существ не присылает.
 export const VIEW_MULT = 1.6;
+
+// Прыжок на пробел. Игровая логика плоская (x, y), поэтому прыжок чисто зрелищный: сервер лишь
+// помнит, что игрок «в воздухе» (time секунд), и рассылает флаг — все видят подскок по дуге высотой height.
+export const JUMP = { time: 0.62, height: 26 };
 
 export const PLAYER_COLORS = ['#6fbf73', '#4fa3e0', '#e0a34f', '#d9534f', '#b574e0', '#e0d24f', '#4fe0c8', '#e07bb5'];
 

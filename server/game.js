@@ -5,7 +5,7 @@ import {
   ITEMS, ITEM_KEYS, RESOURCES, FOOD, STRUCTURES, STORAGE_CAP, STRUCT_DMG, CRAFT_MAX, USES, TRIALS, TRIPS, TRIP_MAX, buildCost, demolishRefund, repairCost, NPCS, NPC_TARGET, NIGHT_HUNTER, METEOR_GUARD, GUARDIAN_ALERT_R, EMP_TECH_MULT,
   NIGHT_STALKERS_PER_PLAYER, PLAYER, COMPLEXITY_CAP, VIEW_MULT, WEAPONS, RECIPES, PROJ_STRUCT, BOMB_STRUCT,
   RAD, CRATE, CRATE_LOOT, BENCH_RANGE, SITES, RES_CHUNK, RES_LOAD_R, RES_DROP_R, NPC_WAKE_R,
-  ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET,
+  ABILITIES, PATHS, TIER_NEED, MANA, SPIRIT_GAIN, KNOW_GAIN, LAB_RANGE, SITE_LOOT, TURRET, JUMP,
   PARTS, MUT_SCHOOLS, DASH, VOICE, FRIENDS_MAX, INVITE_LIFE,
 } from '../shared/config.js';
 import {
@@ -311,6 +311,7 @@ export class Game {
     switch (msg.t) {
       case 'in': return this.onInput(p, msg);
       case 'charge': return this.tryCharge(p, msg);
+      case 'jump': return this.onJump(p);
       case 'build': return this.onBuild(p, msg);
       case 'demolish': return this.onDemolish(p, msg);
       case 'repair': return this.onRepair(p, msg);
@@ -324,6 +325,7 @@ export class Game {
       case 'equip': return this.onEquip(p, msg);
       case 'craft': return this.onCraft(p, msg);
       case 'use': return this.onUse(p, msg);
+      case 'drop': return this.onDrop(p, msg);
       case 'learn': return this.onLearn(p, msg);
       case 'resetPath': return this.onResetPath(p);
       case 'research': return this.onResearch(p, msg);
@@ -697,6 +699,38 @@ export class Game {
     p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `−${RAD.antirad} ☢` });
   }
 
+  // Выбросить вещи из окна инвентаря: падают кучкой чуть впереди персонажа, подобрать можно на E
+  // (как останки, но кучка зовётся «брошено» и выглядит мешком). Уже лежащая рядом кучка
+  // принимает новые вещи и продлевает себе жизнь, а не плодит ещё одну.
+  onDrop(p, m) {
+    if (p.dead || !ITEMS[m.item]) return;
+    const item = m.item;
+    const have = p.inv[item] || 0;
+    const n = Math.min(have, m.n === 'all' ? have : Math.floor(Number(m.n)));
+    if (!(n > 0)) return;
+    p.inv[item] -= n;
+    if (p.weapon === item && p.inv[item] <= 0) p.weapon = null; // выбросили оружие из рук
+    const reach = p.stats.radius + 14;
+    const x = p.x + Math.cos(p.angle) * reach;
+    const y = p.y + Math.sin(p.angle) * reach;
+    let pile = null;
+    for (const s of this.grid.query(x, y, 48)) {
+      if (s.kind === 'pile' && Math.hypot(s.x - x, s.y - y) <= 30) {
+        pile = s;
+        break;
+      }
+    }
+    if (pile) {
+      pile.inv[item] = (pile.inv[item] || 0) + n;
+      pile.expires = this.time + PLAYER.remainsLife;
+      for (const q of this.players.values()) if (q.openCont === pile.id) this.sendCont(q, pile);
+    } else {
+      pile = this.addRemains(x, y, { ...emptyInv(), [item]: n }, 0, p.name);
+      pile.kind = 'pile';
+    }
+    p.pfx.push({ k: 'gain', x: p.x, y: p.y, text: `−${n} ${ITEMS[item].icon}` });
+  }
+
   onJoin(client, msg) {
     if (client.player) return;
     const token = typeof msg.token === 'string' && /^[a-f0-9]{32}$/.test(msg.token) ? msg.token : null;
@@ -757,7 +791,7 @@ export class Game {
       cd: { melee: 0, spit: 0, charge: 0, dash: 0 },
       dashT: 0, dashDir: 0, shockN: 0, bleedT: 0, corrT: 0,
       invites: new Map(), lastInvite: -10, voice: false, talk: false, // приглашения в друзья: uid -> { name, until }
-      combatT: 0, atkT: 0, hitT: 0, slowT: 0, spikeT: 0, drinkT: 0, eatT: 0, lastChat: -10,
+      combatT: 0, atkT: 0, hitT: 0, slowT: 0, spikeT: 0, drinkT: 0, eatT: 0, jumpT: 0, lastChat: -10,
       charging: 0, chargeDir: 0, chargeHit: null,
       spawnProtect: PLAYER.spawnProtect, dead: false, openCont: null, nearFire: false,
       resLoaded: new Set(), rcx: null, rcy: null,
@@ -843,6 +877,14 @@ export class Game {
     p.input.spit = !!m.b;
     if (Number.isFinite(m.ang) && p.charging <= 0) p.angle = m.ang;
     if (Number.isFinite(m.ad)) p.aimD = clamp(m.ad, 0, 2000);
+  }
+
+  // Прыжок (пробел): чисто зрелищный — положение (x, y) и бой не меняются, сервер только отмечает
+  // «в воздухе» на JUMP.time секунд, чтобы подскок видели все. В воздухе заново не прыгнуть;
+  // оглушённый, мёртвый и плывущий в глубокой воде не прыгают.
+  onJump(p) {
+    if (p.dead || p.jumpT > 0 || p.stunT > 0 || this.tileAt(p.x, p.y) === T.DEEP) return;
+    p.jumpT = JUMP.time;
   }
 
   tryCharge(p, m) {
@@ -1153,7 +1195,8 @@ export class Game {
 
   sendCont(p, s) {
     let title;
-    if (s.cat === 'remains') title = `Останки: ${s.ownerName}`;
+    if (s.kind === 'pile') title = `Брошено: ${s.ownerName}`;
+    else if (s.cat === 'remains') title = `Останки: ${s.ownerName}`;
     else if (s.cat === 'crate') title = CRATE.name;
     else title = `${STRUCTURES[s.kind].name}${s.ownerName ? ` (${s.ownerName})` : ''}`;
     this.send(p.client, { t: 'cont', id: s.id, title, inv: s.inv, dna: s.dna || 0, remains: this.isLootBox(s), cap: STORAGE_CAP });
@@ -1269,6 +1312,7 @@ export class Game {
     p.slowT = Math.max(0, p.slowT - dt);
     p.drinkT = Math.max(0, p.drinkT - dt);
     p.eatT = Math.max(0, p.eatT - dt);
+    p.jumpT = Math.max(0, p.jumpT - dt);
     p.warnT = Math.max(0, p.warnT - dt);
     p.spawnProtect = Math.max(0, p.spawnProtect - dt);
     if (p.weapon && !ABILITIES[p.weapon] && !(p.inv[p.weapon] > 0)) p.weapon = null; // оружие выложили или потратили
@@ -1814,11 +1858,20 @@ export class Game {
   gather(p, s, dmg, w = null) {
     const def = RESOURCES[s.kind];
     let rate = def.rate || 0;
-    if (s.kind === 'bush' && p.stats.diet === 'herb') rate *= 2;
-    if (w && w.gather && w.gather[def.give]) rate *= w.gather[def.give];
+    let speed = 1; // у узлов с запасом (total) скорость сбора меняет число ударов, но не общий запас
+    if (s.kind === 'bush' && p.stats.diet === 'herb') {
+      rate *= 2;
+      speed *= 2;
+    }
+    if (w && w.gather && w.gather[def.give]) {
+      rate *= w.gather[def.give];
+      speed *= w.gather[def.give];
+    }
     const before = s.hp;
-    s.hp = Math.max(0, s.hp - (def.fixed ?? dmg));
-    const amount = def.fixed ? 1 : Math.floor((s.maxHp - s.hp) * rate) - Math.floor((s.maxHp - before) * rate);
+    s.hp = Math.max(0, s.hp - (def.fixed ?? dmg * (def.total ? speed : 1)));
+    // запас делится поровну между ударами по доле снятой прочности (1e-6 — защита от ошибок округления)
+    const stock = (hp) => Math.floor(((s.maxHp - hp) / s.maxHp) * def.total + 1e-6);
+    const amount = def.fixed ? 1 : def.total ? stock(s.hp) - stock(before) : Math.floor((s.maxHp - s.hp) * rate) - Math.floor((s.maxHp - before) * rate);
     let text = '';
     if (amount > 0) {
       p.inv[def.give] += amount;
@@ -1937,6 +1990,7 @@ export class Game {
     t.corrT = 0;
     t.dashT = 0;
     if (t.type === 'player') {
+      t.jumpT = 0; // мёртвый не в прыжке (updatePlayer его не считает, флаг завис бы до возрождения)
       this.endTrial(t, '🔮 Вы погибли в трипе — испытание духа не пройдено.');
       t.trip = { a: 0, p: 0, t: 0 };
       t.halT = 0;
@@ -2381,6 +2435,7 @@ export class Game {
       i: p.id, k: 'p', x: Math.round(p.x), y: Math.round(p.y), a: Math.round(p.angle * 100) / 100,
       h: Math.ceil(p.hp), mh: p.stats.maxHp, n: p.name, c: p.color, g: p.look, ap: p.ap, dd: p.dead ? 1 : undefined,
       at: p.atkT > 0 ? 1 : 0, hf: p.hitT > 0 ? 1 : 0, ch: p.charging > 0 ? 1 : 0, sp: p.spawnProtect > 0 ? 1 : 0,
+      jp: p.jumpT > 0 ? 1 : undefined,
       w: p.weapon || undefined,
       sh: p.shieldT > 0 ? 1 : undefined, hx: p.hexT > 0 ? 1 : undefined, st: p.stunT > 0 ? 1 : undefined,
       pa: p.path || undefined, u: p.uid, vc: p.voice ? 1 : undefined, tk: p.talk ? 1 : undefined,

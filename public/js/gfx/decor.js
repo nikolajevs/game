@@ -72,6 +72,14 @@ const FLOWER_MAX = 600; // цветов одного вида вокруг иг�
 // сколько пучков на 1000 кв. единиц по типу клетки
 const MEADOW_DENSITY = { [T.GRASS]: 38, [T.FOREST]: 15 }; // на песке и скалах трава не растёт
 
+// Доля пучков по маске лужаек (terrain.lawnAt, 0..1): на лужайке — все, между лужайками — ни одного
+// (одиночные «кочки» редкой травы убраны). Самую жидкую кромку (маска < LAWN_CUT) тоже срезаем,
+// иначе вокруг лужайки тянется шлейф из редких пучков. Одно правило и для луга, и для леса.
+const LAWN_CUT = 0.18;
+function lawnFactor(lawn) {
+  return Math.max(0, (lawn - LAWN_CUT) / (1 - LAWN_CUT));
+}
+
 // Участки строятся, когда попадают в поле зрения, и выгружаются далеко за его краем:
 // на огромном острове держать в памяти траву всего мира нельзя.
 export class Decor {
@@ -175,9 +183,11 @@ export class Decor {
       const t = tiles[ty * MAP_W + tx];
       const dens = MEADOW_DENSITY[t];
       if (!dens) continue;
-      // поляны и плешины: луг местами гуще, местами реже
+      // трава лужайками: в середине пятна — густо, на краю — реже, между пятнами — голая земля
+      // и редкие одиночные пучки. Внутри лужайки луг ещё слегка редеет по плешинам (patch).
       const patch = terrain.patch(x / 300, z / 300, 2);
-      const keep = (dens / MEADOW_DENSITY[T.GRASS]) * (patch > 0.62 ? 0.35 : patch > 0.55 ? 0.7 : 1);
+      const lawn = lawnFactor(terrain.lawnAt(x, z));
+      const keep = (dens / MEADOW_DENSITY[T.GRASS]) * lawn * (patch > 0.62 ? 0.5 : patch > 0.55 ? 0.8 : 1);
       const r = hash2(cx * 131 + i, cz * 977 + i * 7, seed + 5);
       if (r > keep) continue;
       const gy = terrain.heightAt(x, z);
@@ -192,8 +202,8 @@ export class Decor {
       mats.push(M(x, gy - 0.4, z, 0, s1 * 6.283, 0, sx, sy, sx));
       const g = hash2(i * 5, cx + cz * 3, seed + 47);
       cols.push(c.setRGB(0.25 + g * 0.1, 0.3 + s2 * 0.3, 0.1).multiplyScalar(t === T.FOREST ? 1.3 : 1.55).clone());
-      // цветы — только на лугах, редко
-      if (t === T.GRASS && hash2(i * 7, cz * 13 + cx, seed + 53) < 0.004) {
+      // цветы — только на лугах и только на лужайках (травы стало меньше — цветов на пучок больше)
+      if (t === T.GRASS && lawn > 0.6 && hash2(i * 7, cz * 13 + cx, seed + 53) < 0.012) {
         // модель цветка внутри файла уменьшена (≈1,5 ед.) — растягиваем до 13–19 ед., чуть выше травы
         flowers.push([x, gy - 0.3, z, s1 * 6.283, 8.5 + s2 * 4, Math.floor(g * 3) % 3]);
       }
@@ -315,11 +325,14 @@ export class Decor {
             continue;
           }
           if (t === T.GRASS) {
-            if (r < 0.7) push('tuft', x, z, sc);
-            else if (r < 0.712) push('flower', x, z, sc, k);
+            // дальняя трава — по той же маске лужаек, что и густой луг вокруг игрока
+            const lawn = lawnFactor(terrain.lawnAt(x, z));
+            if (r < 0.7 * lawn) push('tuft', x, z, sc);
+            else if (r >= 0.7 && r < 0.7 + 0.012 * lawn) push('flower', x, z, sc, k);
           } else if (t === T.FOREST) {
+            const lawn = lawnFactor(terrain.lawnAt(x, z));
             if (r < 0.32) push('fern', x, z, sc);
-            else if (r < 0.61) push('tuft', x, z, sc * 0.8);
+            else if (r < 0.32 + 0.29 * lawn) push('tuft', x, z, sc * 0.8);
           } else if ((t === T.SAND || t === T.ROCK) && r < 0.18) push('pebble', x, z, sc * 2.4, k);
         }
       }

@@ -748,6 +748,7 @@ input.onPress = (code) => {
     else if (editor.isOpen) editor.close();
     else if (hud.cont) hud.onCloseCont();
     else if (social.isOpen) social.toggle(false);
+    else if (!hud.invWin.classList.contains('hidden')) hud.toggleInv(false);
     else if (!hud.craftEl.classList.contains('hidden')) hud.toggleCraft(false);
     else if (B.mode) setBuildMode(null);
     return;
@@ -779,6 +780,7 @@ input.onPress = (code) => {
   if (code === 'KeyR') return net.send({ t: 'use', item: 'antirad' });
   if (code === 'KeyT') return net.send({ t: 'use', item: 'elixir' });
   if (code === 'KeyC') return hud.toggleCraft();
+  if (code === 'KeyI') return hud.toggleInv();
   if (code === 'KeyB') return setBuildMode(B.mode ? null : 'place');
   if (code.startsWith('Digit')) {
     const n = Number(code.slice(5));
@@ -800,9 +802,14 @@ input.onPress = (code) => {
     else if (s) hud.toast('Сносить можно только свои постройки');
     return;
   }
-  if (code === 'Space' && S.stats.charge && input.enabled) {
-    S.me.face = aimAngle();
-    net.send({ t: 'charge', ang: Math.round(S.me.face * 100) / 100 });
+  if (code === 'Space' && input.enabled) {
+    // прыжок: свой подскок сразу, сервер лишь рассылает флаг, чтобы его видели другие
+    if (world.jump(S.myId, S.me)) net.send({ t: 'jump' });
+    // таран (мутация «рога») по-прежнему на пробеле — теперь он идёт вместе с прыжком
+    if (S.stats.charge) {
+      S.me.face = aimAngle();
+      net.send({ t: 'charge', ang: Math.round(S.me.face * 100) / 100 });
+    }
   }
   // рывок на реактивных ускорителях — к курсору
   if (code === 'KeyZ' && S.stats.dash && input.enabled && !B.mode) {
@@ -919,8 +926,14 @@ function frame(now) {
   updateBuild();
   updateHint();
   const showCursor = input.enabled && input.pos.inside && !you.dead;
-  world.setAim(S.aim.sky ? null : S.aim, showCursor && !B.mode);
-  cursorEl.style.display = showCursor ? '' : 'none';
+  // цель под прицелом: контур, зона под ногами, имя и здоровье; прицел краснеет
+  const lock = world.updateTarget(input.pos.x, input.pos.y, S.aim, showCursor && !B.mode, dt);
+  world.setAim(S.aim.sky ? null : S.aim, showCursor && !B.mode, !!lock);
+  cursorEl.classList.toggle('lock', !!lock);
+  cursorEl.dataset.kind = lock ? world.mark.kind : '';
+  // экранный прицел виден всегда, даже когда курсор в тумане или в небе (кольцо на земле там тонет или пропадает);
+  // в CSS у #cursor стоит display: none, поэтому показываем явным block, а не сбросом в ''
+  cursorEl.style.display = showCursor ? 'block' : 'none';
   if (showCursor) cursorEl.style.transform = `translate(${input.pos.x}px, ${input.pos.y}px)`;
   world.myMed = !!you.med;
   world.hal.s = you.hs || 0;
@@ -983,11 +996,11 @@ function updateHint() {
   let cont = null;
   for (const o of world.statics.objs.values()) {
     const s = o.s;
-    if (s.k !== 'storage' && s.k !== 'remains' && s.k !== 'crate') continue;
+    if (s.k !== 'storage' && s.k !== 'remains' && s.k !== 'crate' && s.k !== 'pile') continue;
     if (Math.abs(s.x - S.me.x) > R + 30 || Math.abs(s.y - S.me.y) > R + 30) continue;
     if (Math.hypot(s.x - S.me.x, s.y - S.me.y) - (s.k === 'storage' ? 20 : 16) <= R) cont = s;
   }
-  const contLabel = { remains: `обыскать останки (${cont?.on || '?'})`, crate: 'открыть ящик с добычей', storage: 'открыть хранилище' };
+  const contLabel = { remains: `обыскать останки (${cont?.on || '?'})`, pile: `подобрать брошенное (${cont?.on || '?'})`, crate: 'открыть ящик с добычей', storage: 'открыть хранилище' };
   if (hud.cont) lines.push('<b>E</b> — закрыть');
   else if (cont) lines.push(`<b>E</b> — ${contLabel[cont.k]}`);
   else if (nearWater(S.me.x, S.me.y, S.stats.radius + 26) && you.w < 99) lines.push('<b>E</b> — пить');

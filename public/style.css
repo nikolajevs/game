@@ -86,8 +86,14 @@ button.big { padding: 12px 22px; font-size: 17px; }
 /* прицел, который ходит за мышью (системный курсор над игрой скрыт) */
 canvas#game { cursor: none; }
 #cursor { position: fixed; left: 0; top: 0; width: 26px; height: 26px; margin: -13px 0 0 -13px; pointer-events: none; z-index: 6; display: none; will-change: transform; }
-#cursor::before { content: ''; position: absolute; inset: 3px; border: 2px solid rgba(255, 255, 255, 0.9); border-radius: 50%; box-shadow: 0 0 3px #000, inset 0 0 2px #000; }
-#cursor::after { content: ''; position: absolute; left: 11px; top: 11px; width: 4px; height: 4px; border-radius: 50%; background: #fff; box-shadow: 0 0 2px #000; }
+/* Белое кольцо с тёмной обводкой снаружи и внутри: читается и на светлом тумане, и на тёмной земле. */
+#cursor { --aim: #ffffff; --aim-edge: rgba(8, 12, 10, 0.92); }
+#cursor::before { content: ''; position: absolute; inset: 3px; border: 2.5px solid var(--aim); border-radius: 50%; box-shadow: 0 0 0 1.5px var(--aim-edge), inset 0 0 0 1.5px var(--aim-edge), 0 0 7px rgba(0, 0, 0, 0.55); transition: inset 0.08s, border-color 0.08s; }
+#cursor::after { content: ''; position: absolute; left: 10.5px; top: 10.5px; width: 5px; height: 5px; border-radius: 50%; background: var(--aim); box-shadow: 0 0 0 1.5px var(--aim-edge); transition: background 0.08s; }
+/* прицел наведён на цель: красный — враг, янтарный — дичь; кольцо чуть шире */
+#cursor.lock { --aim: #ff3b2f; }
+#cursor.lock[data-kind="prey"] { --aim: #ffc233; }
+#cursor.lock::before { inset: -1px; border-width: 3px; box-shadow: 0 0 0 1.5px var(--aim-edge), inset 0 0 0 1.5px var(--aim-edge), 0 0 12px var(--aim); }
 
 #topLeft { position: fixed; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 8px; width: 230px; }
 #vitals { padding: 9px 11px; }
@@ -209,8 +215,6 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 .wslot.spell.on { border-color: #c77dff; background: rgba(199, 125, 255, 0.2); }
 .wslot.tech { border-color: rgba(94, 200, 255, 0.35); }
 .wslot .wcd { position: absolute; left: 0; bottom: 0; width: 100%; background: rgba(0, 0, 0, 0.6); border-radius: 0 0 8px 8px; pointer-events: none; }
-.chip.food { cursor: pointer; }
-.chip.food:hover { background: rgba(255, 255, 255, 0.12); }
 .bar.low .track { box-shadow: 0 0 0 1px #ff5d5d; animation: pulse 0.8s infinite alternate; }
 @keyframes pulse { from { opacity: 1; } to { opacity: 0.55; } }
 
@@ -221,10 +225,7 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 #btnEvolve { padding: 5px 9px; font-size: 13px; border-color: #6a4f9a; background: #2a2140; }
 #btnEvolve:hover { background: #3a2d58; }
 #btnEvolve.ready { box-shadow: 0 0 10px rgba(185, 140, 255, 0.6); }
-#inv { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 7px; }
-.chip { display: flex; flex-direction: column; align-items: center; padding: 3px 0; border-radius: 6px; background: rgba(255,255,255,0.04); font-size: 16px; }
-.chip b { font-size: 12px; font-variant-numeric: tabular-nums; }
-.chip.zero { opacity: 0.38; }
+#inv { padding: 5px; } /* только кнопка окна инвентаря; иконок вещей на главном экране нет */
 
 #topRight { position: fixed; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 #minimapWrap { padding: 5px; cursor: pointer; }
@@ -336,7 +337,7 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 #radFx { position: fixed; inset: 0; pointer-events: none; z-index: 3; opacity: 0; transition: opacity 0.6s;
   background: radial-gradient(ellipse at center, rgba(120, 255, 60, 0) 45%, rgba(120, 220, 40, 0.35) 80%, rgba(90, 180, 20, 0.6) 100%); }
 /* ---------- крафт ---------- */
-#craft { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(880px, calc(100vw - 24px)); max-height: calc(100vh - 60px); z-index: 10; padding: 0; overflow: hidden; display: flex; flex-direction: column;
+#craft, #invWin { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(880px, calc(100vw - 24px)); max-height: calc(100vh - 60px); z-index: 10; padding: 0; overflow: hidden; display: flex; flex-direction: column;
   --pc: #9cf0a4; border-color: color-mix(in srgb, var(--pc) 40%, transparent);
   background: linear-gradient(180deg, rgba(18, 30, 26, 0.94), rgba(9, 15, 14, 0.94)); box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.06); animation: cr-in 0.16s ease-out; }
 @keyframes cr-in { from { opacity: 0; transform: translate(-50%, -48%) scale(0.98); } to { opacity: 1; transform: translate(-50%, -50%); } }
@@ -380,6 +381,17 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 .cr-info .bm-state { margin-top: 0; }
 .cr-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; padding: 6px 10px; font-size: 11.5px; color: var(--muted); background: rgba(0, 0, 0, 0.28); border-top: 1px solid rgba(255, 255, 255, 0.07); }
 .cr-foot kbd { font-size: 10px; }
+/* ---------- окно инвентаря (I): оформление общее с крафтом ---------- */
+.inv-sum { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.cr-tab small { font-size: 10.5px; font-weight: 700; opacity: 0.75; }
+.inv-open { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 4px 9px; font-size: 13px; border-color: #46705a; }
+.inv-eq { position: absolute; top: 5px; right: 6px; font-size: 9.5px; font-weight: 700; padding: 0 6px; border-radius: 10px; color: #eaffec; background: rgba(111, 191, 115, 0.25); border: 1px solid rgba(111, 191, 115, 0.6); }
+.inv-empty { grid-column: 1 / -1; text-align: center; padding: 48px 10px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.inv-lines { display: flex; flex-direction: column; gap: 3px; font-size: 12px; line-height: 1.4; color: var(--muted); }
+.inv-lines b { color: var(--text); font-weight: 600; }
+.inv-drop { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding-top: 6px; font-size: 12px; color: var(--muted); border-top: 1px solid rgba(255, 255, 255, 0.07); }
+.inv-drop button { padding: 4px 9px; font-size: 12.5px; }
+.inv-hint { font-size: 11.5px; color: var(--muted); }
 @media (max-width: 760px) {
   .cr-body { flex-direction: column; overflow-y: auto; }
   .cr-info { width: auto; border-left: 0; padding-left: 0; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 10px; }
@@ -414,6 +426,11 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 .label { position: absolute; left: 0; top: 0; font-size: 12px; font-weight: 600; white-space: nowrap; text-shadow: 0 1px 3px #000, 0 0 2px #000; text-align: center; will-change: transform; }
 .label .hp { height: 4px; width: 46px; margin: 3px auto 0; background: rgba(0, 0, 0, 0.55); border-radius: 2px; overflow: hidden; }
 .label .hp i { display: block; height: 100%; background: #e05a4f; }
+/* цель под прицелом: имя на яркой плашке, полоска здоровья крупнее; цвета — как у зоны под ногами */
+.label.target { z-index: 2; font-size: 13px; }
+.label.target span { display: inline-block; padding: 1px 8px 2px; border-radius: 5px; color: #fff !important; background: rgba(214, 38, 28, 0.92); box-shadow: 0 0 0 1.5px rgba(8, 12, 10, 0.85), 0 0 10px rgba(255, 59, 47, 0.7); text-shadow: 0 1px 2px #000; }
+.label.target .hp { width: 62px; height: 6px; background: rgba(8, 12, 10, 0.8); box-shadow: 0 0 0 1.5px rgba(8, 12, 10, 0.85); }
+.label.target[data-kind="prey"] span { background: rgba(224, 160, 20, 0.95); color: #1b1305 !important; text-shadow: none; box-shadow: 0 0 0 1.5px rgba(8, 12, 10, 0.85), 0 0 10px rgba(255, 194, 51, 0.7); }
 .floater { position: absolute; left: 0; top: 0; font-weight: 700; font-size: 15px; white-space: nowrap; text-shadow: 0 1px 3px #000, 0 0 2px #000; will-change: transform, opacity; }
 .floater.gain { font-size: 14px; color: #c8f7c5; }
 
