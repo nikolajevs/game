@@ -457,11 +457,17 @@ export class Hud {
     });
     grid.addEventListener('dblclick', (e) => {
       const c = e.target.closest('[data-item]');
-      if (c) this.send({ t: 'craft', item: c.dataset.item });
+      if (c) {
+        this.send({ t: 'craft', item: c.dataset.item });
+        this.onCraft?.();
+      }
     });
     $('craftInfo').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-n]');
-      if (b && !b.disabled) this.send({ t: 'craft', item: this.craftSel, n: Number(b.dataset.n) });
+      if (b && !b.disabled) {
+        this.send({ t: 'craft', item: this.craftSel, n: Number(b.dataset.n) });
+        this.onCraft?.();
+      }
     });
   }
 
