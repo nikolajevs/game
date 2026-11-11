@@ -1,6 +1,6 @@
 // Клиент игры: вход, сеть, интерполяция, управление, стройка, интерфейс.
 import {
-  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, BUILD_CATS, BUILD_PAINT, buildCost, ITEMS, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES, ABILITIES, VOICE,
+  TILE, MAP_W, MAP_H, STRUCTURES, STRUCT_ORDER, BUILD_CATS, BUILD_PAINT, buildCost, ITEMS, RESOURCES, PLAYER, PLAYER_COLORS, VIEW_MULT, isWater, ITEM_KEYS, SITES, ABILITIES, VOICE, WEAPONS,
 } from '/shared/config.js';
 import { zoneAt, generateMap, tilesHash } from '/shared/worldgen.js';
 import { computeStats, decodeGenome, defaultGenome, encodeGenome } from '/shared/creature.js';
@@ -353,6 +353,8 @@ net.on('s', (m) => {
   // звук ориентируем по камере: что слева на экране — слышно слева
   if (m.fx) world.handleFx(m.fx, S.me.x, S.me.y, input.cam.yaw);
   if (prev && m.you.hp < prev.hp - 1 && !m.you.dead) world.damageFeedback(prev.hp - m.you.hp);
+  // оружие взято в руку — лязг
+  if (prev && m.you.wp && m.you.wp !== prev.wp && WEAPONS[m.you.wp]) audio.play('equip', { volume: 0.4, rate: WEAPONS[m.you.wp].type === 'melee' ? 1 : 0.75 });
   if (!m.you.dead && S.dead) hideDeath();
   if (m.you.dead && !S.dead && $('death').classList.contains('hidden')) showDeath({ by: 'неизвестно', nest: !!m.you.nest });
   if (hud.cont && prev && invSig(prev) !== invSig(m.you)) hud.renderContainer(m.you);
@@ -360,8 +362,16 @@ net.on('s', (m) => {
   paths.refresh(m.you);
 });
 
-net.on('toast', (m) => hud.toast(m.text, m.big));
-net.on('chat', (m) => hud.chat(m));
+net.on('toast', (m) => {
+  hud.toast(m.text, m.big);
+  // важные вести звучат: приглашение в друзья — перезвон, остальное — двойной тон
+  if (m.big) audio.play(m.text.includes('🤝') ? 'notify' : 'notifyBig', { volume: 0.35 });
+  else if (m.text.includes('🤝')) audio.play('notify', { volume: 0.3 });
+});
+net.on('chat', (m) => {
+  hud.chat(m);
+  if (!m.sys) audio.play('chat', { volume: 0.22 });
+});
 net.on('pl', (m) => {
   hud.setPlayers(m.list);
   social.setPlayers(m.list);
@@ -377,12 +387,15 @@ net.on('rtc', (m) => voice.onSignal(m.from, m.d));
 net.on('dead', (m) => showDeath(m));
 net.on('evolved', () => editor.close());
 net.on('cont', (m) => {
-  if (!hud.cont) audio.play('uiOpen', { volume: 0.3 });
+  // хранилище скрипит дверцей, ящик щёлкает замком, останки шуршат
+  const kind = world.statics.objs.get(m.id)?.s.k;
+  S.contKind = kind;
+  if (!hud.cont) audio.play(kind === 'storage' ? 'doorOpen' : kind === 'crate' ? 'latch' : 'loot', { volume: 0.4 });
   hud.openContainer(m, S.you);
 });
 net.on('contClose', () => {
   hud.closeContainer();
-  audio.play('uiClose', { volume: 0.28 });
+  audio.play(S.contKind === 'storage' ? 'doorClose' : 'uiClose', { volume: 0.3 });
 });
 net.on('close', () => {
   if (S.myId !== null) {
@@ -408,7 +421,19 @@ function applyStatics(sa, sd) {
       if (o && S.structAt.get(`${o.s.x},${o.s.y}`) === o.s) S.structAt.delete(`${o.s.x},${o.s.y}`);
     }
   }
-  if (sa) for (const s of sa) if (STRUCTURES[s.k]) S.structAt.set(`${s.x},${s.y}`, s);
+  if (sa) {
+    for (const s of sa) {
+      if (!STRUCTURES[s.k]) continue;
+      const key = `${s.x},${s.y}`;
+      // новая постройка рядом: стук и материал
+      if (S.ready && S.structAt.get(key)?.i !== s.i) {
+        const o = { volume: 0.5, range: 700, yaw: input.cam.yaw };
+        audio.playAt('place', s.x, s.y, S.me.x, S.me.y, o);
+        audio.playAt(STRUCTURES[s.k].mat === 'stone' ? 'stoneHit' : 'woodHit', s.x, s.y, S.me.x, S.me.y, { ...o, volume: 0.3, rate: 0.8 });
+      }
+      S.structAt.set(key, s);
+    }
+  }
   world.applyStatics(sa, sd);
 }
 
@@ -482,7 +507,7 @@ $('btnEvolve').addEventListener('click', toggleEditor);
 function togglePaths() {
   if (paths.isOpen) {
     paths.close();
-    audio.play('uiClose', { volume: 0.28 });
+    audio.play('bookClose', { volume: 0.4 });
     return;
   }
   if (!S.you || S.you.dead) return;
@@ -491,7 +516,7 @@ function togglePaths() {
   input.enabled = false;
   input.clear();
   paths.open(S.you);
-  audio.play('uiOpen', { volume: 0.3 });
+  audio.play('bookOpen', { volume: 0.45 });
 }
 paths.onClose = () => {
   input.enabled = !anyModal();
@@ -576,6 +601,7 @@ function setBuildCat(i) {
   B.cat = (i + BUILD_CATS.length) % BUILD_CATS.length;
   pickBuild(B.last[B.cat] || BUILD_CATS[B.cat].items[0]);
 }
+hud.onCraft = () => audio.play('craft', { volume: 0.4 });
 hud.onPickBuild = pickBuild;
 hud.onBuildCat = setBuildCat;
 hud.onBuildTool = setBuildMode;
@@ -901,6 +927,13 @@ function frame(now) {
   world.hal.t = you.hal || 0;
   world.hal.trip = you.tp || null; // трипы от мухомора, пейотля и жабы: сколько секунд осталось
   world.render(dt, S.phase, you.dead ? 900 : S.stats.vision * VIEW_MULT);
+  // фон: ветер, прибой, сверчки, птицы, гул города, костёр, счётчик Гейгера, сердце
+  const atx = clamp(Math.floor(S.me.x / TILE), 0, MAP_W - 1);
+  const aty = clamp(Math.floor(S.me.y / TILE), 0, MAP_H - 1);
+  audio.ambient(dt, {
+    tile: S.tiles[aty * MAP_W + atx], night: world.night, water: nearWater(S.me.x, S.me.y, 200) || nearWater(S.me.x, S.me.y, 80),
+    rad: you.rz || 0, fire: !!you.fire, hp: you.mh ? you.hp / you.mh : 1, dead: !!you.dead,
+  });
 
   // особое место под ногами: подсказка при входе и название в строке состояния
   const site = you.dead ? null : zoneAt(S.zones, S.me.x, S.me.y);

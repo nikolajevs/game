@@ -642,7 +642,7 @@ export class Game {
       const x = s.x + ca * 34;
       const y = s.y + sa * 34;
       this.addProjectile(owner || { id: -s.id, uid: s.owner }, 'bullet', x, y, ca * TURRET.speed, sa * TURRET.speed, TURRET.dmg, TURRET.range / TURRET.speed + 0.05);
-      this.fx.push({ k: 'shot', x, y, m: 'bullet' });
+      this.fx.push({ k: 'shot', x, y, m: 'bullet', w: 'turret' });
     }
   }
 
@@ -1712,7 +1712,7 @@ export class Game {
       const dmg = w.dmg * p.stats.wpnMul * (w.type === 'ranged' ? p.stats.aimMul : 1); // импланты: резонанс и целеуказатель
       this.addProjectile(p, w.proj, p.x + ca * r0, p.y + sa * r0, ca * sp, sa * sp, dmg, w.life * (n > 1 ? 0.8 + Math.random() * 0.4 : 1), w);
     }
-    this.fx.push({ k: 'shot', x: p.x + Math.cos(p.angle) * r0, y: p.y + Math.sin(p.angle) * r0, m: w.proj });
+    this.fx.push({ k: 'shot', x: p.x + Math.cos(p.angle) * r0, y: p.y + Math.sin(p.angle) * r0, m: w.proj, w: p.weapon }); // w — чем стреляли: у каждого оружия свой звук
   }
 
   addProjectile(owner, kind, x, y, vx, vy, dmg, life, w = null) {
@@ -1995,7 +1995,7 @@ export class Game {
     n.angle = a;
     n.atkT = 0.22;
     n.atkR = true;
-    this.fx.push({ k: 'shot', x, y, m: sh.proj });
+    this.fx.push({ k: 'shot', x, y, m: sh.proj, w: n.kind });
   }
 
   // Снаряды летят мелкими шагами, чтобы быстрые пули не пролетали сквозь цели
