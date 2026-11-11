@@ -192,8 +192,6 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 .wslot.spell.on { border-color: #c77dff; background: rgba(199, 125, 255, 0.2); }
 .wslot.tech { border-color: rgba(94, 200, 255, 0.35); }
 .wslot .wcd { position: absolute; left: 0; bottom: 0; width: 100%; background: rgba(0, 0, 0, 0.6); border-radius: 0 0 8px 8px; pointer-events: none; }
-.chip.food { cursor: pointer; }
-.chip.food:hover { background: rgba(255, 255, 255, 0.12); }
 .bar.low .track { box-shadow: 0 0 0 1px #ff5d5d; animation: pulse 0.8s infinite alternate; }
 @keyframes pulse { from { opacity: 1; } to { opacity: 0.55; } }
 
@@ -204,10 +202,7 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 #btnEvolve { padding: 5px 9px; font-size: 13px; border-color: #6a4f9a; background: #2a2140; }
 #btnEvolve:hover { background: #3a2d58; }
 #btnEvolve.ready { box-shadow: 0 0 10px rgba(185, 140, 255, 0.6); }
-#inv { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 7px; }
-.chip { display: flex; flex-direction: column; align-items: center; padding: 3px 0; border-radius: 6px; background: rgba(255,255,255,0.04); font-size: 16px; }
-.chip b { font-size: 12px; font-variant-numeric: tabular-nums; }
-.chip.zero { opacity: 0.38; }
+#inv { padding: 5px; } /* только кнопка окна инвентаря; иконок вещей на главном экране нет */
 
 #topRight { position: fixed; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 #minimapWrap { padding: 5px; cursor: pointer; }
@@ -364,7 +359,7 @@ button.danger { border-color: #d9534f; background: #3a1d1d; color: #ffd0cc; }
 /* ---------- окно инвентаря (I): оформление общее с крафтом ---------- */
 .inv-sum { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .cr-tab small { font-size: 10.5px; font-weight: 700; opacity: 0.75; }
-.inv-open { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; padding: 4px 9px; font-size: 13px; border-color: #46705a; }
+.inv-open { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 4px 9px; font-size: 13px; border-color: #46705a; }
 .inv-eq { position: absolute; top: 5px; right: 6px; font-size: 9.5px; font-weight: 700; padding: 0 6px; border-radius: 10px; color: #eaffec; background: rgba(111, 191, 115, 0.25); border: 1px solid rgba(111, 191, 115, 0.6); }
 .inv-empty { grid-column: 1 / -1; text-align: center; padding: 48px 10px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
 .inv-lines { display: flex; flex-direction: column; gap: 3px; font-size: 12px; line-height: 1.4; color: var(--muted); }

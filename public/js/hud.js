@@ -1,6 +1,6 @@
 // Интерфейс поверх 3D: полоски, инвентарь, пояс с оружием, крафт, мини-карта, чат, хранилище.
 import {
-  ITEMS, ITEM_KEYS, RES_KEYS, STRUCTURES, BUILD_CATS, buildCost, repairCost, demolishRefund, MAP_W, MAP_H, TILE, lightAt,
+  ITEMS, ITEM_KEYS, STRUCTURES, BUILD_CATS, buildCost, repairCost, demolishRefund, MAP_W, MAP_H, TILE, lightAt,
   WEAPONS, WEAPON_ORDER, RECIPES, CRAFT_TABS, CRAFT_MAX, USES, TRIPS, RAD, SITES, ABILITIES, ABILITY_ORDER, FOOD, RESOURCES, NPCS,
 } from '/shared/config.js';
 
@@ -62,34 +62,14 @@ export class Hud {
     };
     this.knowVal = $('knowVal');
     this.spiritVal = $('spiritVal');
-    this.invEl = $('inv');
-    this.invChips = {};
-    // кнопка над сеткой ресурсов открывает окно инвентаря
+    // Иконок вещей на главном экране нет: весь инвентарь — в окне по клавише I; здесь только кнопка
     const openInv = document.createElement('button');
     openInv.className = 'inv-open';
     openInv.innerHTML = '<span>🎒 Инвентарь</span><kbd>I</kbd>';
     openInv.title = 'Все вещи, описания и действия — I';
     openInv.addEventListener('mousedown', (e) => e.stopPropagation());
     openInv.addEventListener('click', () => this.toggleInv());
-    this.invEl.appendChild(openInv);
-    for (const k of RES_KEYS) {
-      const c = document.createElement('div');
-      c.className = 'chip';
-      c.title = ITEMS[k].name;
-      c.innerHTML = `<span>${ITEMS[k].icon}</span><b>0</b>`;
-      // еду можно съесть щелчком; грибы-галлюциногены — только так (F их не трогает)
-      if (FOOD[k]) {
-        c.classList.add('food');
-        c.title = `${ITEMS[k].name} — щёлкните, чтобы съесть${FOOD[k].trip ? ` (трип на ${TRIPS[FOOD[k].trip].time} с, ${TRIPS[FOOD[k].trip].bonus})` : FOOD[k].hal ? ' (галлюцинации!)' : ''}`;
-        c.addEventListener('mousedown', (e) => {
-          e.stopPropagation();
-          if (c.classList.contains('zero')) return;
-          this.send({ t: 'eat', item: k });
-        });
-      }
-      this.invEl.appendChild(c);
-      this.invChips[k] = c;
-    }
+    $('inv').appendChild(openInv);
     this.dnaVal = $('dnaVal');
     this.btnEvolve = $('btnEvolve');
     this.abilitiesEl = $('abilities');
@@ -201,13 +181,6 @@ export class Hud {
       this.cache.dna = you.dna;
       this.dnaVal.textContent = you.dna;
       this.btnEvolve.classList.toggle('ready', you.dna >= 10);
-    }
-    for (const k of RES_KEYS) {
-      const v = you.inv[k];
-      if (this.cache[`inv${k}`] === v) continue;
-      this.cache[`inv${k}`] = v;
-      this.invChips[k].querySelector('b').textContent = v;
-      this.invChips[k].classList.toggle('zero', !v);
     }
     this.updateBelt(you, stats);
     this.updateAbilities(you, stats);
